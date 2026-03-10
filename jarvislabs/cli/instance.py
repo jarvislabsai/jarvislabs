@@ -12,7 +12,13 @@ import typer
 from jarvislabs.cli import render, state
 from jarvislabs.cli.app import app, get_client
 from jarvislabs.exceptions import SSHError, ValidationError
-from jarvislabs.ssh import build_remote_shell_command, build_scp_command, harden_ssh_parts, split_ssh_command
+from jarvislabs.ssh import (
+    build_remote_shell_command,
+    build_scp_command,
+    harden_ssh_parts,
+    parse_ssh_command,
+    split_ssh_command,
+)
 
 if TYPE_CHECKING:
     from jarvislabs.models import Instance
@@ -42,9 +48,25 @@ def _resolve_ssh(machine_id: int) -> tuple[Instance, list[str]]:
         render.die(f"Cannot parse SSH command: {inst.ssh_command}")
 
 
-def _default_upload_dest(source: Path) -> str:
+def _remote_home(ssh_command: str | None) -> str:
+    """Derive the remote home/workspace directory from the SSH command.
+
+    Containers run as root and use /home as a workspace.
+    VMs run as a regular user (ubuntu, cloud, …) whose home is /home/<user>.
+    """
+    if ssh_command:
+        try:
+            info = parse_ssh_command(ssh_command)
+            if info.user and info.user != "root":
+                return f"/home/{info.user}"
+        except SSHError:
+            pass
+    return "/home"
+
+
+def _default_upload_dest(source: Path, ssh_command: str | None = None) -> str:
     name = source.name or source.resolve().name
-    return f"/home/{name}"
+    return f"{_remote_home(ssh_command)}/{name}"
 
 
 def _default_download_dest(source: str) -> str:
@@ -337,11 +359,11 @@ def instance_upload(
     source: Path = typer.Argument(
         ..., exists=True, readable=True, resolve_path=True, help="Local file or directory to upload."
     ),
-    dest: str | None = typer.Argument(None, help="Remote destination path. Defaults to /home/<name>."),
+    dest: str | None = typer.Argument(None, help="Remote destination path. Defaults to remote home directory."),
 ) -> None:
     """Upload a local file or directory to a running instance."""
     inst, ssh_parts = _resolve_ssh(machine_id)
-    remote_dest = dest or _default_upload_dest(source)
+    remote_dest = dest or _default_upload_dest(source, inst.ssh_command)
     recursive = source.is_dir()
 
     if dest is not None:

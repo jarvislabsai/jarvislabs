@@ -21,8 +21,11 @@ from jarvislabs.constants import (
     EUROPE_POLL_TIMEOUT_S,
     EUROPE_REGION,
     FETCH_RETRY_INTERVAL_S,
+    INDIA_NOIDA_REGION,
     POLL_INTERVAL_S,
     REGION_URLS,
+    VM_MIN_STORAGE_GB,
+    VM_SUPPORTED_REGIONS,
 )
 from jarvislabs.exceptions import APIError, AuthError, NotFoundError, ValidationError
 from jarvislabs.models import (
@@ -247,12 +250,20 @@ class Instances:
             raise ValidationError("Instance name must be 40 characters or fewer")
 
         # Region is intentionally not user-facing. SDK auto-routes based on server meta.
-        region = _resolve_region(self._t, gpu_type=gpu_type, num_gpus=num_gpus)
+        region = _resolve_region(self._t, gpu_type=gpu_type, num_gpus=num_gpus, template=template)
 
-        storage = _apply_europe_constraints(gpu_type, num_gpus, storage, region)
+        storage = _apply_storage_constraints(
+            template=template,
+            gpu_type=gpu_type,
+            num_gpus=num_gpus,
+            storage=storage,
+            region=region,
+        )
 
-        if template == "vm":
-            _preflight_vm(gpu_type, region, self._ssh_keys.list())
+        if template == "vm" and not self._ssh_keys.list():
+            raise ValidationError(
+                "VM instances require at least one SSH key. Add one with: jl ssh-key add <pubkey-file> --name 'my-key'"
+            )
         if fs_id is not None:
             _ensure_filesystem_exists(self._t, fs_id)
 
@@ -328,15 +339,28 @@ class Instances:
         # Resume is region-locked — backend always uses instance's original region
         region = instance.region or DEFAULT_REGION
         base_url = _region_url(region)
+        is_vm = instance.template == "vm"
 
         # Warn early if the requested GPU isn't available in this region
         if gpu_type and gpu_type != instance.gpu_type:
             _check_gpu_in_region(self._t, gpu_type, num_gpus or instance.num_gpus or 1, region)
+        if is_vm and not self._ssh_keys.list():
+            raise ValidationError(
+                "VM instances require at least one SSH key. Add one with: jl ssh-key add <pubkey-file> --name 'my-key'"
+            )
 
         effective_gpu = gpu_type or instance.gpu_type
         effective_num = num_gpus or instance.num_gpus or 1
         effective_storage = storage or instance.storage_gb or 40
-        effective_storage = _apply_europe_constraints(effective_gpu, effective_num, effective_storage, region)
+        effective_storage = _apply_storage_constraints(
+            template=instance.template,
+            gpu_type=effective_gpu,
+            num_gpus=effective_num,
+            storage=effective_storage,
+            region=region,
+            current_storage=instance.storage_gb,
+            storage_was_requested=storage is not None,
+        )
         if effective_storage != (storage or instance.storage_gb or 40):
             storage = effective_storage
 
@@ -463,9 +487,12 @@ def _normalize_success(data: dict) -> bool:
     return bool(val)
 
 
-def _resolve_region(transport: Transport, *, gpu_type: str | None, num_gpus: int) -> str:
+def _resolve_region(transport: Transport, *, gpu_type: str | None, num_gpus: int, template: str = "pytorch") -> str:
     """Auto-route to the best region via server_meta. Hardcoded fallback if call fails."""
-    fallback = EUROPE_REGION if gpu_type in EUROPE_GPU_TYPES else DEFAULT_REGION
+    if template == "vm":
+        fallback = EUROPE_REGION if gpu_type in EUROPE_GPU_TYPES else INDIA_NOIDA_REGION
+    else:
+        fallback = EUROPE_REGION if gpu_type in EUROPE_GPU_TYPES else DEFAULT_REGION
 
     try:
         resp = transport.request("GET", "misc/server_meta")
@@ -474,6 +501,8 @@ def _resolve_region(transport: Transport, *, gpu_type: str | None, num_gpus: int
         return fallback
 
     candidates = [s for s in meta.server_meta if s.gpu_type == gpu_type and s.region]
+    if template == "vm":
+        candidates = [s for s in candidates if s.region in VM_SUPPORTED_REGIONS]
     if not candidates:
         return fallback
 
@@ -492,6 +521,31 @@ def _apply_europe_constraints(gpu_type: str | None, num_gpus: int, storage: int,
         storage = EUROPE_MIN_STORAGE_GB
     if gpu_type:
         _validate_europe(gpu_type, num_gpus, storage)
+    return storage
+
+
+def _apply_storage_constraints(
+    *,
+    template: str,
+    gpu_type: str | None,
+    num_gpus: int,
+    storage: int,
+    region: str,
+    current_storage: int | None = None,
+    storage_was_requested: bool = False,
+) -> int:
+    """Normalize storage before sending the request to the backend."""
+    storage = _apply_europe_constraints(gpu_type, num_gpus, storage, region)
+
+    if template != "vm" or storage >= VM_MIN_STORAGE_GB:
+        return storage
+
+    if current_storage is None:
+        return VM_MIN_STORAGE_GB
+
+    if storage_was_requested and storage > current_storage:
+        return VM_MIN_STORAGE_GB
+
     return storage
 
 
@@ -524,17 +578,6 @@ def _check_gpu_in_region(transport: Transport, gpu_type: str, num_gpus: int, reg
     free = any(s.num_free_devices >= num_gpus for s in in_region)
     if not free:
         raise ValidationError(f"No free {gpu_type} GPUs in {region} right now. Try again later.")
-
-
-def _preflight_vm(gpu_type: str, region: str, ssh_keys: list[SSHKey]) -> None:
-    if gpu_type not in EUROPE_GPU_TYPES:
-        raise ValidationError("VM template supports only H100/H200 GPUs")
-    if region != EUROPE_REGION:
-        raise ValidationError("VM template is only available in europe-01")
-    if not ssh_keys:
-        raise ValidationError(
-            "VM instances require at least one SSH key. Add one with: jl ssh-key add <pubkey-file> --name 'my-key'"
-        )
 
 
 def _region_url(region: str | None) -> str:

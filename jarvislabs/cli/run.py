@@ -18,14 +18,14 @@ from typer.core import TyperGroup
 
 from jarvislabs.cli import render, state
 from jarvislabs.cli.app import app, get_client
-from jarvislabs.cli.instance import _default_upload_dest
+from jarvislabs.cli.instance import _default_upload_dest, _remote_home
 from jarvislabs.exceptions import JarvislabsError, SSHError
 from jarvislabs.ssh import build_rsync_upload_command, build_scp_command, harden_ssh_parts, split_ssh_command
 
 if TYPE_CHECKING:
     from jarvislabs.models import Instance
 
-_REMOTE_RUNS_ROOT = PurePosixPath("/home/.jl/runs")
+_REMOTE_RUNS_SUFFIX = ".jl/runs"
 _LOCAL_RUNS_ROOT = Path.home() / ".jl" / "runs"
 _DEFAULT_FOLLOW_TAIL_LINES = 20
 
@@ -126,8 +126,9 @@ def _make_run_id() -> str:
     return f"r_{secrets.token_hex(4)}"
 
 
-def _build_run_paths(run_id: str) -> RunPaths:
-    remote_run_dir = _REMOTE_RUNS_ROOT / run_id
+def _build_run_paths(run_id: str, ssh_command: str | None = None) -> RunPaths:
+    remote_runs_root = PurePosixPath(_remote_home(ssh_command)) / _REMOTE_RUNS_SUFFIX
+    remote_run_dir = remote_runs_root / run_id
     return RunPaths(
         run_id=run_id,
         remote_run_dir=remote_run_dir.as_posix(),
@@ -344,7 +345,7 @@ def _resolve_local_input(path: str | None, *, label: str) -> Path | None:
 def _entrypoint_command(path: str, extra_args: list[str]) -> str:
     suffix = Path(path).suffix
     if suffix == ".py":
-        parts = ["python", path, *extra_args]
+        parts = ["python3", path, *extra_args]
     elif suffix == ".sh":
         parts = ["bash", path, *extra_args]
     else:
@@ -360,6 +361,7 @@ def _build_run_spec(
     extra_args: list[str],
     *,
     script_path: str | None = None,
+    ssh_command: str | None = None,
 ) -> RunSpec:
     if target is None:
         if script_path is not None:
@@ -392,7 +394,7 @@ def _build_run_spec(
         )
 
     if local_target.is_dir():
-        remote_target = _default_upload_dest(local_target)
+        remote_target = _default_upload_dest(local_target, ssh_command)
         if script_path:
             launch_command = _entrypoint_command(script_path, extra_args)
         elif extra_args:
@@ -419,7 +421,7 @@ def _build_run_spec(
             "Use a directory target or the instance upload/exec primitives for other files."
         )
 
-    remote_root = PurePosixPath("/home") / (local_target.stem or local_target.name)
+    remote_root = PurePosixPath(_remote_home(ssh_command)) / (local_target.stem or local_target.name)
     remote_target = (remote_root / local_target.name).as_posix()
     return RunSpec(
         target_kind="file",
@@ -464,7 +466,7 @@ LOG_FILE={shlex.quote(paths.remote_log)}
 PID_FILE={shlex.quote(paths.remote_pid)}
 EXIT_FILE={shlex.quote(paths.remote_exit_code)}
 COMMAND={shlex.quote(spec.launch_command)}
-WORKDIR={shlex.quote(spec.working_dir or "/home")}
+WORKDIR={shlex.quote(spec.working_dir or "~")}
 
 rm -f "$EXIT_FILE"
 touch "$LOG_FILE"
@@ -578,7 +580,8 @@ def _compose_launch_command(
         return _with_setup(spec.launch_command, setup_command)
 
     commands = [
-        "(command -v uv >/dev/null 2>&1 || python -m pip install -U uv)",
+        "command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; }",
+        'export PATH="$HOME/.local/bin:$PATH"',
         "(test -d .venv || uv venv .venv)",
         ". .venv/bin/activate",
     ]
@@ -724,8 +727,8 @@ def _start_managed_run(
     setup_file: Path | None = None,
 ) -> tuple[str, int | None]:
     inst, ssh_parts = _wait_for_ssh_ready(machine_id)
-    spec = _build_run_spec(target, extra_args, script_path=script_path)
-    paths = _build_run_paths(_make_run_id())
+    spec = _build_run_spec(target, extra_args, script_path=script_path, ssh_command=inst.ssh_command)
+    paths = _build_run_paths(_make_run_id(), ssh_command=inst.ssh_command)
 
     render.info(f"Preparing run {paths.run_id} on instance {machine_id}")
     if _run_remote(ssh_parts, f"mkdir -p {shlex.quote(paths.remote_run_dir)}") != 0:

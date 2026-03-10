@@ -7,6 +7,7 @@ only this file needs updating.
 # ── Regions ──────────────────────────────────────────────────────────────────
 
 DEFAULT_REGION = "india-01"
+INDIA_NOIDA_REGION = "india-noida-01"
 
 REGION_URLS: dict[str, str] = {
     "india-01": "https://backendprod.jarvislabs.net/",
@@ -21,6 +22,8 @@ EUROPE_GPU_TYPES: frozenset[str] = frozenset({"H100", "H200"})
 EUROPE_GPU_COUNTS: frozenset[int] = frozenset({1, 8})
 EUROPE_MIN_STORAGE_GB = 100
 EUROPE_POLL_TIMEOUT_S = 300
+VM_MIN_STORAGE_GB = 100
+VM_SUPPORTED_REGIONS: frozenset[str] = frozenset({EUROPE_REGION, INDIA_NOIDA_REGION})
 
 # ── Timeouts & Polling ───────────────────────────────────────────────────────
 

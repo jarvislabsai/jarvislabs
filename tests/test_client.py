@@ -11,11 +11,11 @@ from jarvislabs.client import (
     Instances,
     Scripts,
     SSHKeys,
+    _apply_storage_constraints,
     _fetch_instances,
     _get_instance,
     _normalize_success,
     _poll_until_running,
-    _preflight_vm,
     _region_url,
     _resolve_region,
     _validate_europe,
@@ -24,7 +24,9 @@ from jarvislabs.constants import (
     DEFAULT_REGION,
     EUROPE_MIN_STORAGE_GB,
     EUROPE_REGION,
+    INDIA_NOIDA_REGION,
     REGION_URLS,
+    VM_MIN_STORAGE_GB,
 )
 from jarvislabs.exceptions import APIError, NotFoundError, ValidationError
 from jarvislabs.models import SSHKey, StatusResponse
@@ -134,24 +136,43 @@ class TestValidateEurope:
             _validate_europe("H100", 1, 50)
 
 
-# ── _preflight_vm ────────────────────────────────────────────────────────────
+# ── _apply_storage_constraints ───────────────────────────────────────────────
 
 
-class TestPreflightVm:
-    def test_valid(self):
-        _preflight_vm("H100", EUROPE_REGION, [_DUMMY_KEY])
+class TestApplyStorageConstraints:
+    def test_vm_create_auto_bumps_storage(self):
+        storage = _apply_storage_constraints(
+            template="vm",
+            gpu_type="L4",
+            num_gpus=1,
+            storage=40,
+            region="india-01",
+        )
+        assert storage == VM_MIN_STORAGE_GB
 
-    def test_bad_gpu(self):
-        with pytest.raises(ValidationError, match="H100/H200"):
-            _preflight_vm("L4", EUROPE_REGION, [_DUMMY_KEY])
+    def test_vm_resume_only_bumps_requested_expansion(self):
+        storage = _apply_storage_constraints(
+            template="vm",
+            gpu_type="A100",
+            num_gpus=1,
+            storage=60,
+            region="india-noida-01",
+            current_storage=40,
+            storage_was_requested=True,
+        )
+        assert storage == VM_MIN_STORAGE_GB
 
-    def test_bad_region(self):
-        with pytest.raises(ValidationError, match="only available in europe-01"):
-            _preflight_vm("H100", "india-01", [_DUMMY_KEY])
-
-    def test_empty_ssh_keys(self):
-        with pytest.raises(ValidationError, match="SSH key"):
-            _preflight_vm("H100", EUROPE_REGION, [])
+    def test_vm_resume_keeps_legacy_storage_without_resize(self):
+        storage = _apply_storage_constraints(
+            template="vm",
+            gpu_type="A100",
+            num_gpus=1,
+            storage=40,
+            region="india-noida-01",
+            current_storage=40,
+            storage_was_requested=False,
+        )
+        assert storage == 40
 
 
 # ── _region_url ──────────────────────────────────────────────────────────────
@@ -184,6 +205,14 @@ class TestResolveRegion:
         mock_transport.request.side_effect = Exception("network error")
         assert _resolve_region(mock_transport, gpu_type="RTX5000", num_gpus=1) == DEFAULT_REGION
 
+    def test_vm_exception_fallback_noida(self, mock_transport):
+        mock_transport.request.side_effect = Exception("network error")
+        assert _resolve_region(mock_transport, gpu_type="L4", num_gpus=1, template="vm") == INDIA_NOIDA_REGION
+
+    def test_vm_exception_fallback_europe(self, mock_transport):
+        mock_transport.request.side_effect = Exception("network error")
+        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1, template="vm") == EUROPE_REGION
+
     def test_empty_candidates(self, mock_transport):
         mock_transport.request.return_value = {"server_meta": []}
         assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == EUROPE_REGION
@@ -212,6 +241,23 @@ class TestResolveRegion:
             ]
         }
         assert _resolve_region(mock_transport, gpu_type=None, num_gpus=1) == DEFAULT_REGION
+
+    def test_vm_filters_out_unsupported_regions(self, mock_transport):
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "L4", "region": "india-01", "num_free_devices": 8},
+                {"gpu_type": "L4", "region": "india-noida-01", "num_free_devices": 2},
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="L4", num_gpus=1, template="vm") == INDIA_NOIDA_REGION
+
+    def test_vm_falls_back_when_only_v1_region_matches(self, mock_transport):
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "A100", "region": "india-01", "num_free_devices": 8},
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="A100", num_gpus=1, template="vm") == INDIA_NOIDA_REGION
 
 
 # ── _poll_until_running ──────────────────────────────────────────────────────
@@ -473,6 +519,36 @@ class TestCreatePayload:
         _make_instances(mock_transport).create(gpu_type="H100", storage=20)
         assert mock_transport.request.call_args.kwargs["json"]["hdd"] >= EUROPE_MIN_STORAGE_GB
 
+    @patch("jarvislabs.client._resolve_region", return_value="india-01")
+    @patch("jarvislabs.client._get_instance")
+    @patch("jarvislabs.client._poll_until_running")
+    def test_vm_create_l4_auto_bumps_storage(self, _poll, mock_get, _region, mock_transport):
+        mock_transport.request.side_effect = [
+            [_DUMMY_KEY.model_dump()],
+            {"machine_id": 1},
+        ]
+        mock_get.return_value = MagicMock(machine_id=1)
+
+        _make_instances(mock_transport).create(gpu_type="L4", template="vm", storage=40)
+        payload = mock_transport.request.call_args.kwargs["json"]
+        assert payload["hdd"] == VM_MIN_STORAGE_GB
+        assert payload["gpu_type"] == "L4"
+
+    @patch("jarvislabs.client._resolve_region", return_value="india-noida-01")
+    @patch("jarvislabs.client._get_instance")
+    @patch("jarvislabs.client._poll_until_running")
+    def test_vm_create_a100_auto_bumps_storage(self, _poll, mock_get, _region, mock_transport):
+        mock_transport.request.side_effect = [
+            [_DUMMY_KEY.model_dump()],
+            {"machine_id": 1},
+        ]
+        mock_get.return_value = MagicMock(machine_id=1)
+
+        _make_instances(mock_transport).create(gpu_type="A100", template="vm", storage=40)
+        payload = mock_transport.request.call_args.kwargs["json"]
+        assert payload["hdd"] == VM_MIN_STORAGE_GB
+        assert payload["gpu_type"] == "A100"
+
 
 # ── resume() payload ─────────────────────────────────────────────────────────
 
@@ -515,6 +591,22 @@ class TestResumePayload:
         instances.resume(10)
         assert mock_transport.request.call_args.kwargs["json"]["script_args"] == ""
 
+    def test_vm_resume_uses_vm_endpoint(self, mock_transport):
+        existing = _mock_existing_instance()
+        existing.template = "vm"
+        existing.region = "india-01"
+        mock_get = patch("jarvislabs.client._get_instance").start()
+        patch("jarvislabs.client._poll_until_running").start()
+        mock_get.side_effect = [existing, MagicMock(machine_id=11)]
+        mock_transport.request.side_effect = [
+            [_DUMMY_KEY.model_dump()],
+            {"machine_id": 11},
+        ]
+
+        _make_instances(mock_transport).resume(10)
+
+        assert mock_transport.request.call_args_list[1].args == ("POST", "templates/vm/resume")
+
     def test_resume_non_paused_raises(self, mock_transport):
         mock_get = patch("jarvislabs.client._get_instance").start()
         running = MagicMock(status="Running")
@@ -530,6 +622,64 @@ class TestResumePayload:
             instances.resume(10, fs_id=999)
 
         mock_transport.request.assert_called_once_with("GET", "filesystem/list")
+
+    def test_vm_resume_requires_ssh_key(self, mock_transport):
+        existing = _mock_existing_instance()
+        existing.template = "vm"
+        existing.region = "india-01"
+        mock_get = patch("jarvislabs.client._get_instance").start()
+        mock_get.return_value = existing
+
+        with pytest.raises(ValidationError, match="SSH key"):
+            _make_instances(mock_transport).resume(10)
+
+    def test_vm_resume_a100_resize_is_bumped(self, mock_transport):
+        existing = _mock_existing_instance()
+        existing.template = "vm"
+        existing.region = "india-noida-01"
+        existing.gpu_type = "A100"
+        existing.storage_gb = 40
+        mock_get = patch("jarvislabs.client._get_instance").start()
+        patch("jarvislabs.client._poll_until_running").start()
+        mock_get.side_effect = [existing, MagicMock(machine_id=11)]
+        mock_transport.request.side_effect = [
+            [_DUMMY_KEY.model_dump()],
+            {"machine_id": 11},
+        ]
+
+        instances = _make_instances(mock_transport)
+        instances.resume(10, storage=60)
+
+        payload = mock_transport.request.call_args.kwargs["json"]
+        assert payload["hdd"] == VM_MIN_STORAGE_GB
+
+
+class TestLifecycleRouting:
+    def test_pause_vm_uses_vm_endpoint(self, mock_transport):
+        instance = MagicMock(template="vm", region="india-01")
+        with patch("jarvislabs.client._get_instance", return_value=instance):
+            mock_transport.request.return_value = {"success": True}
+            _make_instances(mock_transport).pause(10)
+
+        mock_transport.request.assert_called_once_with(
+            "POST",
+            "templates/vm/pause",
+            params={"machine_id": 10},
+            base_url=REGION_URLS["india-01"],
+        )
+
+    def test_destroy_vm_uses_vm_endpoint(self, mock_transport):
+        instance = MagicMock(template="vm", region="india-noida-01")
+        with patch("jarvislabs.client._get_instance", return_value=instance):
+            mock_transport.request.return_value = {"success": True}
+            _make_instances(mock_transport).destroy(10)
+
+        mock_transport.request.assert_called_once_with(
+            "POST",
+            "templates/vm/destroy",
+            params={"machine_id": 10},
+            base_url=REGION_URLS["india-noida-01"],
+        )
 
 
 class TestRenameInstance:

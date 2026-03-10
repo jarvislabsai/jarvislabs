@@ -66,7 +66,7 @@ def test_build_run_spec_for_python_file(monkeypatch, tmp_path):
     assert spec.local_target == source
     assert spec.remote_target == f"/home/{source.stem}/{source.name}"
     assert spec.working_dir == f"/home/{source.stem}"
-    assert spec.launch_command == f"python {source.name} --epochs 5"
+    assert spec.launch_command == f"python3 {source.name} --epochs 5"
 
 
 def test_build_run_spec_for_bash_file(tmp_path):
@@ -105,7 +105,7 @@ def test_build_run_spec_for_directory_with_script_option(tmp_path):
     assert spec.target_kind == "directory"
     assert spec.remote_target == "/home/project"
     assert spec.working_dir == "/home/project"
-    assert spec.launch_command == "python scripts/train.py --epochs 5"
+    assert spec.launch_command == "python3 scripts/train.py --epochs 5"
 
 
 def test_build_run_spec_for_directory_with_bash_script_option(tmp_path):
@@ -224,7 +224,7 @@ def test_prepare_remote_target_for_directory_replaces_stable_remote_path(monkeyp
         local_target=project,
         remote_target="/home/project",
         working_dir="/home/project",
-        launch_command="python train.py",
+        launch_command="python3 train.py",
     )
 
     run._prepare_remote_target(inst, ["ssh", "root@example.com"], spec)
@@ -278,7 +278,7 @@ def test_start_managed_run_for_file_launches_detached_and_saves_local_record(mon
     spec = captured["spec"]
     assert spec.target_kind == "file"
     assert spec.remote_target == "/home/train/train.py"
-    assert spec.launch_command == "python train.py --epochs 5"
+    assert spec.launch_command == "python3 train.py --epochs 5"
     record = captured["record"]
     assert record.run_id == "r_test123"
     assert record.machine_id == 123
@@ -329,7 +329,8 @@ def test_start_managed_run_json_mode_returns_summary(monkeypatch, tmp_path):
         "target_kind": "directory",
         "remote_target": "/home/project",
         "command": (
-            "(command -v uv >/dev/null 2>&1 || python -m pip install -U uv) && "
+            "command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; } && "
+            'export PATH="$HOME/.local/bin:$PATH" && '
             "(test -d .venv || uv venv .venv) && "
             ". .venv/bin/activate && "
             "python train.py"
@@ -353,7 +354,7 @@ def test_iter_local_runs_sorts_newest_first(monkeypatch, tmp_path):
         remote_log="/home/.jl/runs/r_old/output.log",
         remote_pid="/home/.jl/runs/r_old/pid",
         remote_exit_code="/home/.jl/runs/r_old/exit_code",
-        launch_command="python old.py",
+        launch_command="python3 old.py",
         started_at="2026-03-08T10:00:00+00:00",
     )
     newer = run.LocalRunRecord(
@@ -366,7 +367,7 @@ def test_iter_local_runs_sorts_newest_first(monkeypatch, tmp_path):
         remote_log="/home/.jl/runs/r_new/output.log",
         remote_pid="/home/.jl/runs/r_new/pid",
         remote_exit_code="/home/.jl/runs/r_new/exit_code",
-        launch_command="python train.py",
+        launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
         instance_origin="fresh",
         lifecycle_policy="keep",
@@ -390,7 +391,7 @@ def test_get_run_snapshot_reports_running(monkeypatch):
         remote_log="/home/.jl/runs/r_run/output.log",
         remote_pid="/home/.jl/runs/r_run/pid",
         remote_exit_code="/home/.jl/runs/r_run/exit_code",
-        launch_command="python train.py",
+        launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )
     monkeypatch.setattr(
@@ -416,7 +417,7 @@ def test_get_run_snapshot_reports_instance_paused(monkeypatch):
         remote_log="/home/.jl/runs/r_paused/output.log",
         remote_pid="/home/.jl/runs/r_paused/pid",
         remote_exit_code="/home/.jl/runs/r_paused/exit_code",
-        launch_command="python train.py",
+        launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )
     monkeypatch.setattr(
@@ -439,7 +440,7 @@ def test_run_logs_json_returns_content(monkeypatch):
         remote_log="/home/.jl/runs/r_logs/output.log",
         remote_pid="/home/.jl/runs/r_logs/pid",
         remote_exit_code="/home/.jl/runs/r_logs/exit_code",
-        launch_command="python train.py",
+        launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )
     captured: dict[str, object] = {}
@@ -476,7 +477,7 @@ def test_run_logs_follow_shows_followups(monkeypatch):
         remote_log="/home/.jl/runs/r_logs/output.log",
         remote_pid="/home/.jl/runs/r_logs/pid",
         remote_exit_code="/home/.jl/runs/r_logs/exit_code",
-        launch_command="python train.py",
+        launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )
     captured: list[str] = []
@@ -508,7 +509,7 @@ def test_run_list_does_not_refresh_by_default(monkeypatch, tmp_path):
         remote_log="/home/.jl/runs/r_saved/output.log",
         remote_pid="/home/.jl/runs/r_saved/pid",
         remote_exit_code="/home/.jl/runs/r_saved/exit_code",
-        launch_command="python train.py",
+        launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )
     (tmp_path / "r_saved.json").write_text(json.dumps(run.asdict(record)))
@@ -551,7 +552,7 @@ def test_run_stop_reports_completed_run(monkeypatch):
         remote_log="/home/.jl/runs/r_done/output.log",
         remote_pid="/home/.jl/runs/r_done/pid",
         remote_exit_code="/home/.jl/runs/r_done/exit_code",
-        launch_command="python train.py",
+        launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )
     captured: list[str] = []
@@ -592,7 +593,7 @@ def test_run_stop_sends_term_to_running_process(monkeypatch):
         remote_log="/home/.jl/runs/r_live/output.log",
         remote_pid="/home/.jl/runs/r_live/pid",
         remote_exit_code="/home/.jl/runs/r_live/exit_code",
-        launch_command="python train.py",
+        launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )
     captured: dict[str, str] = {}
@@ -700,7 +701,7 @@ def test_compose_launch_command_bootstraps_uv_env():
         local_target=None,
         remote_target="/home/project",
         working_dir="/home/project",
-        launch_command="python train.py --epochs 5",
+        launch_command="python3 train.py --epochs 5",
     )
 
     command = run._compose_launch_command(
@@ -711,13 +712,14 @@ def test_compose_launch_command_bootstraps_uv_env():
     )
 
     assert command == (
-        "(command -v uv >/dev/null 2>&1 || python -m pip install -U uv) && "
+        "command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; } && "
+        'export PATH="$HOME/.local/bin:$PATH" && '
         "(test -d .venv || uv venv .venv) && "
         ". .venv/bin/activate && "
         "uv pip install -r requirements.txt && "
         "bash bootstrap.sh && "
         "echo setup && "
-        "python train.py --epochs 5"
+        "python3 train.py --epochs 5"
     )
 
 
@@ -732,7 +734,7 @@ def test_prepare_support_files_uploads_requirements_and_setup(monkeypatch, tmp_p
         local_target=tmp_path,
         remote_target="/home/project",
         working_dir="/home/project",
-        launch_command="python train.py",
+        launch_command="python3 train.py",
     )
     uploads: list[tuple[str, str, str]] = []
 

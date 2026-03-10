@@ -4,12 +4,17 @@ set -u
 set -o pipefail
 
 INCLUDE_H100_H200=0
+INCLUDE_VM=0
 KEEP_RESOURCES=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --include-h100-h200)
       INCLUDE_H100_H200=1
+      shift
+      ;;
+    --include-vm)
+      INCLUDE_VM=1
       shift
       ;;
     --keep-resources)
@@ -23,7 +28,8 @@ Usage: tests/e2e_cli.sh [OPTIONS]
 Run live end-to-end tests against the real JarvisLabs backend using the CLI.
 
 Options:
-  --include-h100-h200  Run heavy H100/H200 + VM tests (slow and costly)
+  --include-h100-h200  Run heavy H100/H200 tests (slow and costly)
+  --include-vm         Run optional A100/L4 VM lifecycle tests
   --keep-resources     Do not cleanup created resources at the end
   -h, --help           Show this help message
 
@@ -492,7 +498,7 @@ run_expect_failure "instance resume invalid id fails" jl --yes instance resume 9
 run_expect_failure "instance destroy invalid id fails" jl --yes instance destroy 999999999
 run_expect_failure "instance ssh invalid id fails" jl instance ssh 999999999 --print-command
 
-run_expect_failure "validation: vm template with L4 fails" jl --yes instance create --gpu L4 --template vm
+run_expect_failure "validation: vm create without ssh key fails" jl --yes instance create --gpu L4 --template vm
 run_expect_failure "validation: filesystem create below min storage fails" \
   jl --yes filesystem create --name "${RUN_TAG}-fs-bad" --storage 10
 touch "$TMP_DIR/empty.pub"
@@ -760,7 +766,7 @@ if [[ -n "$SCRIPT_ID" ]]; then
   remove_cleanup_script "$SCRIPT_ID"
 fi
 
-section "8. Optional H100/H200 + VM"
+section "8. Optional H100/H200"
 
 if [[ $INCLUDE_H100_H200 -ne 1 ]]; then
   record_skip "heavy H100/H200 tests" "run with --include-h100-h200 to enable"
@@ -798,24 +804,49 @@ else
       remove_cleanup_instance "$H200_ID"
     fi
   fi
+fi
 
+section "9. Optional VMs"
+
+if [[ $INCLUDE_VM -ne 1 ]]; then
+  record_skip "VM tests" "run with --include-vm to enable"
+else
   run_expect_success "ssh-key list for VM precheck (json)" jl --json ssh-key list
   if [[ $LAST_RC -eq 0 ]]; then
     HAS_KEYS="$(json_read 'len(data)' 2>/dev/null || echo 0)"
     if [[ "${HAS_KEYS:-0}" -gt 0 ]]; then
-      run_expect_success "create H100 VM (json)" \
-        jl --yes --json instance create --gpu H100 --template vm --storage 100 --name "${RUN_TAG}-vm"
-      if [[ $LAST_RC -eq 0 ]]; then
-        VM_ID="$(json_read 'data.get("machine_id")' 2>/dev/null || true)"
-        if [[ -n "$VM_ID" ]]; then
-          CLEANUP_INSTANCES+=("$VM_ID")
-          record_pass "VM machine_id=$VM_ID"
-          run_expect_success "destroy VM" jl --yes instance destroy "$VM_ID"
-          remove_cleanup_instance "$VM_ID"
+      for VM_GPU in A100 L4; do
+        VM_GPU_LOWER="$(printf '%s' "$VM_GPU" | tr '[:upper:]' '[:lower:]')"
+        run_expect_success "create ${VM_GPU} VM (json)" \
+          jl --yes --json instance create --gpu "$VM_GPU" --template vm --storage 100 --name "${RUN_TAG}-${VM_GPU_LOWER}-vm"
+        if [[ $LAST_RC -eq 0 ]]; then
+          VM_ID="$(json_read 'data.get("machine_id")' 2>/dev/null || true)"
+          if [[ -n "$VM_ID" ]]; then
+            CLEANUP_INSTANCES+=("$VM_ID")
+            record_pass "${VM_GPU} VM machine_id=$VM_ID"
+            run_expect_success "${VM_GPU} VM ssh command" jl instance ssh "$VM_ID" --print-command
+            assert_output_contains "${VM_GPU} VM ssh command contains ssh" "ssh "
+            run_expect_success "pause ${VM_GPU} VM" jl --yes instance pause "$VM_ID"
+            if wait_for_instance_status "$VM_ID" "Paused" 180; then
+              record_pass "${VM_GPU} VM reached Paused"
+            else
+              record_warn "${VM_GPU} VM reached Paused" "timeout"
+            fi
+            run_expect_success "resume ${VM_GPU} VM (json)" jl --yes --json instance resume "$VM_ID"
+            RESUMED_VM_ID="$(json_read 'data.get("machine_id")' 2>/dev/null || true)"
+            if [[ -n "$RESUMED_VM_ID" ]]; then
+              remove_cleanup_instance "$VM_ID"
+              VM_ID="$RESUMED_VM_ID"
+              CLEANUP_INSTANCES+=("$VM_ID")
+              record_pass "${VM_GPU} VM resumed as machine_id=$VM_ID"
+            fi
+            run_expect_success "destroy ${VM_GPU} VM" jl --yes instance destroy "$VM_ID"
+            remove_cleanup_instance "$VM_ID"
+          fi
         fi
-      fi
+      done
     else
-      record_skip "VM H100 path" "no SSH keys available for VM create"
+      record_skip "VM paths" "no SSH keys available for VM create"
     fi
   fi
 fi
