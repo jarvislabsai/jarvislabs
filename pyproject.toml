@@ -1,0 +1,72 @@
+[build-system]
+requires = ["uv_build>=0.10.8,<0.11.0"]
+build-backend = "uv_build"
+
+[project]
+name = "jarvislabs"
+version = "0.2.0b1"
+description = "CLI and SDK for JarvisLabs.ai GPU cloud"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Team Jarvislabs.ai", email = "hello@jarvislabs.ai" }]
+keywords = ["gpu", "cloud", "jarvislabs", "cli", "sdk"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.10",
+    "typer>=0.12",
+    "rich>=13.0",
+    "platformdirs>=4.0",
+    "tomli-w>=1.0",
+]
+
+[project.scripts]
+jl = "jarvislabs.cli.app:main"
+
+[project.urls]
+Homepage = "https://jarvislabs.ai"
+Repository = "https://github.com/jarvislabsai/jarvislabs"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "C4", "UP", "SIM", "RUF", "T20", "TC"]
+ignore = ["E501", "SIM108"]
+unfixable = ["T201"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["T201", "RUF012"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = ["jarvislabs"]
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.4",
+    "pytest>=8.0",
+    "pytest-mock>=3.14",
+]
