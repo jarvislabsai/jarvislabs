@@ -4,7 +4,7 @@ import os
 
 import typer
 
-from jarvislabs.cli import render, state
+from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
 from jarvislabs.config import load_config, save_config
 
@@ -12,8 +12,11 @@ from jarvislabs.config import load_config, save_config
 @app.command(rich_help_panel="Account")
 def login(
     token: str = typer.Option(None, "--token", "-t", help="API token (prompted if not given)."),
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Save API token to config file."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
     config = load_config()
     existing = config.get("auth", {}).get("token")
 
@@ -47,28 +50,43 @@ def login(
     first_login = not existing
     config.setdefault("auth", {})["token"] = token
     save_config(config)
+    if state.json_output:
+        render.print_json({"success": True, "user_id": info.user_id, "name": info.name})
+        return
     render.success(f"Logged in as {info.name} ({info.user_id})")
     if first_login:
         render.info("Tip: Run `jl --install-completion` to enable tab completion")
 
 
 @app.command(rich_help_panel="Account")
-def logout() -> None:
+def logout(
+    json_output: cli_options.JsonOption = False,
+) -> None:
     """Remove saved API token from config file."""
+    cli_options.apply_command_options(json_output=json_output)
     config = load_config()
     if "auth" in config and "token" in config["auth"]:
         del config["auth"]["token"]
         if not config["auth"]:
             del config["auth"]
         save_config(config)
+        if state.json_output:
+            render.print_json({"success": True, "logged_out": True})
+            return
         render.success("Logged out — token removed from config.")
     else:
+        if state.json_output:
+            render.print_json({"success": True, "logged_out": False})
+            return
         render.info("No saved token found.")
 
 
 @app.command(rich_help_panel="Account")
-def status() -> None:
+def status(
+    json_output: cli_options.JsonOption = False,
+) -> None:
     """Show account info, balance, and resource summary."""
+    cli_options.apply_command_options(json_output=json_output)
     client = get_client()
     with render.spinner("Fetching account info..."):
         info = client.account.user_info()
@@ -92,8 +110,11 @@ def status() -> None:
 
 
 @app.command(rich_help_panel="Resources")
-def gpus() -> None:
+def gpus(
+    json_output: cli_options.JsonOption = False,
+) -> None:
     """Show GPU availability and pricing."""
+    cli_options.apply_command_options(json_output=json_output)
     client = get_client()
     with render.spinner("Fetching GPU availability..."):
         availability = client.account.gpu_availability()
@@ -107,8 +128,11 @@ def gpus() -> None:
 
 
 @app.command(rich_help_panel="Resources")
-def templates() -> None:
+def templates(
+    json_output: cli_options.JsonOption = False,
+) -> None:
     """List available instance templates."""
+    cli_options.apply_command_options(json_output=json_output)
     client = get_client()
     with render.spinner("Fetching templates..."):
         tpls = client.account.templates()
@@ -131,8 +155,11 @@ app.add_typer(filesystem_app, rich_help_panel="Infrastructure")
 
 
 @ssh_key_app.command("list")
-def ssh_key_list() -> None:
+def ssh_key_list(
+    json_output: cli_options.JsonOption = False,
+) -> None:
     """List SSH keys."""
+    cli_options.apply_command_options(json_output=json_output)
     client = get_client()
     with render.spinner("Fetching SSH keys..."):
         keys = client.ssh_keys.list()
@@ -148,33 +175,47 @@ def ssh_key_list() -> None:
 def ssh_key_add(
     pubkey_file: typer.FileText = typer.Argument(..., help="Path to public key file."),
     name: str = typer.Option(..., "--name", "-n", help="Name for this key."),
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Add an SSH public key."""
+    cli_options.apply_command_options(json_output=json_output)
     key_content = pubkey_file.read().strip()
     if not key_content:
         render.die("Public key file is empty.")
 
     client = get_client()
     client.ssh_keys.add(ssh_key=key_content, key_name=name)
+    if state.json_output:
+        render.print_json({"success": True, "name": name})
+        return
     render.success(f"SSH key '{name}' added.")
 
 
 @ssh_key_app.command("remove")
 def ssh_key_remove(
     key_id: str = typer.Argument(..., help="Key ID to remove."),
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Remove an SSH key."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
     if not render.confirm(f"Remove SSH key {key_id}?", skip=state.yes):
         raise typer.Exit()
 
     client = get_client()
     client.ssh_keys.remove(key_id)
+    if state.json_output:
+        render.print_json({"success": True, "key_id": key_id})
+        return
     render.success(f"SSH key {key_id} removed.")
 
 
 @scripts_app.command("list")
-def scripts_list() -> None:
+def scripts_list(
+    json_output: cli_options.JsonOption = False,
+) -> None:
     """List startup scripts."""
+    cli_options.apply_command_options(json_output=json_output)
     client = get_client()
     with render.spinner("Fetching startup scripts..."):
         scripts = client.scripts.list()
@@ -190,8 +231,10 @@ def scripts_list() -> None:
 def scripts_add(
     script_file: typer.FileBinaryRead = typer.Argument(..., help="Path to script file."),
     name: str | None = typer.Option(None, "--name", "-n", help="Script name (defaults to filename stem)."),
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Add a startup script."""
+    cli_options.apply_command_options(json_output=json_output)
     content = script_file.read()
     if not content.strip():
         render.die("Script file is empty.")
@@ -213,8 +256,10 @@ def scripts_add(
 def scripts_update(
     script_id: int = typer.Argument(..., help="Script ID to update."),
     script_file: typer.FileBinaryRead = typer.Argument(..., help="Path to script file."),
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Update startup script contents."""
+    cli_options.apply_command_options(json_output=json_output)
     content = script_file.read()
     if not content.strip():
         render.die("Script file is empty.")
@@ -233,8 +278,11 @@ def scripts_update(
 @scripts_app.command("remove")
 def scripts_remove(
     script_id: int = typer.Argument(..., help="Script ID to remove."),
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Remove a startup script."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
     if not render.confirm(f"Remove startup script {script_id}?", skip=state.yes):
         raise typer.Exit()
 
@@ -250,8 +298,11 @@ def scripts_remove(
 
 
 @filesystem_app.command("list")
-def filesystem_list() -> None:
+def filesystem_list(
+    json_output: cli_options.JsonOption = False,
+) -> None:
     """List filesystems."""
+    cli_options.apply_command_options(json_output=json_output)
     client = get_client()
     with render.spinner("Fetching filesystems..."):
         filesystems = client.filesystems.list()
@@ -267,8 +318,11 @@ def filesystem_list() -> None:
 def filesystem_create(
     name: str = typer.Option(..., "--name", "-n", help="Filesystem name."),
     storage: int = typer.Option(..., "--storage", "-s", help="Storage in GB (50-2048)."),
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Create a filesystem."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
     if not render.confirm(f"Create filesystem (name={name!r}, storage={storage}GB)?", skip=state.yes):
         raise typer.Exit()
 
@@ -287,8 +341,11 @@ def filesystem_create(
 def filesystem_edit(
     fs_id: int = typer.Argument(..., help="Filesystem ID to edit."),
     storage: int = typer.Option(..., "--storage", "-s", help="New storage size in GB (increase only)."),
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Expand filesystem storage."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
     if not render.confirm(f"Expand filesystem {fs_id} to {storage}GB?", skip=state.yes):
         raise typer.Exit()
 
@@ -306,8 +363,11 @@ def filesystem_edit(
 @filesystem_app.command("remove")
 def filesystem_remove(
     fs_id: int = typer.Argument(..., help="Filesystem ID to remove."),
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Delete a filesystem."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
     if not render.confirm(f"Remove filesystem {fs_id}?", skip=state.yes):
         raise typer.Exit()
 

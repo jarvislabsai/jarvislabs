@@ -273,18 +273,34 @@ def gpu_table(gpus: list, currency: str = "USD") -> None:
 
 
 def success(msg: str) -> None:
+    from jarvislabs.cli import state
+
+    if state.json_output:
+        return
     console.print(f"[green]✓[/green] {msg}")
 
 
 def error(msg: str) -> None:
+    from jarvislabs.cli import state
+
+    if state.json_output:
+        return
     console.print(f"[red]✗[/red] {msg}", style="red")
 
 
 def info(msg: str) -> None:
+    from jarvislabs.cli import state
+
+    if state.json_output:
+        return
     console.print(f"[dim]{msg}[/dim]")
 
 
 def warning(msg: str) -> None:
+    from jarvislabs.cli import state
+
+    if state.json_output:
+        return
     console.print(f"[yellow]![/yellow] {msg}")
 
 

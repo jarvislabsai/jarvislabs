@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 import typer
 from typer.core import TyperGroup
 
-from jarvislabs.cli import render, state
+from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
 from jarvislabs.cli.instance import _default_upload_dest, _remote_home
 from jarvislabs.exceptions import JarvislabsError, SSHError
@@ -656,6 +656,8 @@ def _tail_remote_log(
 
 
 def _print_run_followups(run_id: str, *, include_list: bool = False) -> None:
+    if state.json_output:
+        return
     render.info(f"Run ID: {run_id}")
     render.console.print(f"  [dim]Logs[/dim]    [bold cyan]jl run logs {run_id} --follow[/bold cyan]")
     render.console.print(f"  [dim]Status[/dim]  [bold magenta]jl run status {run_id}[/bold magenta]")
@@ -879,8 +881,11 @@ def run_start(
     destroy: bool = typer.Option(False, "--destroy", help="Destroy a fresh instance after the run completes."),
     keep: bool = typer.Option(False, "--keep", help="Leave a fresh instance running after the run completes."),
     follow: bool = typer.Option(True, "--follow/--no-follow", help="Stream logs after starting the run."),
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Start a managed run."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
     target, extra_args = _parse_run_inputs(list(ctx.args))
     requirements_path = _resolve_local_input(requirements, label="Requirements file")
     setup_file_path = _resolve_local_input(setup_file, label="Setup file")
@@ -978,8 +983,10 @@ def run_start(
 def run_list(
     refresh: bool = typer.Option(False, "--refresh", help="Refresh live status for each run. Can be slow."),
     machine: int | None = typer.Option(None, "--machine", "-m", help="Filter by instance ID."),
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """List locally tracked managed runs."""
+    cli_options.apply_command_options(json_output=json_output)
     records = _iter_local_runs()
     if machine is not None:
         records = [r for r in records if r.machine_id == machine]
@@ -1021,8 +1028,10 @@ def run_list(
 @run_app.command("status")
 def run_status(
     run_id: str = typer.Argument(..., help="Run ID."),
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Show the current status of a managed run."""
+    cli_options.apply_command_options(json_output=json_output)
     record = _load_local_run(run_id)
     snapshot = _get_run_snapshot(record)
 
@@ -1049,8 +1058,10 @@ def run_logs(
     run_id: str = typer.Argument(..., help="Run ID."),
     follow: bool = typer.Option(False, "--follow", "-f", help="Follow logs in real time."),
     tail: int | None = typer.Option(None, "--tail", "-n", min=1, help="Show only the last N lines."),
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Show logs for a managed run."""
+    cli_options.apply_command_options(json_output=json_output)
     if state.json_output and follow:
         render.die("--json is not supported with --follow for jl run logs.")
 
@@ -1093,8 +1104,10 @@ def run_logs(
 @run_app.command("stop")
 def run_stop(
     run_id: str = typer.Argument(..., help="Run ID."),
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Stop a managed run by sending TERM to its tracked process."""
+    cli_options.apply_command_options(json_output=json_output)
     record = _load_local_run(run_id)
     snapshot = _get_run_snapshot(record)
 

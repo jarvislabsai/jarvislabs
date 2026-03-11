@@ -1,14 +1,8 @@
-"""Root Typer app — entry point for the `jl` CLI.
-
-Global flags (--json, --yes, --token) are handled here via callback.
-Subcommands are registered from commands.py and instance.py.
-"""
+"""Root Typer app — entry point for the `jl` CLI."""
 
 from __future__ import annotations
 
 import typer
-
-from jarvislabs.cli import state
 
 app = typer.Typer(
     name="jl",
@@ -38,9 +32,6 @@ app = typer.Typer(
 @app.callback(invoke_without_command=True)
 def _global_flags(
     ctx: typer.Context,
-    json_output: bool = typer.Option(False, "--json", help="Output as JSON."),
-    yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompts."),
-    token: str | None = typer.Option(None, "--token", envvar="JL_API_KEY", metavar="API_KEY", help="API key override."),
     version: bool = typer.Option(False, "--version", help="Show version and exit."),
 ) -> None:
     if version:
@@ -48,10 +39,6 @@ def _global_flags(
 
         typer.echo(f"jl {pkg_version('jarvislabs')}")
         raise typer.Exit()
-
-    state.json_output = json_output
-    state.yes = yes
-    state.token = token
 
     # If no subcommand was given (and --version wasn't handled above), show help
     if ctx.invoked_subcommand is None:
@@ -66,7 +53,7 @@ def get_client():
     from jarvislabs.exceptions import JarvislabsError
 
     try:
-        return Client(api_key=state.token)
+        return Client()
     except JarvislabsError as e:
         die(str(e))
 
