@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+from unittest.mock import MagicMock
+
 import pytest
 import typer
 
@@ -22,6 +25,7 @@ def test_instance_create_prompt_includes_storage_and_core_fields(monkeypatch):
             storage=60,
             name="train-job",
             num_gpus=2,
+            region=None,
             script_id=None,
             script_args="",
             fs_id=None,
@@ -46,6 +50,7 @@ def test_instance_create_prompt_lists_script_fields_when_provided(monkeypatch):
             storage=60,
             name="train-job",
             num_gpus=2,
+            region=None,
             script_id="11",
             script_args="--foo bar",
             fs_id=7,
@@ -55,6 +60,58 @@ def test_instance_create_prompt_lists_script_fields_when_provided(monkeypatch):
         captured["msg"]
         == "Create instance (gpu=2x RTX5000, template=pytorch, storage=60GB, name='train-job', script_id=11, script_args='--foo bar', fs_id=7)?"
     )
+
+
+def test_instance_create_prompt_includes_region_when_provided(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_confirm(msg: str, *, skip: bool = False) -> bool:
+        captured["msg"] = msg
+        return False
+
+    monkeypatch.setattr(instance.render, "confirm", fake_confirm)
+
+    with pytest.raises(typer.Exit):
+        instance.instance_create(
+            gpu="RTX5000",
+            template="pytorch",
+            storage=60,
+            name="train-job",
+            num_gpus=2,
+            region="india-noida-01",
+            script_id=None,
+            script_args="",
+            fs_id=None,
+        )
+
+    assert (
+        captured["msg"]
+        == "Create instance (gpu=2x RTX5000, template=pytorch, storage=60GB, name='train-job', region=india-noida-01)?"
+    )
+
+
+def test_instance_create_passes_region_to_client(monkeypatch):
+    mock_client = MagicMock()
+    mock_client.instances.create.return_value = MagicMock(machine_id=123)
+    monkeypatch.setattr(instance, "get_client", lambda: mock_client)
+    monkeypatch.setattr(instance.render, "confirm", lambda *args, **kwargs: True)
+    monkeypatch.setattr(instance.render, "spinner", lambda *args, **kwargs: nullcontext())
+    monkeypatch.setattr(instance.render, "success", lambda *args, **kwargs: None)
+    monkeypatch.setattr(instance.render, "instance_detail", lambda *args, **kwargs: None)
+
+    instance.instance_create(
+        gpu="RTX5000",
+        template="pytorch",
+        storage=60,
+        name="train-job",
+        num_gpus=2,
+        region="IN2",
+        script_id=None,
+        script_args="",
+        fs_id=None,
+    )
+
+    assert mock_client.instances.create.call_args.kwargs["region"] == "IN2"
 
 
 def test_instance_resume_prompt_defaults_to_current_configuration(monkeypatch):

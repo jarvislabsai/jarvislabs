@@ -11,6 +11,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.theme import Theme
 
+from jarvislabs.constants import REGION_DISPLAY_CODES
+
 TABLE_BOX = box.ROUNDED
 HEADER_STYLE = "bold"
 TITLE_STYLE = "bold"
@@ -103,6 +105,7 @@ def instances_table(instances: list, currency: str = "USD") -> None:
     table.add_column("GPU", style="bold", no_wrap=True)
     table.add_column("GPUs", justify="right")
     table.add_column("Storage", justify="right")
+    table.add_column("Region", no_wrap=True)
     table.add_column("Cost", justify="right")
     table.add_column("Template")
 
@@ -115,6 +118,7 @@ def instances_table(instances: list, currency: str = "USD") -> None:
             inst.gpu_type or "—",
             str(inst.num_gpus or "—"),
             f"{inst.storage_gb}GB" if inst.storage_gb else "—",
+            _region_label(inst.region),
             _cost_cell(inst, sym),
             inst.template,
         )
@@ -142,6 +146,7 @@ def instance_detail(inst, currency: str = "USD") -> None:
         ("GPU", f"[bold]{inst.num_gpus or 1}x {inst.gpu_type or '—'}[/bold]"),
         ("Template", inst.template),
         ("Storage", f"{inst.storage_gb}GB" if inst.storage_gb else "—"),
+        ("Region", _region_label(inst.region)),
         (cost_label, f"[green]{sym}{inst.cost:.2f}[/green]"),
         ("SSH", f"[cyan]{inst.ssh_command}[/cyan]" if inst.ssh_command else "—"),
         ("URL", url_value),
@@ -225,19 +230,13 @@ def gpu_table(gpus: list, currency: str = "USD") -> None:
 
     sym = "₹" if currency == "INR" else "$"
 
-    # Deduplicate: prefer entry with availability > 0, else first seen
-    seen: dict[str, object] = {}
-    for gpu in gpus:
-        prev = seen.get(gpu.gpu_type)
-        if prev is None or (prev.num_free_devices <= 0 and gpu.num_free_devices > 0):
-            seen[gpu.gpu_type] = gpu
-
-    available = [g for g in seen.values() if g.num_free_devices > 0]
-    unavailable = [g for g in seen.values() if g.num_free_devices <= 0]
+    available = [gpu for gpu in gpus if gpu.num_free_devices > 0]
+    unavailable = [gpu for gpu in gpus if gpu.num_free_devices <= 0]
 
     table = _table()
     table.add_column("", no_wrap=True)
     table.add_column("GPU", no_wrap=True)
+    table.add_column("Region", no_wrap=True)
     table.add_column("VRAM", justify="right")
     table.add_column("RAM", justify="right")
     table.add_column("CPUs", justify="right")
@@ -247,6 +246,7 @@ def gpu_table(gpus: list, currency: str = "USD") -> None:
         table.add_row(
             "[green]●[/green]",
             f"[bold]{gpu.gpu_type}[/bold]",
+            _region_label(gpu.region),
             f"{gpu.vram}GB" if gpu.vram else "—",
             f"{gpu.ram_per_gpu}GB" if gpu.ram_per_gpu else "—",
             str(gpu.cpus_per_gpu) if gpu.cpus_per_gpu else "—",
@@ -257,6 +257,7 @@ def gpu_table(gpus: list, currency: str = "USD") -> None:
         table.add_row(
             "[dim]○[/dim]",
             f"[dim]{gpu.gpu_type}[/dim]",
+            f"[dim]{_region_label(gpu.region)}[/dim]",
             f"[dim]{gpu.vram}GB[/dim]" if gpu.vram else "[dim]—[/dim]",
             f"[dim]{gpu.ram_per_gpu}GB[/dim]" if gpu.ram_per_gpu else "[dim]—[/dim]",
             f"[dim]{gpu.cpus_per_gpu}[/dim]" if gpu.cpus_per_gpu else "[dim]—[/dim]",
@@ -324,6 +325,12 @@ def _cost_cell(inst, sym: str) -> str:
     if inst.cost <= 0:
         return "[dim]—[/dim]"
     return f"[green]{sym}{inst.cost:.2f}[/green]"
+
+
+def _region_label(region: str | None) -> str:
+    if not region:
+        return "—"
+    return REGION_DISPLAY_CODES.get(region, region)
 
 
 def _status_style(status: str) -> str:

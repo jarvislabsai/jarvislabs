@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
+import click
 import pytest
 from typer.testing import CliRunner
 
-from jarvislabs.cli import run, state
+from jarvislabs.cli import render, run, state
 from jarvislabs.cli.app import app
 
 runner = CliRunner()
@@ -54,6 +57,113 @@ def test_run_start_requires_existing_instance_for_now(monkeypatch):
         captured["message"]
         == "Use --on <instance_id> to run on an existing instance, or --gpu <type> to create a fresh one."
     )
+
+
+def test_run_start_prompt_includes_region_when_provided(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_confirm(msg: str, *, skip: bool = False) -> bool:
+        captured["msg"] = msg
+        return False
+
+    monkeypatch.setattr(run.render, "confirm", fake_confirm)
+
+    with pytest.raises(click.exceptions.Exit):
+        run.run_start(
+            SimpleNamespace(args=["train.py"]),
+            on=None,
+            gpu="RTX5000",
+            region="IN2",
+            script=None,
+            template="pytorch",
+            storage=40,
+            name="jl-run",
+            num_gpus=1,
+            setup=None,
+            requirements=None,
+            setup_file=None,
+            pause=False,
+            destroy=False,
+            keep=True,
+            follow=True,
+        )
+
+    assert (
+        captured["msg"]
+        == "Create 1x RTX5000 instance for jl run (template=pytorch, storage=40GB, name='jl-run', region=IN2)?"
+    )
+
+
+def test_run_start_passes_region_to_client(monkeypatch):
+    mock_client = MagicMock()
+    mock_client.instances.create.return_value = MagicMock(machine_id=321)
+    monkeypatch.setattr(run, "get_client", lambda: mock_client)
+    monkeypatch.setattr(run.render, "confirm", lambda *args, **kwargs: True)
+    monkeypatch.setattr(run.render, "spinner", lambda *args, **kwargs: nullcontext())
+    monkeypatch.setattr(run.render, "success", lambda *args, **kwargs: None)
+    monkeypatch.setattr(run.render, "warning", lambda *args, **kwargs: None)
+    monkeypatch.setattr(run.render, "info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(run, "_start_managed_run", lambda *args, **kwargs: ("r_test", None))
+
+    run.run_start(
+        SimpleNamespace(args=["train.py"]),
+        on=None,
+        gpu="RTX5000",
+        region="EU1",
+        script=None,
+        template="pytorch",
+        storage=40,
+        name="jl-run",
+        num_gpus=1,
+        setup=None,
+        requirements=None,
+        setup_file=None,
+        pause=False,
+        destroy=False,
+        keep=True,
+        follow=False,
+    )
+
+    assert mock_client.instances.create.call_args.kwargs["region"] == "EU1"
+
+
+def test_region_label_uses_ui_consistent_codes():
+    assert render._region_label("india-01") == "IN1"
+    assert render._region_label("india-noida-01") == "IN2"
+    assert render._region_label("europe-01") == "EU1"
+    assert render._region_label("future-01") == "future-01"
+
+
+def test_run_start_rejects_region_with_on(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_die(message: str, code: int = 1) -> None:
+        captured["message"] = message
+        raise SystemExit(code)
+
+    monkeypatch.setattr(run.render, "die", fake_die)
+
+    with pytest.raises(SystemExit):
+        run.run_start(
+            SimpleNamespace(args=["train.py"]),
+            on=123,
+            gpu=None,
+            region="IN2",
+            script=None,
+            template="pytorch",
+            storage=40,
+            name="jl-run",
+            num_gpus=1,
+            setup=None,
+            requirements=None,
+            setup_file=None,
+            pause=False,
+            destroy=False,
+            keep=False,
+            follow=True,
+        )
+
+    assert captured["message"] == "--region is only supported with --gpu for fresh instances."
 
 
 def test_build_run_spec_for_python_file(monkeypatch, tmp_path):
