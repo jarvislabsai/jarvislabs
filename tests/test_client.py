@@ -14,10 +14,12 @@ from jarvislabs.client import (
     _apply_storage_constraints,
     _fetch_instances,
     _get_instance,
+    _normalize_region_input,
     _normalize_success,
     _poll_until_running,
     _region_url,
     _resolve_region,
+    _validate_create_region,
     _validate_europe,
 )
 from jarvislabs.constants import (
@@ -107,6 +109,25 @@ _DUMMY_KEY = SSHKey(ssh_key="ssh-ed25519 AAA", key_name="test", key_id="k1")
 )
 def test_normalize_success(data, expected):
     assert _normalize_success(data) is expected
+
+
+@pytest.mark.parametrize(
+    ("region", "expected"),
+    [
+        (None, None),
+        ("IN1", "india-01"),
+        ("IN2", "india-noida-01"),
+        ("EU1", "europe-01"),
+    ],
+)
+def test_normalize_region_input(region, expected):
+    assert _normalize_region_input(region) == expected
+
+
+@pytest.mark.parametrize("region", ["XX9", "in2", "india-noida-01"])
+def test_normalize_region_input_rejects_unknown(region):
+    with pytest.raises(ValidationError, match="Unknown region"):
+        _normalize_region_input(region)
 
 
 # ── _validate_europe ─────────────────────────────────────────────────────────
@@ -500,6 +521,60 @@ class TestCreatePayload:
         assert payload["script_args"] == "--flag"
         assert payload["fs_id"] == 7
         assert payload["arguments"] == "--arg"
+
+    @patch("jarvislabs.client._check_gpu_in_region")
+    @patch("jarvislabs.client._get_instance")
+    @patch("jarvislabs.client._poll_until_running")
+    @patch("jarvislabs.client._resolve_region")
+    def test_explicit_region_code_is_normalized(self, _resolve, _poll, mock_get, mock_check_region, mock_transport):
+        mock_transport.request.return_value = {"machine_id": 1}
+        mock_get.return_value = MagicMock(machine_id=1)
+
+        _make_instances(mock_transport).create(gpu_type="RTX5000", region="IN2")
+
+        _resolve.assert_not_called()
+        mock_check_region.assert_called_once_with(mock_transport, "RTX5000", 1, "india-noida-01")
+        assert mock_transport.request.call_args.kwargs["json"]["region"] == "india-noida-01"
+        assert mock_transport.request.call_args.kwargs["base_url"] == REGION_URLS["india-noida-01"]
+
+    def test_vm_region_must_be_supported(self, mock_transport):
+        with pytest.raises(ValidationError, match="VM instances are only available"):
+            _validate_create_region(
+                mock_transport,
+                region="india-01",
+                template="vm",
+                gpu_type="L4",
+                num_gpus=1,
+            )
+
+    @patch("jarvislabs.client._check_gpu_in_region")
+    def test_create_region_uses_generic_unavailable_message(self, mock_check, mock_transport):
+        mock_check.side_effect = ValidationError("RTX5000 is not available in europe-01.")
+
+        with pytest.raises(ValidationError, match="RTX5000 is not available in europe-01\\."):
+            _validate_create_region(
+                mock_transport,
+                region="europe-01",
+                template="pytorch",
+                gpu_type="RTX5000",
+                num_gpus=1,
+            )
+
+    def test_resume_region_unavailable_message_mentions_paused_instances(self, mock_transport):
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "RTX5000", "region": "india-01", "num_free_devices": 8},
+            ]
+        }
+
+        with patch("jarvislabs.client._get_instance") as mock_get:
+            existing = _mock_existing_instance()
+            existing.gpu_type = "L4"
+            existing.region = "india-noida-01"
+            mock_get.return_value = existing
+
+            with pytest.raises(ValidationError, match="Paused instances can only resume in their original region"):
+                _make_instances(mock_transport).resume(10, gpu_type="RTX5000")
 
     @patch("jarvislabs.client._resolve_region", return_value="india-01")
     def test_invalid_fs_id_raises(self, _region, mock_transport):

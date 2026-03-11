@@ -23,6 +23,8 @@ from jarvislabs.constants import (
     FETCH_RETRY_INTERVAL_S,
     INDIA_NOIDA_REGION,
     POLL_INTERVAL_S,
+    REGION_CODE_TO_REGION,
+    REGION_DISPLAY_CODES,
     REGION_URLS,
     VM_MIN_STORAGE_GB,
     VM_SUPPORTED_REGIONS,
@@ -243,14 +245,18 @@ class Instances:
         script_args: str = "",
         fs_id: int | None = None,
         arguments: str = "",
+        region: str | None = None,
     ) -> Instance:
         if not gpu_type:
             raise ValidationError("gpu_type is required (e.g. 'A100', 'H100', 'RTX5000')")
         if name and len(name) > 40:
             raise ValidationError("Instance name must be 40 characters or fewer")
 
-        # Region is intentionally not user-facing. SDK auto-routes based on server meta.
-        region = _resolve_region(self._t, gpu_type=gpu_type, num_gpus=num_gpus, template=template)
+        region = _normalize_region_input(region)
+        if region is None:
+            region = _resolve_region(self._t, gpu_type=gpu_type, num_gpus=num_gpus, template=template)
+        else:
+            _validate_create_region(self._t, region=region, template=template, gpu_type=gpu_type, num_gpus=num_gpus)
 
         storage = _apply_storage_constraints(
             template=template,
@@ -343,7 +349,7 @@ class Instances:
 
         # Warn early if the requested GPU isn't available in this region
         if gpu_type and gpu_type != instance.gpu_type:
-            _check_gpu_in_region(self._t, gpu_type, num_gpus or instance.num_gpus or 1, region)
+            _check_gpu_in_region(self._t, gpu_type, num_gpus or instance.num_gpus or 1, region, resume_only=True)
         if is_vm and not self._ssh_keys.list():
             raise ValidationError(
                 "VM instances require at least one SSH key. Add one with: jl ssh-key add <pubkey-file> --name 'my-key'"
@@ -558,8 +564,15 @@ def _validate_europe(gpu_type: str, num_gpus: int, storage_gb: int) -> None:
         raise ValidationError(f"europe-01 requires at least {EUROPE_MIN_STORAGE_GB}GB storage")
 
 
-def _check_gpu_in_region(transport: Transport, gpu_type: str, num_gpus: int, region: str) -> None:
-    """Raise early if the requested GPU isn't available for the paused instance."""
+def _check_gpu_in_region(
+    transport: Transport,
+    gpu_type: str,
+    num_gpus: int,
+    region: str,
+    *,
+    resume_only: bool = False,
+) -> None:
+    """Raise early if the requested GPU isn't available in the target region."""
     try:
         resp = transport.request("GET", "misc/server_meta")
         meta = ServerMetaResponse(**resp)
@@ -571,13 +584,44 @@ def _check_gpu_in_region(transport: Transport, gpu_type: str, num_gpus: int, reg
 
     in_region = [s for s in meta.server_meta if s.gpu_type == gpu_type and s.region == region]
     if not in_region:
-        raise ValidationError(
-            f"{gpu_type} is not available in {region}. Paused instances can only resume in their original region."
-        )
+        if resume_only:
+            raise ValidationError(
+                f"{gpu_type} is not available in {region}. Paused instances can only resume in their original region."
+            )
+        raise ValidationError(f"{gpu_type} is not available in {region}.")
 
     free = any(s.num_free_devices >= num_gpus for s in in_region)
     if not free:
         raise ValidationError(f"No free {gpu_type} GPUs in {region} right now. Try again later.")
+
+
+def _validate_create_region(
+    transport: Transport,
+    *,
+    region: str,
+    template: str,
+    gpu_type: str,
+    num_gpus: int,
+) -> None:
+    if template == "vm" and region not in VM_SUPPORTED_REGIONS:
+        valid_regions = ", ".join(sorted(VM_SUPPORTED_REGIONS))
+        raise ValidationError(f"VM instances are only available in: {valid_regions}")
+    _check_gpu_in_region(transport, gpu_type, num_gpus, region)
+
+
+def _normalize_region_input(region: str | None) -> str | None:
+    if region is None:
+        return None
+
+    normalized = region.strip()
+    if not normalized:
+        return None
+
+    if normalized in REGION_DISPLAY_CODES.values():
+        return REGION_CODE_TO_REGION[normalized.lower()]
+
+    valid_codes = ", ".join(sorted(REGION_DISPLAY_CODES.values()))
+    raise ValidationError(f"Unknown region {region!r}. Use one of: {valid_codes}")
 
 
 def _region_url(region: str | None) -> str:

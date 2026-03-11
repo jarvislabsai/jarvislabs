@@ -15,6 +15,14 @@ REGION_URLS: dict[str, str] = {
     "europe-01": "https://backendeu.jarvislabs.net/",
 }
 
+REGION_DISPLAY_CODES: dict[str, str] = {
+    "india-01": "IN1",
+    "india-noida-01": "IN2",
+    "europe-01": "EU1",
+}
+
+REGION_CODE_TO_REGION: dict[str, str] = {code.lower(): region for region, code in REGION_DISPLAY_CODES.items()}
+
 # ── Europe region constraints ────────────────────────────────────────────────
 
 EUROPE_REGION = "europe-01"

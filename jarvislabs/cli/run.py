@@ -852,6 +852,9 @@ def run_start(
     ctx: typer.Context,
     on: int | None = typer.Option(None, "--on", help="Run on an existing instance."),
     gpu: str | None = typer.Option(None, "--gpu", "-g", help="Create a fresh instance with this GPU."),
+    region: str | None = typer.Option(
+        None, "--region", help="Optional region pin for fresh instances (e.g. IN1, IN2, EU1)."
+    ),
     script: str | None = typer.Option(
         None,
         "--script",
@@ -888,6 +891,8 @@ def run_start(
         render.die("Use either --on <instance_id> or --gpu <type>, not both.")
 
     if on is not None:
+        if region is not None:
+            render.die("--region is only supported with --gpu for fresh instances.")
         if lifecycle is not None:
             render.die("Lifecycle flags are only for fresh instances. Do not use --pause/--destroy/--keep with --on.")
         _, exit_code = _start_managed_run(
@@ -918,7 +923,10 @@ def run_start(
     if not follow and lifecycle != "keep":
         render.die("--no-follow is only supported with --keep for fresh runs right now.")
 
-    details = f"Create {num_gpus}x {gpu} instance for jl run (template={template}, storage={storage}GB, name={name!r})?"
+    detail_parts = [f"template={template}", f"storage={storage}GB", f"name={name!r}"]
+    if region:
+        detail_parts.append(f"region={region}")
+    details = f"Create {num_gpus}x {gpu} instance for jl run ({', '.join(detail_parts)})?"
     if not render.confirm(details, skip=state.yes):
         raise typer.Exit()
 
@@ -930,6 +938,7 @@ def run_start(
             template=template,
             storage=storage,
             name=name,
+            region=region,
         )
 
     render.success(f"Fresh instance {inst.machine_id} is ready.")

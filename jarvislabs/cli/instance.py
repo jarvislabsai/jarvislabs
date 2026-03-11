@@ -116,12 +116,15 @@ def instance_create(
     storage: int = typer.Option(40, "--storage", "-s", help="Storage in GB."),
     name: str = typer.Option("Name me", "--name", "-n", help="Instance name."),
     num_gpus: int = typer.Option(1, "--num-gpus", help="Number of GPUs."),
+    region: str | None = typer.Option(None, "--region", help="Optional region pin (e.g. IN1, IN2, EU1)."),
     script_id: str | None = typer.Option(None, "--script-id", help="Startup script ID to run on launch."),
     script_args: str = typer.Option("", "--script-args", help="Arguments passed to startup script."),
     fs_id: int | None = typer.Option(None, "--fs-id", help="Filesystem ID to attach."),
 ) -> None:
     """Create a new GPU instance."""
     details = [f"gpu={num_gpus}x {gpu}", f"template={template}", f"storage={storage}GB", f"name={name!r}"]
+    if region:
+        details.append(f"region={region}")
     if script_id:
         details.append(f"script_id={script_id}")
     if script_args:
@@ -140,6 +143,7 @@ def instance_create(
             template=template,
             storage=storage,
             name=name,
+            region=region,
             script_id=script_id,
             script_args=script_args,
             fs_id=fs_id,
