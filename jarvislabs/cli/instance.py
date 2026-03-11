@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import typer
 
-from jarvislabs.cli import render, state
+from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
 from jarvislabs.exceptions import SSHError, ValidationError
 from jarvislabs.ssh import (
@@ -78,8 +78,11 @@ def _default_download_dest(source: str) -> str:
 
 
 @instance_app.command("list")
-def instance_list() -> None:
+def instance_list(
+    json_output: cli_options.JsonOption = False,
+) -> None:
     """List all instances."""
+    cli_options.apply_command_options(json_output=json_output)
     client = get_client()
     with render.spinner("Fetching instances..."):
         instances = client.instances.list()
@@ -95,8 +98,10 @@ def instance_list() -> None:
 @instance_app.command("get")
 def instance_get(
     machine_id: int = typer.Argument(..., help="Instance ID."),
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Show details of a specific instance."""
+    cli_options.apply_command_options(json_output=json_output)
     client = get_client()
     with render.spinner("Fetching instance..."):
         inst = client.instances.get(machine_id)
@@ -120,8 +125,11 @@ def instance_create(
     script_id: str | None = typer.Option(None, "--script-id", help="Startup script ID to run on launch."),
     script_args: str = typer.Option("", "--script-args", help="Arguments passed to startup script."),
     fs_id: int | None = typer.Option(None, "--fs-id", help="Filesystem ID to attach."),
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Create a new GPU instance."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
     details = [f"gpu={num_gpus}x {gpu}", f"template={template}", f"storage={storage}GB", f"name={name!r}"]
     if region:
         details.append(f"region={region}")
@@ -161,8 +169,11 @@ def instance_create(
 def instance_rename(
     machine_id: int = typer.Argument(..., help="Instance ID to rename."),
     name: str = typer.Option(..., "--name", "-n", help="New instance name."),
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Rename an instance."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
     if not render.confirm(f"Rename instance {machine_id} to {name!r}?", skip=state.yes):
         raise typer.Exit()
 
@@ -180,8 +191,11 @@ def instance_rename(
 @instance_app.command("pause")
 def instance_pause(
     machine_id: int = typer.Argument(..., help="Instance ID to pause."),
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Pause a running instance."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
     client = get_client()
     with render.spinner("Checking instance..."):
         client.instances.get(machine_id)
@@ -209,8 +223,11 @@ def instance_resume(
     script_id: str | None = typer.Option(None, "--script-id", help="Startup script ID to use on resume."),
     script_args: str | None = typer.Option(None, "--script-args", help="Arguments passed to startup script."),
     fs_id: int | None = typer.Option(None, "--fs-id", help="Filesystem ID to attach."),
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Resume a paused instance. Optionally swap GPU, expand storage, or rename."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
     changes: list[str] = []
     if gpu:
         changes.append(f"gpu={gpu}")
@@ -258,8 +275,11 @@ def instance_resume(
 @instance_app.command("destroy")
 def instance_destroy(
     machine_id: int = typer.Argument(..., help="Instance ID to destroy."),
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Permanently destroy an instance."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
     client = get_client()
     with render.spinner("Checking instance..."):
         client.instances.get(machine_id)
@@ -284,8 +304,10 @@ def instance_destroy(
 def instance_ssh(
     machine_id: int = typer.Argument(..., help="Instance ID."),
     print_command: bool = typer.Option(False, "--print-command", "-p", help="Print SSH command instead of connecting."),
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """SSH into a running instance."""
+    cli_options.apply_command_options(json_output=json_output)
     client = get_client()
     with render.spinner("Fetching instance..."):
         inst = client.instances.get(machine_id)
@@ -324,8 +346,10 @@ def instance_ssh(
 def instance_exec(
     ctx: typer.Context,
     machine_id: int = typer.Argument(..., help="Instance ID."),
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Execute a command on a running instance."""
+    cli_options.apply_command_options(json_output=json_output)
     if not ctx.args:
         render.die(f"No command specified. Use -- to separate: jl instance exec {machine_id} -- <command>")
 
@@ -364,8 +388,10 @@ def instance_upload(
         ..., exists=True, readable=True, resolve_path=True, help="Local file or directory to upload."
     ),
     dest: str | None = typer.Argument(None, help="Remote destination path. Defaults to remote home directory."),
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Upload a local file or directory to a running instance."""
+    cli_options.apply_command_options(json_output=json_output)
     inst, ssh_parts = _resolve_ssh(machine_id)
     remote_dest = dest or _default_upload_dest(source, inst.ssh_command)
     recursive = source.is_dir()
@@ -416,8 +442,10 @@ def instance_download(
     source: str = typer.Argument(..., help="Remote file or directory to download."),
     dest: Path | None = typer.Argument(None, resolve_path=True, help="Local destination path. Defaults to ./<name>."),
     recursive: bool = typer.Option(False, "--recursive", "-r", help="Download directories recursively."),
+    json_output: cli_options.JsonOption = False,
 ) -> None:
     """Download a remote file or directory from a running instance."""
+    cli_options.apply_command_options(json_output=json_output)
     inst, _ = _resolve_ssh(machine_id)
 
     try:
