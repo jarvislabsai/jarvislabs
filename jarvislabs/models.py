@@ -6,6 +6,7 @@ for outbound data. Validation lives as simple if-checks in the client layer.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
@@ -147,7 +148,7 @@ class Instance(BaseModel):
         if v is None:
             return None
         if isinstance(v, str):
-            v = v.strip()
+            v = re.sub(r"[a-zA-Z]+$", "", v.strip())
             return int(v) if v else None
         return int(v)
 
