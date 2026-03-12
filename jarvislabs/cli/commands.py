@@ -10,55 +10,6 @@ from jarvislabs.config import load_config, save_config
 
 
 @app.command(rich_help_panel="Account")
-def login(
-    token: str = typer.Option(None, "--token", "-t", help="API token (prompted if not given)."),
-    yes: cli_options.YesOption = False,
-    json_output: cli_options.JsonOption = False,
-) -> None:
-    """Save API token to config file."""
-    cli_options.apply_command_options(json_output=json_output, yes=yes)
-    config = load_config()
-    existing = config.get("auth", {}).get("token")
-
-    if existing and not token:
-        try:
-            from jarvislabs.client import Client
-
-            current = Client(api_key=existing).account.user_info()
-            msg = f"Already logged in as {current.name}. Re-authenticate?"
-        except Exception:
-            msg = "Already logged in. Re-authenticate?"
-        if not render.confirm(msg, skip=state.yes):
-            raise typer.Exit()
-
-    if not token:
-        render.info("Generate your API key at: [magenta]https://jarvislabs.ai/settings/api-keys[/magenta]")
-        token = render.console.input("[yellow]?[/yellow] API token: ", password=True).strip()
-    if not token:
-        render.die("No token provided.")
-
-    try:
-        from jarvislabs.client import Client
-        from jarvislabs.exceptions import JarvislabsError
-
-        with render.spinner("Authenticating..."):
-            client = Client(api_key=token)
-            info = client.account.user_info()
-    except JarvislabsError as e:
-        render.die(f"Invalid token: {e}")
-
-    first_login = not existing
-    config.setdefault("auth", {})["token"] = token
-    save_config(config)
-    if state.json_output:
-        render.print_json({"success": True, "user_id": info.user_id, "name": info.name})
-        return
-    render.success(f"Logged in as {info.name} ({info.user_id})")
-    if first_login:
-        render.info("Tip: Run `jl --install-completion` to enable tab completion")
-
-
-@app.command(rich_help_panel="Account")
 def logout(
     json_output: cli_options.JsonOption = False,
 ) -> None:

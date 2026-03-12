@@ -25,7 +25,7 @@ from jarvislabs.ssh import build_rsync_upload_command, build_scp_command, harden
 if TYPE_CHECKING:
     from jarvislabs.models import Instance
 
-_REMOTE_RUNS_SUFFIX = ".jl/runs"
+_REMOTE_RUNS_SUFFIX = "jl-runs"
 _LOCAL_RUNS_ROOT = Path.home() / ".jl" / "runs"
 _DEFAULT_FOLLOW_TAIL_LINES = 20
 
@@ -476,7 +476,12 @@ export PYTHONUNBUFFERED=1
 child_pid=""
 cleanup() {{
   if [ -n "$child_pid" ]; then
-    kill "$child_pid" 2>/dev/null || true
+    pgid=$(ps -o pgid= -p "$child_pid" 2>/dev/null | tr -d ' ')
+    if [ -n "$pgid" ] && [ "$pgid" != "0" ]; then
+      kill -- -"$pgid" 2>/dev/null || true
+    else
+      kill "$child_pid" 2>/dev/null || true
+    fi
   fi
 }}
 
@@ -673,7 +678,13 @@ def _stop_remote_run(ssh_parts: list[str], pid_file: str, exit_code_file: str) -
         f"if [ ! -f {shlex.quote(pid_file)} ]; then echo missing-pid; exit 3; fi; "
         f"pid=$(cat {shlex.quote(pid_file)}); "
         'if [ -z "$pid" ]; then echo missing-pid; exit 3; fi; '
-        'if kill -0 "$pid" 2>/dev/null; then kill "$pid" && echo stopped && exit 0; fi; '
+        'if kill -0 "$pid" 2>/dev/null; then '
+        'pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d " "); '
+        'if [ -n "$pgid" ] && [ "$pgid" != "0" ]; then kill -- -"$pgid" 2>/dev/null; '
+        'else kill "$pid" 2>/dev/null; fi; '
+        "sleep 1; "
+        'if kill -0 "$pid" 2>/dev/null; then kill -9 -- -"$pgid" 2>/dev/null || kill -9 "$pid" 2>/dev/null; fi; '
+        "echo stopped; exit 0; fi; "
         f"if [ -f {shlex.quote(exit_code_file)} ]; then echo finished; exit 0; fi; "
         "echo not-running; exit 4"
     )
@@ -988,13 +999,25 @@ def run_start(
 def run_list(
     refresh: bool = typer.Option(False, "--refresh", help="Refresh live status for each run. Can be slow."),
     machine: int | None = typer.Option(None, "--machine", "-m", help="Filter by instance ID."),
+    limit: int | None = typer.Option(None, "--limit", "-l", help="Show only the N most recent runs."),
+    status_filter: str | None = typer.Option(
+        None, "--status", "-s", help="Filter by state (running, succeeded, failed). Implies --refresh."
+    ),
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """List locally tracked managed runs."""
     cli_options.apply_command_options(json_output=json_output)
+    if status_filter is not None:
+        refresh = True
+
     records = _iter_local_runs()
     if machine is not None:
         records = [r for r in records if r.machine_id == machine]
+    if status_filter is not None:
+        records = [r for r in records if _get_run_snapshot(r).state == status_filter]
+    if limit is not None:
+        records = records[:limit]
+
     if state.json_output:
         payload = []
         for record in records:
@@ -1097,13 +1120,35 @@ def run_logs(
             )
         _print_run_followups(record.run_id, include_list=True)
 
-    try:
-        exit_code = _tail_remote_log(ssh_parts, record.remote_log, follow=follow, tail=tail)
-    except KeyboardInterrupt:
-        render.info(f"Stopped log streaming for run {record.run_id}.")
-        _print_run_followups(record.run_id, include_list=True)
-        return
-    raise SystemExit(exit_code)
+        try:
+            exit_code = _tail_remote_log(ssh_parts, record.remote_log, follow=True, tail=tail)
+        except KeyboardInterrupt:
+            render.info(f"Stopped log streaming for run {record.run_id}.")
+            _print_run_followups(record.run_id, include_list=True)
+            return
+        raise SystemExit(exit_code)
+
+    # Non-follow mode: show header with run state, then logs, then footer
+    run_exit_code = _fetch_exit_code_path(ssh_parts, record.remote_exit_code)
+    if run_exit_code is None:
+        run_state = "running"
+        state_label = "running"
+    elif run_exit_code == 0:
+        run_state = "succeeded"
+        state_label = "succeeded (exit 0)"
+    else:
+        run_state = "failed"
+        state_label = f"failed (exit {run_exit_code})"
+
+    render.console.print(f"[dim]--- run {record.run_id} | machine {record.machine_id} | {state_label} ---[/dim]")
+    render.console.print()
+    log_rc = _tail_remote_log(ssh_parts, record.remote_log, follow=False, tail=tail)
+    render.console.print()
+    if run_state == "running":
+        render.console.print(f"[dim]--- still running | log: {record.remote_log} ---[/dim]")
+    else:
+        render.console.print(f"[dim]--- {run_state} | exit code: {run_exit_code} | log: {record.remote_log} ---[/dim]")
+    raise SystemExit(log_rc)
 
 
 @run_app.command("stop")

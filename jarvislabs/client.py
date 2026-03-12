@@ -53,7 +53,7 @@ class Client:
     def __init__(self, api_key: str | None = None) -> None:
         token = resolve_token(api_key)
         if not token:
-            raise AuthError("No API key found. Set JL_API_KEY or run: jl login")
+            raise AuthError("No API key found. Set JL_API_KEY or run: jl setup")
         self._transport = Transport(token)
         self.account = Account(self._transport)
         self.ssh_keys = SSHKeys(self._transport)

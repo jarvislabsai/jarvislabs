@@ -330,13 +330,13 @@ def test_write_remote_text_streams_content_over_ssh(monkeypatch):
 
     monkeypatch.setattr(run.subprocess, "run", fake_run)
 
-    status = run._write_remote_text(["ssh", "root@example.com"], "/home/.jl/runs/r1/meta.json", '{"ok": true}\n')
+    status = run._write_remote_text(["ssh", "root@example.com"], "/home/jl-runs/r1/meta.json", '{"ok": true}\n')
 
     assert status == 0
     assert captured["parts"] == [
         "ssh",
         "root@example.com",
-        run._build_remote_command("mkdir -p /home/.jl/runs/r1 && cat > /home/.jl/runs/r1/meta.json"),
+        run._build_remote_command("mkdir -p /home/jl-runs/r1 && cat > /home/jl-runs/r1/meta.json"),
     ]
     assert captured["input"] == '{"ok": true}\n'
     assert captured["text"] is True
@@ -433,7 +433,7 @@ def test_start_managed_run_for_file_launches_detached_and_saves_local_record(mon
     assert record.run_id == "r_test123"
     assert record.machine_id == 123
     assert record.remote_target == "/home/train/train.py"
-    assert record.remote_log == "/home/.jl/runs/r_test123/output.log"
+    assert record.remote_log == "/home/jl-runs/r_test123/output.log"
     assert record.instance_origin == "existing"
     assert record.lifecycle_policy == "none"
     assert captured["success"] == "Started run r_test123 on instance 123 (launcher pid 4242)."
@@ -474,8 +474,8 @@ def test_start_managed_run_json_mode_returns_summary(monkeypatch, tmp_path):
         "run_id": "r_json",
         "machine_id": 123,
         "launcher_pid": 4242,
-        "remote_log": "/home/.jl/runs/r_json/output.log",
-        "remote_exit_code": "/home/.jl/runs/r_json/exit_code",
+        "remote_log": "/home/jl-runs/r_json/output.log",
+        "remote_exit_code": "/home/jl-runs/r_json/exit_code",
         "target_kind": "directory",
         "remote_target": "/home/project",
         "command": (
@@ -501,9 +501,9 @@ def test_iter_local_runs_sorts_newest_first(monkeypatch, tmp_path):
         local_target="/tmp/old.py",
         remote_target="/home/old/old.py",
         working_dir="/home/old",
-        remote_log="/home/.jl/runs/r_old/output.log",
-        remote_pid="/home/.jl/runs/r_old/pid",
-        remote_exit_code="/home/.jl/runs/r_old/exit_code",
+        remote_log="/home/jl-runs/r_old/output.log",
+        remote_pid="/home/jl-runs/r_old/pid",
+        remote_exit_code="/home/jl-runs/r_old/exit_code",
         launch_command="python3 old.py",
         started_at="2026-03-08T10:00:00+00:00",
     )
@@ -514,9 +514,9 @@ def test_iter_local_runs_sorts_newest_first(monkeypatch, tmp_path):
         local_target="/tmp/proj",
         remote_target="/home/proj",
         working_dir="/home/proj",
-        remote_log="/home/.jl/runs/r_new/output.log",
-        remote_pid="/home/.jl/runs/r_new/pid",
-        remote_exit_code="/home/.jl/runs/r_new/exit_code",
+        remote_log="/home/jl-runs/r_new/output.log",
+        remote_pid="/home/jl-runs/r_new/pid",
+        remote_exit_code="/home/jl-runs/r_new/exit_code",
         launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
         instance_origin="fresh",
@@ -538,9 +538,9 @@ def test_get_run_snapshot_reports_running(monkeypatch):
         local_target="/tmp/train.py",
         remote_target="/home/train/train.py",
         working_dir="/home/train",
-        remote_log="/home/.jl/runs/r_run/output.log",
-        remote_pid="/home/.jl/runs/r_run/pid",
-        remote_exit_code="/home/.jl/runs/r_run/exit_code",
+        remote_log="/home/jl-runs/r_run/output.log",
+        remote_pid="/home/jl-runs/r_run/pid",
+        remote_exit_code="/home/jl-runs/r_run/exit_code",
         launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )
@@ -564,9 +564,9 @@ def test_get_run_snapshot_reports_instance_paused(monkeypatch):
         local_target="/tmp/train.py",
         remote_target="/home/train/train.py",
         working_dir="/home/train",
-        remote_log="/home/.jl/runs/r_paused/output.log",
-        remote_pid="/home/.jl/runs/r_paused/pid",
-        remote_exit_code="/home/.jl/runs/r_paused/exit_code",
+        remote_log="/home/jl-runs/r_paused/output.log",
+        remote_pid="/home/jl-runs/r_paused/pid",
+        remote_exit_code="/home/jl-runs/r_paused/exit_code",
         launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )
@@ -587,9 +587,9 @@ def test_run_logs_json_returns_content(monkeypatch):
         local_target="/tmp/train.py",
         remote_target="/home/train/train.py",
         working_dir="/home/train",
-        remote_log="/home/.jl/runs/r_logs/output.log",
-        remote_pid="/home/.jl/runs/r_logs/pid",
-        remote_exit_code="/home/.jl/runs/r_logs/exit_code",
+        remote_log="/home/jl-runs/r_logs/output.log",
+        remote_pid="/home/jl-runs/r_logs/pid",
+        remote_exit_code="/home/jl-runs/r_logs/exit_code",
         launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )
@@ -610,7 +610,7 @@ def test_run_logs_json_returns_content(monkeypatch):
     assert captured["payload"] == {
         "run_id": "r_logs",
         "machine_id": 123,
-        "remote_log": "/home/.jl/runs/r_logs/output.log",
+        "remote_log": "/home/jl-runs/r_logs/output.log",
         "content": "hello\n",
         "run_exit_code": 0,
     }
@@ -624,9 +624,9 @@ def test_run_logs_follow_shows_followups(monkeypatch):
         local_target="/tmp/train.py",
         remote_target="/home/train/train.py",
         working_dir="/home/train",
-        remote_log="/home/.jl/runs/r_logs/output.log",
-        remote_pid="/home/.jl/runs/r_logs/pid",
-        remote_exit_code="/home/.jl/runs/r_logs/exit_code",
+        remote_log="/home/jl-runs/r_logs/output.log",
+        remote_pid="/home/jl-runs/r_logs/pid",
+        remote_exit_code="/home/jl-runs/r_logs/exit_code",
         launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )
@@ -656,9 +656,9 @@ def test_run_list_does_not_refresh_by_default(monkeypatch, tmp_path):
         local_target="/tmp/train.py",
         remote_target="/home/train/train.py",
         working_dir="/home/train",
-        remote_log="/home/.jl/runs/r_saved/output.log",
-        remote_pid="/home/.jl/runs/r_saved/pid",
-        remote_exit_code="/home/.jl/runs/r_saved/exit_code",
+        remote_log="/home/jl-runs/r_saved/output.log",
+        remote_pid="/home/jl-runs/r_saved/pid",
+        remote_exit_code="/home/jl-runs/r_saved/exit_code",
         launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )
@@ -672,7 +672,7 @@ def test_run_list_does_not_refresh_by_default(monkeypatch, tmp_path):
     monkeypatch.setattr(run.render, "stdout_console", SimpleNamespace(print=lambda value: None))
     monkeypatch.setattr(state, "json_output", False)
 
-    run.run_list(refresh=False)
+    run.run_list(refresh=False, limit=None, status_filter=None)
 
 
 def test_ensure_remote_rsync_rejects_missing_local_binary(monkeypatch):
@@ -699,9 +699,9 @@ def test_run_stop_reports_completed_run(monkeypatch):
         local_target="/tmp/train.py",
         remote_target="/home/train/train.py",
         working_dir="/home/train",
-        remote_log="/home/.jl/runs/r_done/output.log",
-        remote_pid="/home/.jl/runs/r_done/pid",
-        remote_exit_code="/home/.jl/runs/r_done/exit_code",
+        remote_log="/home/jl-runs/r_done/output.log",
+        remote_pid="/home/jl-runs/r_done/pid",
+        remote_exit_code="/home/jl-runs/r_done/exit_code",
         launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )
@@ -740,9 +740,9 @@ def test_run_stop_sends_term_to_running_process(monkeypatch):
         local_target="/tmp/train.py",
         remote_target="/home/train/train.py",
         working_dir="/home/train",
-        remote_log="/home/.jl/runs/r_live/output.log",
-        remote_pid="/home/.jl/runs/r_live/pid",
-        remote_exit_code="/home/.jl/runs/r_live/exit_code",
+        remote_log="/home/jl-runs/r_live/output.log",
+        remote_pid="/home/jl-runs/r_live/pid",
+        remote_exit_code="/home/jl-runs/r_live/exit_code",
         launch_command="python3 train.py",
         started_at="2026-03-09T10:00:00+00:00",
     )

@@ -60,7 +60,7 @@ def get_client():
 
 def main() -> None:
     """Entry point for `jl` command (wired via pyproject.toml [project.scripts])."""
-    from jarvislabs.cli import commands, instance, run  # noqa: F401
+    from jarvislabs.cli import commands, instance, run, setup  # noqa: F401
     from jarvislabs.exceptions import JarvislabsError
 
     try:

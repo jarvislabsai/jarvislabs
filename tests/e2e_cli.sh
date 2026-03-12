@@ -35,7 +35,7 @@ Options:
 
 Notes:
   - Uses plain `jl` commands (no `uv run` prefix).
-  - Requires you to be logged in (`jl login`) before running.
+  - Requires you to be logged in (`jl setup`) before running.
 EOF
       exit 0
       ;;
@@ -446,7 +446,7 @@ fi
 if [[ $LAST_RC -ne 0 ]]; then
   echo
   echo "Authentication failed."
-  echo "Run \`jl login\` or set a valid JL_API_KEY, then rerun this script."
+  echo "Run \`jl setup\` or set a valid JL_API_KEY, then rerun this script."
   exit 1
 fi
 run_expect_success "jl --json status" jl --json status
