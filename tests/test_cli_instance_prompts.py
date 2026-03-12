@@ -26,6 +26,7 @@ def test_instance_create_prompt_includes_storage_and_core_fields(monkeypatch):
             name="train-job",
             num_gpus=2,
             region=None,
+            http_ports="",
             script_id=None,
             script_args="",
             fs_id=None,
@@ -51,6 +52,7 @@ def test_instance_create_prompt_lists_script_fields_when_provided(monkeypatch):
             name="train-job",
             num_gpus=2,
             region=None,
+            http_ports="",
             script_id="11",
             script_args="--foo bar",
             fs_id=7,
@@ -79,6 +81,7 @@ def test_instance_create_prompt_includes_region_when_provided(monkeypatch):
             name="train-job",
             num_gpus=2,
             region="india-noida-01",
+            http_ports="",
             script_id=None,
             script_args="",
             fs_id=None,
@@ -87,6 +90,35 @@ def test_instance_create_prompt_includes_region_when_provided(monkeypatch):
     assert (
         captured["msg"]
         == "Create instance (gpu=2x RTX5000, template=pytorch, storage=60GB, name='train-job', region=india-noida-01)?"
+    )
+
+
+def test_instance_create_prompt_includes_http_ports_when_provided(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_confirm(msg: str, *, skip: bool = False) -> bool:
+        captured["msg"] = msg
+        return False
+
+    monkeypatch.setattr(instance.render, "confirm", fake_confirm)
+
+    with pytest.raises(typer.Exit):
+        instance.instance_create(
+            gpu="RTX5000",
+            template="pytorch",
+            storage=60,
+            name="train-job",
+            num_gpus=2,
+            region="IN2",
+            http_ports="7860,8080",
+            script_id=None,
+            script_args="",
+            fs_id=None,
+        )
+
+    assert (
+        captured["msg"]
+        == "Create instance (gpu=2x RTX5000, template=pytorch, storage=60GB, name='train-job', region=IN2, http_ports='7860,8080')?"
     )
 
 
@@ -106,12 +138,14 @@ def test_instance_create_passes_region_to_client(monkeypatch):
         name="train-job",
         num_gpus=2,
         region="IN2",
+        http_ports="7860,8080",
         script_id=None,
         script_args="",
         fs_id=None,
     )
 
     assert mock_client.instances.create.call_args.kwargs["region"] == "IN2"
+    assert mock_client.instances.create.call_args.kwargs["http_ports"] == "7860,8080"
 
 
 def test_instance_resume_prompt_defaults_to_current_configuration(monkeypatch):

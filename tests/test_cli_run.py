@@ -21,6 +21,7 @@ def test_run_help_shows_direct_start_usage():
     assert result.exit_code == 0
     assert "Start a run directly:" in result.output
     assert "jl run train.py --gpu RTX5000" in result.output
+    assert "--http-ports TEXT" in result.output
     assert "--requirements PATH" in result.output
 
 
@@ -79,6 +80,7 @@ def test_run_start_prompt_includes_region_when_provided(monkeypatch):
             storage=40,
             name="jl-run",
             num_gpus=1,
+            http_ports="",
             setup=None,
             requirements=None,
             setup_file=None,
@@ -91,6 +93,42 @@ def test_run_start_prompt_includes_region_when_provided(monkeypatch):
     assert (
         captured["msg"]
         == "Create 1x RTX5000 instance for jl run (template=pytorch, storage=40GB, name='jl-run', region=IN2)?"
+    )
+
+
+def test_run_start_prompt_includes_http_ports_when_provided(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_confirm(msg: str, *, skip: bool = False) -> bool:
+        captured["msg"] = msg
+        return False
+
+    monkeypatch.setattr(run.render, "confirm", fake_confirm)
+
+    with pytest.raises(click.exceptions.Exit):
+        run.run_start(
+            SimpleNamespace(args=["train.py"]),
+            on=None,
+            gpu="RTX5000",
+            region="IN1",
+            script=None,
+            template="pytorch",
+            storage=40,
+            name="jl-run",
+            num_gpus=1,
+            http_ports="7860",
+            setup=None,
+            requirements=None,
+            setup_file=None,
+            pause=False,
+            destroy=False,
+            keep=True,
+            follow=True,
+        )
+
+    assert (
+        captured["msg"]
+        == "Create 1x RTX5000 instance for jl run (template=pytorch, storage=40GB, name='jl-run', region=IN1, http_ports='7860')?"
     )
 
 
@@ -115,6 +153,7 @@ def test_run_start_passes_region_to_client(monkeypatch):
         storage=40,
         name="jl-run",
         num_gpus=1,
+        http_ports="7860,8080",
         setup=None,
         requirements=None,
         setup_file=None,
@@ -125,6 +164,7 @@ def test_run_start_passes_region_to_client(monkeypatch):
     )
 
     assert mock_client.instances.create.call_args.kwargs["region"] == "EU1"
+    assert mock_client.instances.create.call_args.kwargs["http_ports"] == "7860,8080"
 
 
 def test_region_label_uses_ui_consistent_codes():
@@ -565,7 +605,7 @@ def test_run_logs_json_returns_content(monkeypatch):
     monkeypatch.setattr(run.render, "print_json", lambda payload: captured.setdefault("payload", payload))
     monkeypatch.setattr(state, "json_output", True)
 
-    run.run_logs("r_logs", follow=False, tail=5)
+    run.run_logs("r_logs", follow=False, tail=5, json_output=True)
 
     assert captured["payload"] == {
         "run_id": "r_logs",

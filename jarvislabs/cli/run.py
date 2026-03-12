@@ -53,6 +53,7 @@ class RunCommandGroup(TyperGroup):
             "Key start options:\n"
             "  --on INTEGER           Run on an existing instance.\n"
             "  --gpu TEXT             Create a fresh instance with this GPU.\n"
+            "  --http-ports TEXT      Expose comma-separated HTTP ports on a fresh instance.\n"
             "  --script TEXT          Script path inside a directory target.\n"
             "  --requirements PATH    Upload and install a local requirements file.\n"
             "  --setup TEXT           Shell command to run before the main command.\n"
@@ -866,6 +867,7 @@ def run_start(
     storage: int = typer.Option(40, "--storage", "-s", help="Storage in GB for fresh instances."),
     name: str = typer.Option("jl-run", "--name", "-n", help="Instance name for fresh runs."),
     num_gpus: int = typer.Option(1, "--num-gpus", help="Number of GPUs for fresh runs."),
+    http_ports: str = typer.Option("", "--http-ports", help="Comma-separated HTTP ports to expose on fresh instances."),
     setup: str | None = typer.Option(None, "--setup", help="Shell command to run before the main command."),
     requirements: str | None = typer.Option(
         None,
@@ -931,6 +933,8 @@ def run_start(
     detail_parts = [f"template={template}", f"storage={storage}GB", f"name={name!r}"]
     if region:
         detail_parts.append(f"region={region}")
+    if http_ports:
+        detail_parts.append(f"http_ports={http_ports!r}")
     details = f"Create {num_gpus}x {gpu} instance for jl run ({', '.join(detail_parts)})?"
     if not render.confirm(details, skip=state.yes):
         raise typer.Exit()
@@ -944,6 +948,7 @@ def run_start(
             storage=storage,
             name=name,
             region=region,
+            http_ports=http_ports,
         )
 
     render.success(f"Fresh instance {inst.machine_id} is ready.")
