@@ -122,6 +122,7 @@ def instance_create(
     name: str = typer.Option("Name me", "--name", "-n", help="Instance name."),
     num_gpus: int = typer.Option(1, "--num-gpus", help="Number of GPUs."),
     region: str | None = typer.Option(None, "--region", help="Optional region pin (e.g. IN1, IN2, EU1)."),
+    http_ports: str = typer.Option("", "--http-ports", help="Comma-separated HTTP ports to expose (e.g. 7860,8080)."),
     script_id: str | None = typer.Option(None, "--script-id", help="Startup script ID to run on launch."),
     script_args: str = typer.Option("", "--script-args", help="Arguments passed to startup script."),
     fs_id: int | None = typer.Option(None, "--fs-id", help="Filesystem ID to attach."),
@@ -133,6 +134,8 @@ def instance_create(
     details = [f"gpu={num_gpus}x {gpu}", f"template={template}", f"storage={storage}GB", f"name={name!r}"]
     if region:
         details.append(f"region={region}")
+    if http_ports:
+        details.append(f"http_ports={http_ports!r}")
     if script_id:
         details.append(f"script_id={script_id}")
     if script_args:
@@ -152,6 +155,7 @@ def instance_create(
             storage=storage,
             name=name,
             region=region,
+            http_ports=http_ports,
             script_id=script_id,
             script_args=script_args,
             fs_id=fs_id,
@@ -378,7 +382,13 @@ def instance_exec(
         return
 
     render.info(f"Executing on {machine_id}: {command_label}")
-    raise SystemExit(subprocess.call(parts))
+    exit_code = subprocess.call(parts)
+    if exit_code != 0:
+        if exit_code == 255:
+            render.warning(f"SSH or remote command failed on {machine_id} (exit code 255).")
+        else:
+            render.warning(f"Command on {machine_id} exited with code {exit_code}.")
+    raise SystemExit(exit_code)
 
 
 @instance_app.command("upload")

@@ -126,6 +126,33 @@ def instances_table(instances: list, currency: str = "USD") -> None:
     stdout_console.print(table)
 
 
+def _link_value(url: str | None) -> str:
+    return f"[link={url}][magenta]{url}[/magenta][/link]" if url else "—"
+
+
+def _service_url_rows(inst) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    if inst.url:
+        rows.append(("URL", _link_value(inst.url)))
+
+    http_ports = [port.strip() for port in (inst.http_ports or "").split(",") if port.strip()]
+
+    if inst.vs_url:
+        rows.append(("Port 7007", _link_value(inst.vs_url)))
+
+    endpoint_urls = list(inst.endpoints or [])
+    if endpoint_urls:
+        rows.append(("Port 6006", _link_value(endpoint_urls[0])))
+
+    for port, endpoint in zip(http_ports, endpoint_urls[1:], strict=False):
+        rows.append((f"Port {port}", _link_value(endpoint)))
+
+    for index, endpoint in enumerate(endpoint_urls[1 + len(http_ports) :], start=1 + len(http_ports)):
+        rows.append((f"Endpoint {index}", _link_value(endpoint)))
+
+    return rows
+
+
 def instance_detail(inst, currency: str = "USD") -> None:
     sym = "₹" if currency == "INR" else "$"
     table = Table(show_header=False, box=None, padding=(0, 2), border_style=BORDER_STYLE)
@@ -137,8 +164,6 @@ def instance_detail(inst, currency: str = "USD") -> None:
 
     cost_label = "Storage cost" if inst.status == "Paused" else "Session cost"
 
-    url_value = f"[link={inst.url}][magenta]{inst.url}[/magenta][/link]" if inst.url else "—"
-
     rows = [
         ("ID", f"[cyan]{inst.machine_id}[/cyan]"),
         ("Name", f"[bold]{inst.name or '—'}[/bold]"),
@@ -149,8 +174,9 @@ def instance_detail(inst, currency: str = "USD") -> None:
         ("Region", _region_label(inst.region)),
         (cost_label, f"[green]{sym}{inst.cost:.2f}[/green]"),
         ("SSH", f"[cyan]{inst.ssh_command}[/cyan]" if inst.ssh_command else "—"),
-        ("URL", url_value),
+        ("HTTP Ports", inst.http_ports or "—"),
     ]
+    rows.extend(_service_url_rows(inst))
 
     for field, value in rows:
         table.add_row(field, value)

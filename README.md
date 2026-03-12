@@ -59,6 +59,9 @@ jl gpus
 # Create an instance
 jl instance create --gpu A100 --name "my-instance"
 
+# Create an instance and expose a custom HTTP port
+jl instance create --gpu RTX5000 --http-ports 7860
+
 # SSH into it
 jl instance ssh <machine_id>
 
@@ -79,6 +82,9 @@ Run scripts on GPU instances without manual setup. Code is uploaded, a virtual e
 ```bash
 # Run a training script on a fresh GPU (instance auto-pauses when done)
 jl run train.py --gpu RTX5000
+
+# Start a long-running web app on a fresh GPU and expose port 8000
+jl run app.py --gpu RTX5000 --http-ports 8000 --keep --no-follow
 
 # Pass script arguments
 jl run train.py --gpu RTX5000 -- --epochs 50 --lr 0.001
@@ -107,6 +113,7 @@ jl instance download <id> /home/results.csv  # Download files
 jl ssh-key add ~/.ssh/id_ed25519.pub --name "my-key"
 jl scripts add ./setup.sh --name "install-deps"
 jl filesystem create --name "datasets" --storage 200
+jl instance get <id>                  # Shows Jupyter + exposed port URLs
 ```
 
 Every command supports `--help`, `--json` (machine-readable output), and `--yes` (skip confirmations).
