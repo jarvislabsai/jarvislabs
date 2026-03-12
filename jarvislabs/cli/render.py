@@ -68,10 +68,11 @@ def account_status(info, bal, metrics, sym: str) -> None:
 
     panel = Panel(
         content,
-        title="[bold]⚡ Account[/bold]",
-        border_style="dim",
+        title="[bold cyan]⚡ Account[/bold cyan]",
+        border_style="cyan",
         box=box.ROUNDED,
         padding=(1, 2),
+        expand=False,
     )
     stdout_console.print(panel)
 

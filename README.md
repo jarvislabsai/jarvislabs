@@ -41,7 +41,7 @@ Requires Python 3.11+.
 Get your API key at [jarvislabs.ai/settings/api-keys](https://jarvislabs.ai/settings/api-keys).
 
 ```bash
-jl login
+jl setup
 ```
 
 Or set an environment variable:
