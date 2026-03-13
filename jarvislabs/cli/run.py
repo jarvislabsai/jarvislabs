@@ -942,8 +942,8 @@ def run_start(
         render.die("--no-follow is only supported with --keep for fresh runs right now.")
 
     detail_parts = [f"template={template}", f"storage={storage}GB", f"name={name!r}"]
-    if region:
-        detail_parts.append(f"region={region}")
+    if isinstance(region, str) and region:
+        detail_parts.append(f"region={region.upper()}")
     if http_ports:
         detail_parts.append(f"http_ports={http_ports!r}")
     details = f"Create {num_gpus}x {gpu} instance for jl run ({', '.join(detail_parts)})?"

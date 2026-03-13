@@ -133,7 +133,7 @@ def instance_create(
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     details = [f"gpu={num_gpus}x {gpu}", f"template={template}", f"storage={storage}GB", f"name={name!r}"]
     if region:
-        details.append(f"region={region}")
+        details.append(f"region={region.upper()}")
     if http_ports:
         details.append(f"http_ports={http_ports!r}")
     if script_id:

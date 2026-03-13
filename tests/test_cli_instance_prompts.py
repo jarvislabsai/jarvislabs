@@ -122,6 +122,35 @@ def test_instance_create_prompt_includes_http_ports_when_provided(monkeypatch):
     )
 
 
+def test_instance_create_prompt_normalizes_lowercase_region(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_confirm(msg: str, *, skip: bool = False) -> bool:
+        captured["msg"] = msg
+        return False
+
+    monkeypatch.setattr(instance.render, "confirm", fake_confirm)
+
+    with pytest.raises(typer.Exit):
+        instance.instance_create(
+            gpu="RTX5000",
+            template="pytorch",
+            storage=60,
+            name="train-job",
+            num_gpus=1,
+            region="in2",
+            http_ports="",
+            script_id=None,
+            script_args="",
+            fs_id=None,
+        )
+
+    assert (
+        captured["msg"]
+        == "Create instance (gpu=1x RTX5000, template=pytorch, storage=60GB, name='train-job', region=IN2)?"
+    )
+
+
 def test_instance_create_passes_region_to_client(monkeypatch):
     mock_client = MagicMock()
     mock_client.instances.create.return_value = MagicMock(machine_id=123)
