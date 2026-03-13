@@ -118,13 +118,17 @@ def test_normalize_success(data, expected):
         ("IN1", "india-01"),
         ("IN2", "india-noida-01"),
         ("EU1", "europe-01"),
+        ("in1", "india-01"),
+        ("in2", "india-noida-01"),
+        ("eu1", "europe-01"),
+        ("Eu1", "europe-01"),
     ],
 )
 def test_normalize_region_input(region, expected):
     assert _normalize_region_input(region) == expected
 
 
-@pytest.mark.parametrize("region", ["XX9", "in2", "india-noida-01"])
+@pytest.mark.parametrize("region", ["XX9", "india-noida-01"])
 def test_normalize_region_input_rejects_unknown(region):
     with pytest.raises(ValidationError, match="Unknown region"):
         _normalize_region_input(region)
@@ -140,20 +144,20 @@ class TestValidateEurope:
     def test_valid_h200_8gpu(self):
         _validate_europe("H200", 8, 200)
 
-    def test_invalid_gpu(self):
-        with pytest.raises(ValidationError, match="supports only"):
+    def test_invalid_gpu_uses_display_code(self):
+        with pytest.raises(ValidationError, match="EU1 supports only"):
             _validate_europe("RTX5000", 1, 100)
 
-    def test_invalid_count_2(self):
-        with pytest.raises(ValidationError, match="GPUs per instance"):
+    def test_invalid_count_uses_display_code(self):
+        with pytest.raises(ValidationError, match="EU1 supports"):
             _validate_europe("H100", 2, 100)
 
     def test_invalid_count_4(self):
         with pytest.raises(ValidationError, match="GPUs per instance"):
             _validate_europe("H100", 4, 100)
 
-    def test_storage_too_low(self):
-        with pytest.raises(ValidationError, match="at least"):
+    def test_storage_too_low_uses_display_code(self):
+        with pytest.raises(ValidationError, match="EU1 requires"):
             _validate_europe("H100", 1, 50)
 
 
@@ -549,9 +553,9 @@ class TestCreatePayload:
 
     @patch("jarvislabs.client._check_gpu_in_region")
     def test_create_region_uses_generic_unavailable_message(self, mock_check, mock_transport):
-        mock_check.side_effect = ValidationError("RTX5000 is not available in europe-01.")
+        mock_check.side_effect = ValidationError("RTX5000 is not available in EU1.")
 
-        with pytest.raises(ValidationError, match="RTX5000 is not available in europe-01\\."):
+        with pytest.raises(ValidationError, match="RTX5000 is not available in EU1\\."):
             _validate_create_region(
                 mock_transport,
                 region="europe-01",
@@ -775,3 +779,47 @@ class TestRenameInstance:
     def test_rename_rejects_long_name(self, mock_transport):
         with pytest.raises(ValidationError, match="40 characters or fewer"):
             _make_instances(mock_transport).rename(42, "x" * 41)
+
+
+# ── Model serialization (display codes & field filtering) ───────────────────
+
+
+class TestModelSerialization:
+    def test_server_meta_gpu_region_is_display_code(self):
+        from jarvislabs.models import ServerMetaGPU
+
+        gpu = ServerMetaGPU(gpu_type="A100", region="india-noida-01", num_free_devices=4)
+        dumped = gpu.model_dump()
+        assert dumped["region"] == "IN2"
+        # attribute access still returns raw ID
+        assert gpu.region == "india-noida-01"
+
+    def test_server_meta_gpu_drops_extra_fields(self):
+        from jarvislabs.models import ServerMetaGPU
+
+        gpu = ServerMetaGPU(
+            gpu_type="A100",
+            region="india-01",
+            num_free_devices=4,
+            p_num_free_devices=6,
+            spot_price=0.5,
+            num_gpus="8",
+        )
+        dumped = gpu.model_dump()
+        assert "p_num_free_devices" not in dumped
+        assert "spot_price" not in dumped
+        assert "num_gpus" not in dumped
+
+    def test_instance_region_is_display_code(self):
+        from jarvislabs.models import Instance
+
+        inst = Instance(machine_id=1, status="Running", template="pytorch", region="europe-01")
+        dumped = inst.model_dump()
+        assert dumped["region"] == "EU1"
+        assert inst.region == "europe-01"
+
+    def test_instance_region_none_stays_none(self):
+        from jarvislabs.models import Instance
+
+        inst = Instance(machine_id=1, status="Running", template="pytorch", region=None)
+        assert inst.model_dump()["region"] is None

@@ -556,12 +556,13 @@ def _apply_storage_constraints(
 
 
 def _validate_europe(gpu_type: str, num_gpus: int, storage_gb: int) -> None:
+    label = _region_label(EUROPE_REGION)
     if gpu_type not in EUROPE_GPU_TYPES:
-        raise ValidationError(f"europe-01 supports only {sorted(EUROPE_GPU_TYPES)} GPUs, got {gpu_type}")
+        raise ValidationError(f"{label} supports only {sorted(EUROPE_GPU_TYPES)} GPUs, got {gpu_type}")
     if num_gpus not in EUROPE_GPU_COUNTS:
-        raise ValidationError(f"europe-01 supports {sorted(EUROPE_GPU_COUNTS)} GPUs per instance, got {num_gpus}")
+        raise ValidationError(f"{label} supports {sorted(EUROPE_GPU_COUNTS)} GPUs per instance, got {num_gpus}")
     if storage_gb < EUROPE_MIN_STORAGE_GB:
-        raise ValidationError(f"europe-01 requires at least {EUROPE_MIN_STORAGE_GB}GB storage")
+        raise ValidationError(f"{label} requires at least {EUROPE_MIN_STORAGE_GB}GB storage")
 
 
 def _check_gpu_in_region(
@@ -583,16 +584,17 @@ def _check_gpu_in_region(
         return  # No data — let the backend decide
 
     in_region = [s for s in meta.server_meta if s.gpu_type == gpu_type and s.region == region]
+    label = _region_label(region)
     if not in_region:
         if resume_only:
             raise ValidationError(
-                f"{gpu_type} is not available in {region}. Paused instances can only resume in their original region."
+                f"{gpu_type} is not available in {label}. Paused instances can only resume in their original region."
             )
-        raise ValidationError(f"{gpu_type} is not available in {region}.")
+        raise ValidationError(f"{gpu_type} is not available in {label}.")
 
     free = any(s.num_free_devices >= num_gpus for s in in_region)
     if not free:
-        raise ValidationError(f"No free {gpu_type} GPUs in {region} right now. Try again later.")
+        raise ValidationError(f"No free {gpu_type} GPUs in {label} right now. Try again later.")
 
 
 def _validate_create_region(
@@ -604,8 +606,8 @@ def _validate_create_region(
     num_gpus: int,
 ) -> None:
     if template == "vm" and region not in VM_SUPPORTED_REGIONS:
-        valid_regions = ", ".join(sorted(VM_SUPPORTED_REGIONS))
-        raise ValidationError(f"VM instances are only available in: {valid_regions}")
+        valid_codes = ", ".join(sorted(_region_label(r) for r in VM_SUPPORTED_REGIONS))
+        raise ValidationError(f"VM instances are only available in: {valid_codes}")
     _check_gpu_in_region(transport, gpu_type, num_gpus, region)
 
 
@@ -617,11 +619,17 @@ def _normalize_region_input(region: str | None) -> str | None:
     if not normalized:
         return None
 
-    if normalized in REGION_DISPLAY_CODES.values():
-        return REGION_CODE_TO_REGION[normalized.lower()]
+    upper = normalized.upper()
+    if upper in REGION_DISPLAY_CODES.values():
+        return REGION_CODE_TO_REGION[upper.lower()]
 
     valid_codes = ", ".join(sorted(REGION_DISPLAY_CODES.values()))
     raise ValidationError(f"Unknown region {region!r}. Use one of: {valid_codes}")
+
+
+def _region_label(region: str) -> str:
+    """Convert internal region ID to user-facing display code."""
+    return REGION_DISPLAY_CODES.get(region, region)
 
 
 def _region_url(region: str | None) -> str:

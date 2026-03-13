@@ -9,7 +9,9 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_serializer, field_validator
+
+from jarvislabs.constants import REGION_DISPLAY_CODES
 
 # ── Account ──────────────────────────────────────────────────────────────────
 
@@ -85,7 +87,7 @@ class Template(BaseModel):
 
 
 class ServerMetaGPU(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="ignore")
 
     gpu_type: str
     region: str
@@ -95,6 +97,10 @@ class ServerMetaGPU(BaseModel):
     arc: str | None = None
     cpus_per_gpu: int | None = None
     ram_per_gpu: int | None = None
+
+    @field_serializer("region")
+    def _display_region(self, v: str) -> str:
+        return REGION_DISPLAY_CODES.get(v, v)
 
     @field_validator("num_free_devices", mode="before")
     @classmethod
@@ -141,6 +147,12 @@ class Instance(BaseModel):
     public_ip: str | None = None
     http_ports: str | None = None
     region: str | None = None
+
+    @field_serializer("region")
+    def _display_region(self, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return REGION_DISPLAY_CODES.get(v, v)
 
     @field_validator("ram", "storage_gb", "cores", mode="before")
     @classmethod
