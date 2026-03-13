@@ -224,6 +224,7 @@ def instance_resume(
     num_gpus: int | None = typer.Option(None, "--num-gpus", help="Change number of GPUs."),
     storage: int | None = typer.Option(None, "--storage", "-s", help="Expand storage (GB). Can only increase."),
     name: str | None = typer.Option(None, "--name", "-n", help="Rename instance."),
+    http_ports: str = typer.Option("", "--http-ports", help="Comma-separated HTTP ports to expose (e.g. 7860,8080)."),
     script_id: str | None = typer.Option(None, "--script-id", help="Startup script ID to use on resume."),
     script_args: str | None = typer.Option(None, "--script-args", help="Arguments passed to startup script."),
     fs_id: int | None = typer.Option(None, "--fs-id", help="Filesystem ID to attach."),
@@ -241,6 +242,8 @@ def instance_resume(
         changes.append(f"storage={storage}GB")
     if name is not None:
         changes.append(f"name={name!r}")
+    if http_ports:
+        changes.append(f"http_ports={http_ports!r}")
     if script_id is not None:
         changes.append(f"script_id={script_id}")
     if script_args is not None:
@@ -260,6 +263,7 @@ def instance_resume(
             num_gpus=num_gpus,
             storage=storage,
             name=name,
+            http_ports=http_ports,
             script_id=script_id,
             script_args=script_args,
             fs_id=fs_id,

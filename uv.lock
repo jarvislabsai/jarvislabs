@@ -120,7 +120,7 @@ wheels = [
 
 [[package]]
 name = "jarvislabs"
-version = "0.2.0b9"
+version = "0.2.0b10"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
