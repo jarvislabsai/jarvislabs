@@ -1,7 +1,6 @@
 # jarvislabs
 
-[![PyPI](https://img.shields.io/pypi/v/jarvislabs?label=pypi&color=blue)](https://pypi.org/project/jarvislabs/0.2.0b2/)
-[![Python](https://img.shields.io/pypi/pyversions/jarvislabs)](https://pypi.org/project/jarvislabs/0.2.0b2/)
+[![Python](https://img.shields.io/pypi/pyversions/jarvislabs)](https://pypi.org/project/jarvislabs/)
 [![License](https://img.shields.io/pypi/l/jarvislabs)](https://github.com/jarvislabsai/jarvislabs/blob/main/LICENSE)
 
 CLI and Python SDK for managing GPU instances on [JarvisLabs.ai](https://jarvislabs.ai).
