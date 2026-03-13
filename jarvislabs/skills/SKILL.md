@@ -106,7 +106,7 @@ Rules:
 - Maximum 10 custom ports
 - Port range: 0–65535
 - Reserved ports `8889`, `6006`, `7007`, `22` cannot be specified (they're always available)
-- Custom ports are set at creation time only
+- Custom ports can be set at creation or changed on resume with `--http-ports`
 
 ### Finding service URLs
 
@@ -270,7 +270,7 @@ Agent rule:
 | `jl instance list --json` | List all instances |
 | `jl instance get <id> --json` | Instance details (SSH, URLs, status) |
 | `jl instance pause <id> --yes --json` | Pause (stops billing, keeps storage) |
-| `jl instance resume <id> --yes --json` | Resume (can change GPU with `--gpu`, expand storage with `--storage`) |
+| `jl instance resume <id> --yes --json` | Resume (can change GPU with `--gpu`, expand storage with `--storage`, change ports with `--http-ports`) |
 | `jl instance destroy <id> --yes --json` | Permanently delete |
 | `jl instance rename <id> --name "new-name" --yes --json` | Rename |
 

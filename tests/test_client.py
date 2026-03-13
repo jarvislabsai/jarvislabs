@@ -670,6 +670,20 @@ class TestResumePayload:
         instances.resume(10)
         assert mock_transport.request.call_args.kwargs["json"]["script_args"] == ""
 
+    def test_resume_sends_http_ports_in_payload(self, mock_transport):
+        instances = self._setup_resume(mock_transport)
+        instances.resume(10, http_ports="7860,8080")
+
+        payload = mock_transport.request.call_args.kwargs["json"]
+        assert payload["http_ports"] == "7860,8080"
+
+    def test_resume_sends_empty_http_ports_by_default(self, mock_transport):
+        instances = self._setup_resume(mock_transport)
+        instances.resume(10)
+
+        payload = mock_transport.request.call_args.kwargs["json"]
+        assert payload["http_ports"] == ""
+
     def test_vm_resume_uses_vm_endpoint(self, mock_transport):
         existing = _mock_existing_instance()
         existing.template = "vm"

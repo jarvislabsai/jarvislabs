@@ -193,6 +193,7 @@ def test_instance_resume_prompt_defaults_to_current_configuration(monkeypatch):
             num_gpus=None,
             storage=None,
             name=None,
+            http_ports="",
             script_id=None,
             script_args=None,
             fs_id=None,
@@ -217,12 +218,38 @@ def test_instance_resume_prompt_lists_all_requested_changes(monkeypatch):
             num_gpus=4,
             storage=120,
             name="new-name",
+            http_ports="",
             script_id=None,
             script_args=None,
             fs_id=None,
         )
 
     assert captured["msg"] == "Resume instance 42 with gpu=H100, num_gpus=4, storage=120GB, name='new-name'?"
+
+
+def test_instance_resume_prompt_includes_http_ports(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_confirm(msg: str, *, skip: bool = False) -> bool:
+        captured["msg"] = msg
+        return False
+
+    monkeypatch.setattr(instance.render, "confirm", fake_confirm)
+
+    with pytest.raises(typer.Exit):
+        instance.instance_resume(
+            machine_id=42,
+            gpu=None,
+            num_gpus=None,
+            storage=None,
+            name=None,
+            http_ports="7860,8080",
+            script_id=None,
+            script_args=None,
+            fs_id=None,
+        )
+
+    assert captured["msg"] == "Resume instance 42 with http_ports='7860,8080'?"
 
 
 def test_instance_resume_prompt_includes_script_changes(monkeypatch):
@@ -241,6 +268,7 @@ def test_instance_resume_prompt_includes_script_changes(monkeypatch):
             num_gpus=None,
             storage=None,
             name=None,
+            http_ports="",
             script_id="9",
             script_args="--dry-run",
             fs_id=12,
