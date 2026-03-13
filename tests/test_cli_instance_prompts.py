@@ -80,7 +80,7 @@ def test_instance_create_prompt_includes_region_when_provided(monkeypatch):
             storage=60,
             name="train-job",
             num_gpus=2,
-            region="india-noida-01",
+            region="IN2",
             http_ports="",
             script_id=None,
             script_args="",
@@ -89,7 +89,7 @@ def test_instance_create_prompt_includes_region_when_provided(monkeypatch):
 
     assert (
         captured["msg"]
-        == "Create instance (gpu=2x RTX5000, template=pytorch, storage=60GB, name='train-job', region=india-noida-01)?"
+        == "Create instance (gpu=2x RTX5000, template=pytorch, storage=60GB, name='train-job', region=IN2)?"
     )
 
 

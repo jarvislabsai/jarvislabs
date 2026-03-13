@@ -118,13 +118,17 @@ def test_normalize_success(data, expected):
         ("IN1", "india-01"),
         ("IN2", "india-noida-01"),
         ("EU1", "europe-01"),
+        ("in1", "india-01"),
+        ("in2", "india-noida-01"),
+        ("eu1", "europe-01"),
+        ("Eu1", "europe-01"),
     ],
 )
 def test_normalize_region_input(region, expected):
     assert _normalize_region_input(region) == expected
 
 
-@pytest.mark.parametrize("region", ["XX9", "in2", "india-noida-01"])
+@pytest.mark.parametrize("region", ["XX9", "india-noida-01"])
 def test_normalize_region_input_rejects_unknown(region):
     with pytest.raises(ValidationError, match="Unknown region"):
         _normalize_region_input(region)
