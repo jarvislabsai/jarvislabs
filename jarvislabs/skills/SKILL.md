@@ -224,6 +224,7 @@ Kills the entire process group (training script + all child processes).
 
 The remote home directory (typically `/home/` on containers, `/home/<user>/` on VMs) persists across pause/resume cycles. Everything else (system packages, `/tmp`, `/root`, etc.) is ephemeral and lost on pause.
 
+- When working directly on the instance, always place files, directories, virtual environments, and any other artifacts under `/home/`. `/root/` and other system paths are lost on pause — only `/home/` persists across pause/resume cycles.
 - Save all outputs, checkpoints, and results under the home directory
 - Uploaded directories go to `<home>/<directory_name>/`, uploaded files go to `<home>/<file_stem>/<file>`
 - Run metadata (logs, pid, exit code) is stored separately under `<home>/jl-runs/<run_id>/`
