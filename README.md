@@ -7,6 +7,7 @@ CLI and Python SDK for managing GPU instances on [JarvisLabs.ai](https://jarvisl
 
 > **Beta release.** The v0.2 rewrite is in pre-release. Install with `--pre` to get it.
 
+See the docs on [jarvislabs docs](https://docs.jarvislabs.ai/cli/)
 ## Installation
 
 ### As a CLI tool (recommended)
