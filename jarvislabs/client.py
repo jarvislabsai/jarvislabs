@@ -469,7 +469,7 @@ def _coerce_script_bytes(script: bytes | bytearray | str) -> bytes:
     return content
 
 
-_INSTANCE_NAME_RE = re.compile(r"^[a-zA-Z0-9 _-]+$")
+_INSTANCE_NAME_RE = re.compile(r"[a-zA-Z0-9 _-]+\Z")
 
 
 def _validate_instance_name(name: str) -> None:
@@ -477,7 +477,7 @@ def _validate_instance_name(name: str) -> None:
         raise ValidationError("Instance name cannot be empty")
     if len(name) > 40:
         raise ValidationError("Instance name must be 40 characters or fewer")
-    if not _INSTANCE_NAME_RE.match(name):
+    if not _INSTANCE_NAME_RE.fullmatch(name):
         raise ValidationError(
             f"Instance name contains unsupported characters: {name!r}. "
             "Only letters, numbers, spaces, hyphens, and underscores are allowed."

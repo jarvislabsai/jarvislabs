@@ -307,6 +307,11 @@ Agent rule:
 | `jl scripts list/add/update/remove` | Manage startup scripts |
 | `jl filesystem list/create/edit/remove` | Manage persistent filesystems |
 
+### Filesystem Notes
+
+- **Region-bound:** Filesystems are tied to a region. A filesystem created in IN2 is only visible to instances in IN2. Data saved on an IN2 filesystem will not appear on an IN1 instance, even with the same `fs_id`. Use `jl filesystem list --json` to see each filesystem's region.
+- **ID changes on edit:** Expanding a filesystem (`jl filesystem edit`) may return a new `fs_id`. Always use the returned ID for subsequent operations — the old ID may stop working.
+
 ## Typical Agent Workflow
 
 ```bash

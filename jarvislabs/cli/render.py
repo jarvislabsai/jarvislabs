@@ -242,10 +242,11 @@ def filesystems_table(filesystems: list) -> None:
     table.add_column("ID", style="cyan", no_wrap=True)
     table.add_column("Name", style="bold")
     table.add_column("Storage", justify="right")
+    table.add_column("Region", no_wrap=True)
 
     for filesystem in filesystems:
         storage = f"{filesystem.storage}GB" if filesystem.storage is not None else "—"
-        table.add_row(str(filesystem.fs_id), filesystem.fs_name or "—", storage)
+        table.add_row(str(filesystem.fs_id), filesystem.fs_name or "—", storage, _region_label(filesystem.region))
 
     stdout_console.print(table)
 
