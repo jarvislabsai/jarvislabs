@@ -774,6 +774,38 @@ class TestLifecycleRouting:
             base_url=REGION_URLS["india-noida-01"],
         )
 
+    def test_destroy_treats_missing_instance_as_success_after_error_payload(self, mock_transport):
+        instance = MagicMock(template="pytorch", region="india-01")
+        with patch("jarvislabs.client._get_instance") as mock_get:
+            mock_get.side_effect = [
+                instance,
+                NotFoundError("Instance 10 not found"),
+            ]
+            mock_transport.request.return_value = {"error": "Unknown error"}
+
+            assert _make_instances(mock_transport).destroy(10) is True
+
+    def test_destroy_treats_missing_instance_as_success_after_api_error(self, mock_transport):
+        instance = MagicMock(template="pytorch", region="india-01")
+        with patch("jarvislabs.client._get_instance") as mock_get:
+            mock_get.side_effect = [
+                instance,
+                NotFoundError("Instance 10 not found"),
+            ]
+            mock_transport.request.side_effect = APIError(500, "Unknown error")
+
+            assert _make_instances(mock_transport).destroy(10) is True
+
+    def test_destroy_raises_when_instance_still_exists_after_error_payload(self, mock_transport):
+        instance = MagicMock(template="pytorch", region="india-01")
+        with (
+            patch("jarvislabs.client._get_instance", return_value=instance),
+            patch("jarvislabs.client.time.sleep"),
+            pytest.raises(APIError, match="Failed to destroy instance: Unknown error"),
+        ):
+            mock_transport.request.return_value = {"error": "Unknown error"}
+            _make_instances(mock_transport).destroy(10)
+
 
 class TestRenameInstance:
     def test_rename_calls_machine_name_endpoint(self, mock_transport):

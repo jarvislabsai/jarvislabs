@@ -9,6 +9,7 @@ Usage:
 
 from __future__ import annotations
 
+import re
 import time
 
 from jarvislabs.config import resolve_token
@@ -249,8 +250,8 @@ class Instances:
     ) -> Instance:
         if not gpu_type:
             raise ValidationError("gpu_type is required (e.g. 'A100', 'H100', 'RTX5000')")
-        if name and len(name) > 40:
-            raise ValidationError("Instance name must be 40 characters or fewer")
+        if name:
+            _validate_instance_name(name)
 
         region = _normalize_region_input(region)
         if region is None:
@@ -340,6 +341,8 @@ class Instances:
         instance = _get_instance(self._t, machine_id)
         if instance.status != "Paused":
             raise ValidationError(f"Can only resume a Paused instance (current status: {instance.status})")
+        if name:
+            _validate_instance_name(name)
         if fs_id is not None:
             _ensure_filesystem_exists(self._t, fs_id)
 
@@ -409,21 +412,26 @@ class Instances:
         else:
             endpoint = "misc/destroy"
 
-        resp = self._t.request(
-            "POST",
-            endpoint,
-            params={"machine_id": machine_id},
-            base_url=base_url,
-        )
+        try:
+            resp = self._t.request(
+                "POST",
+                endpoint,
+                params={"machine_id": machine_id},
+                base_url=base_url,
+            )
+        except APIError as exc:
+            if _wait_until_instance_missing(self._t, machine_id):
+                return True
+            raise exc
+
         if not _normalize_success(resp):
+            if _wait_until_instance_missing(self._t, machine_id):
+                return True
             raise APIError(0, f"Failed to destroy instance: {_backend_msg(resp)}")
         return True
 
     def rename(self, machine_id: int, name: str) -> bool:
-        if not name or not name.strip():
-            raise ValidationError("Instance name cannot be empty")
-        if len(name) > 40:
-            raise ValidationError("Instance name must be 40 characters or fewer")
+        _validate_instance_name(name)
 
         resp = self._t.request(
             "PUT",
@@ -459,6 +467,21 @@ def _coerce_script_bytes(script: bytes | bytearray | str) -> bytes:
     if not content.strip():
         raise ValidationError("Script content cannot be empty")
     return content
+
+
+_INSTANCE_NAME_RE = re.compile(r"^[a-zA-Z0-9 _-]+$")
+
+
+def _validate_instance_name(name: str) -> None:
+    if not name or not name.strip():
+        raise ValidationError("Instance name cannot be empty")
+    if len(name) > 40:
+        raise ValidationError("Instance name must be 40 characters or fewer")
+    if not _INSTANCE_NAME_RE.match(name):
+        raise ValidationError(
+            f"Instance name contains unsupported characters: {name!r}. "
+            "Only letters, numbers, spaces, hyphens, and underscores are allowed."
+        )
 
 
 def _validate_filesystem_name(fs_name: str) -> None:
@@ -701,3 +724,23 @@ def _get_instance(transport: Transport, machine_id: int, *, retries: int = 0) ->
                 time.sleep(FETCH_RETRY_INTERVAL_S)
                 continue
             raise NotFoundError(f"Instance {machine_id} not found. Check the ID with: jl instance list") from err
+
+
+def _wait_until_instance_missing(
+    transport: Transport,
+    machine_id: int,
+    *,
+    retries: int = 3,
+    poll_interval_s: float = 1.0,
+) -> bool:
+    """Return True when the instance is no longer fetchable."""
+    for attempt in range(retries + 1):
+        try:
+            _get_instance(transport, machine_id)
+        except NotFoundError:
+            return True
+
+        if attempt < retries:
+            time.sleep(poll_interval_s)
+
+    return False
