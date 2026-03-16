@@ -79,6 +79,8 @@ jl instance destroy <machine_id>
 
 Run scripts on GPU instances without manual setup. Code is uploaded, a virtual environment is created, and logs are tracked automatically.
 
+For humans, the default mode stays attached to the run, streams logs, and can auto-pause or auto-destroy the instance after the run finishes. For agents, `--json` is meant for detached workflows and returns immediately, so use `--keep` and have the agent pause or destroy the instance after the run.
+
 ```bash
 # Run a training script on a fresh GPU (instance auto-pauses when done)
 jl run train.py --gpu RTX5000

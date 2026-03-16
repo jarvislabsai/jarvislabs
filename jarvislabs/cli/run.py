@@ -59,6 +59,13 @@ class RunCommandGroup(TyperGroup):
             "  --setup TEXT           Shell command to run before the main command.\n"
             "  --setup-file PATH      Local bash file to run before the main command.\n"
             "  --follow / --no-follow Stream logs after starting the run.\n"
+            "\n"
+            "Lifecycle note:\n"
+            "  Human workflow: use the default mode where the CLI stays attached to the\n"
+            "  run and streams logs if you want it to pause or destroy the instance after\n"
+            "  the run finishes.\n"
+            "  Agent workflow: --json is for detached runs, so use --keep and have the\n"
+            "  agent clean up the instance after the run.\n"
         )
         return help_text + start_help
 
@@ -937,6 +944,17 @@ def run_start(
             render.die("--no-follow requires an explicit lifecycle flag. Use --keep, --pause, or --destroy.")
         lifecycle = "pause"
         render.info("No lifecycle flag provided for the fresh run. Defaulting to --pause.")
+
+    if state.json_output and lifecycle in {"pause", "destroy"}:
+        render.die(
+            f"--{lifecycle} is not supported with --json for fresh runs.\n\n"
+            "--json is mainly meant for agent workflows. It prints the run details and returns right away, "
+            f"so the run becomes detached from this CLI session. Because the CLI is no longer attached, it cannot "
+            f"{lifecycle} the instance when the run finishes.\n\n"
+            "What to do instead:\n"
+            f"  Agent workflow: use --keep --json, then have the agent watch the run and call jl instance {lifecycle} <machine_id> when it is done.\n"
+            f"  Human workflow: drop --json and use the default mode where the CLI stays attached to the run if you want it to apply --{lifecycle} after the run finishes."
+        )
 
     if not follow and lifecycle != "keep":
         render.die("--no-follow is only supported with --keep for fresh runs right now.")

@@ -206,6 +206,54 @@ def test_run_start_rejects_region_with_on(monkeypatch):
     assert captured["message"] == "--region is only supported with --gpu for fresh instances."
 
 
+@pytest.mark.parametrize("flag", ["pause", "destroy"])
+def test_run_start_rejects_json_lifecycle_for_fresh_runs(monkeypatch, flag):
+    captured: dict[str, str] = {}
+
+    def fake_die(message: str, code: int = 1) -> None:
+        captured["message"] = message
+        raise SystemExit(code)
+
+    monkeypatch.setattr(run.render, "die", fake_die)
+
+    kwargs = {
+        "pause": False,
+        "destroy": False,
+        "keep": False,
+    }
+    kwargs[flag] = True
+
+    with pytest.raises(SystemExit):
+        run.run_start(
+            SimpleNamespace(args=["train.py"]),
+            on=None,
+            gpu="RTX5000",
+            region=None,
+            script=None,
+            template="pytorch",
+            storage=40,
+            name="jl-run",
+            num_gpus=1,
+            http_ports="",
+            setup=None,
+            requirements=None,
+            setup_file=None,
+            follow=True,
+            json_output=True,
+            **kwargs,
+        )
+
+    assert captured["message"] == (
+        f"--{flag} is not supported with --json for fresh runs.\n\n"
+        "--json is mainly meant for agent workflows. It prints the run details and returns right away, "
+        f"so the run becomes detached from this CLI session. Because the CLI is no longer attached, it cannot "
+        f"{flag} the instance when the run finishes.\n\n"
+        "What to do instead:\n"
+        f"  Agent workflow: use --keep --json, then have the agent watch the run and call jl instance {flag} <machine_id> when it is done.\n"
+        f"  Human workflow: drop --json and use the default mode where the CLI stays attached to the run if you want it to apply --{flag} after the run finishes."
+    )
+
+
 def test_build_run_spec_for_python_file(monkeypatch, tmp_path):
     source = tmp_path / "train.py"
     source.write_text("print('hi')\n")
