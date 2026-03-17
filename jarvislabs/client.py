@@ -249,7 +249,7 @@ class Instances:
         region: str | None = None,
     ) -> Instance:
         if not gpu_type:
-            raise ValidationError("gpu_type is required (e.g. 'A100', 'H100', 'RTX5000')")
+            raise ValidationError("gpu_type is required (e.g. 'A100', 'H100', 'L4')")
         if name:
             _validate_instance_name(name)
 
@@ -692,7 +692,7 @@ def _poll_until_running(transport: Transport, machine_id: int, region: str) -> N
     raise APIError(
         0,
         f"Timed out after {timeout}s waiting for instance {machine_id} to start. "
-        f"It may still come up shortly. Check it with: jl instance get {machine_id}",
+        f"It may still come up shortly. Check it with: jl get {machine_id}",
     )
 
 
@@ -723,7 +723,7 @@ def _get_instance(transport: Transport, machine_id: int, *, retries: int = 0) ->
             if attempt < retries:
                 time.sleep(FETCH_RETRY_INTERVAL_S)
                 continue
-            raise NotFoundError(f"Instance {machine_id} not found. Check the ID with: jl instance list") from err
+            raise NotFoundError(f"Instance {machine_id} not found. Check the ID with: jl list") from err
 
 
 def _wait_until_instance_missing(

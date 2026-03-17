@@ -46,7 +46,7 @@ RETRY_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 # ── CLI Defaults ─────────────────────────────────────────────────────────────
 
 DEFAULT_TEMPLATE = "pytorch"
-DEFAULT_GPU_TYPE = "RTX5000"
+DEFAULT_GPU_TYPE = "L4"
 DEFAULT_NUM_GPUS = 1
 DEFAULT_STORAGE_GB = 40  # auto-bumped to EUROPE_MIN_STORAGE_GB for europe
 DEFAULT_INSTANCE_NAME = "Name me"

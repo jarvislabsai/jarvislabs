@@ -32,7 +32,7 @@ def test_instance_exec_requires_command(monkeypatch):
         instance.instance_exec(SimpleNamespace(args=[]), machine_id=123)
 
     assert exc.value.code == 1
-    assert captured["message"] == "No command specified. Use -- to separate: jl instance exec 123 -- <command>"
+    assert captured["message"] == "No command specified. Use -- to separate: jl exec 123 -- <command>"
 
 
 def test_instance_exec_rejects_non_running_instance(monkeypatch):
@@ -50,7 +50,7 @@ def test_instance_exec_rejects_non_running_instance(monkeypatch):
         instance.instance_exec(SimpleNamespace(args=["python", "train.py"]), machine_id=123)
 
     assert exc.value.code == 1
-    assert captured["message"] == "Instance 123 is paused. Resume it first: jl instance resume 123"
+    assert captured["message"] == "Instance 123 is paused. Resume it first: jl resume 123"
 
 
 def test_instance_exec_rejects_missing_ssh_command(monkeypatch):

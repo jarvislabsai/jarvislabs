@@ -56,23 +56,26 @@ export JL_API_KEY="your_api_key"
 # See available GPUs and pricing
 jl gpus
 
-# Create an instance
-jl instance create --gpu A100 --name "my-instance"
+# Create a container instance (pre-configured with PyTorch, Jupyter, IDE)
+jl create --gpu A100 --name "my-instance"
+
+# Create a VM instance (bare-metal SSH access)
+jl create --gpu A100-80GB --vm --name "my-vm"
 
 # Create an instance and expose a custom HTTP port
-jl instance create --gpu L4 --http-ports 7860
+jl create --gpu L4 --http-ports 7860
 
 # SSH into it
-jl instance ssh <machine_id>
+jl ssh <machine_id>
 
 # Pause when done (stops compute billing, data persists)
-jl instance pause <machine_id>
+jl pause <machine_id>
 
 # Resume later — optionally with different hardware
-jl instance resume <machine_id> --gpu H100
+jl resume <machine_id> --gpu H100
 
 # Destroy when no longer needed
-jl instance destroy <machine_id>
+jl destroy <machine_id>
 ```
 
 ### Managed Runs
@@ -108,14 +111,14 @@ jl run stop <run_id>
 ```bash
 jl status                   # Account info and balance
 jl templates                # Available framework templates
-jl instance list            # List all instances
-jl instance exec <id> -- nvidia-smi   # Run a command remotely
-jl instance upload <id> ./data        # Upload files
-jl instance download <id> /home/results.csv  # Download files
+jl list            # List all instances
+jl exec <id> -- nvidia-smi   # Run a command remotely
+jl upload <id> ./data        # Upload files
+jl download <id> /home/results.csv  # Download files
 jl ssh-key add ~/.ssh/id_ed25519.pub --name "my-key"
 jl scripts add ./setup.sh --name "install-deps"
 jl filesystem create --name "datasets" --storage 200
-jl instance get <id>                  # Shows Jupyter + exposed port URLs
+jl get <id>                  # Shows Jupyter + exposed port URLs
 ```
 
 Every command supports `--help`, `--json` (machine-readable output), and `--yes` (skip confirmations).

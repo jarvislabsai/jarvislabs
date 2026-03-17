@@ -20,6 +20,7 @@ def test_instance_create_prompt_includes_storage_and_core_fields(monkeypatch):
 
     with pytest.raises(typer.Exit):
         instance.instance_create(
+            vm=False,
             gpu="RTX5000",
             template="pytorch",
             storage=60,
@@ -46,6 +47,7 @@ def test_instance_create_prompt_lists_script_fields_when_provided(monkeypatch):
 
     with pytest.raises(typer.Exit):
         instance.instance_create(
+            vm=False,
             gpu="RTX5000",
             template="pytorch",
             storage=60,
@@ -75,6 +77,7 @@ def test_instance_create_prompt_includes_region_when_provided(monkeypatch):
 
     with pytest.raises(typer.Exit):
         instance.instance_create(
+            vm=False,
             gpu="RTX5000",
             template="pytorch",
             storage=60,
@@ -104,6 +107,7 @@ def test_instance_create_prompt_includes_http_ports_when_provided(monkeypatch):
 
     with pytest.raises(typer.Exit):
         instance.instance_create(
+            vm=False,
             gpu="RTX5000",
             template="pytorch",
             storage=60,
@@ -133,6 +137,7 @@ def test_instance_create_prompt_normalizes_lowercase_region(monkeypatch):
 
     with pytest.raises(typer.Exit):
         instance.instance_create(
+            vm=False,
             gpu="RTX5000",
             template="pytorch",
             storage=60,
@@ -161,6 +166,7 @@ def test_instance_create_passes_region_to_client(monkeypatch):
     monkeypatch.setattr(instance.render, "instance_detail", lambda *args, **kwargs: None)
 
     instance.instance_create(
+        vm=False,
         gpu="RTX5000",
         template="pytorch",
         storage=60,
@@ -317,3 +323,123 @@ def test_instance_pause_destroy_prompts(fn, args, expected, monkeypatch):
         fn(**args)
 
     assert captured["msg"] == expected
+
+
+# ── --vm flag tests ──────────────────────────────────────────────────────
+
+
+def test_create_vm_rejects_template_vm(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_die(message: str, code: int = 1) -> None:
+        captured["message"] = message
+        raise SystemExit(code)
+
+    monkeypatch.setattr(instance.render, "die", fake_die)
+
+    with pytest.raises(SystemExit):
+        instance.instance_create(
+            gpu="A100",
+            vm=False,
+            template="vm",
+            storage=40,
+            name="test",
+            num_gpus=1,
+            region=None,
+            http_ports="",
+            script_id=None,
+            script_args="",
+            fs_id=None,
+            yes=True,
+            json_output=False,
+        )
+
+    assert captured["message"] == "Use --vm instead of --template vm."
+
+
+def test_create_vm_rejects_http_ports(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_die(message: str, code: int = 1) -> None:
+        captured["message"] = message
+        raise SystemExit(code)
+
+    monkeypatch.setattr(instance.render, "die", fake_die)
+
+    with pytest.raises(SystemExit):
+        instance.instance_create(
+            gpu="A100",
+            vm=True,
+            template="pytorch",
+            storage=40,
+            name="test",
+            num_gpus=1,
+            region=None,
+            http_ports="8080",
+            script_id=None,
+            script_args="",
+            fs_id=None,
+            yes=True,
+            json_output=False,
+        )
+
+    assert captured["message"] == "--http-ports is not supported with --vm. VMs are SSH-only."
+
+
+def test_create_vm_rejects_template_with_vm(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_die(message: str, code: int = 1) -> None:
+        captured["message"] = message
+        raise SystemExit(code)
+
+    monkeypatch.setattr(instance.render, "die", fake_die)
+
+    with pytest.raises(SystemExit):
+        instance.instance_create(
+            gpu="A100",
+            vm=True,
+            template="tensorflow",
+            storage=40,
+            name="test",
+            num_gpus=1,
+            region=None,
+            http_ports="",
+            script_id=None,
+            script_args="",
+            fs_id=None,
+            yes=True,
+            json_output=False,
+        )
+
+    assert captured["message"] == "--vm and --template cannot be used together."
+
+
+def test_create_vm_sets_template_and_bumps_storage(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_confirm(msg: str, *, skip: bool = False) -> bool:
+        captured["msg"] = msg
+        return False
+
+    monkeypatch.setattr(instance.render, "confirm", fake_confirm)
+
+    with pytest.raises(typer.Exit):
+        instance.instance_create(
+            gpu="A100",
+            vm=True,
+            template="pytorch",
+            storage=40,
+            name="test",
+            num_gpus=1,
+            region=None,
+            http_ports="",
+            script_id=None,
+            script_args="",
+            fs_id=None,
+            yes=False,
+            json_output=False,
+        )
+
+    assert "template=vm" in captured["msg"]
+    assert "storage=100GB" in captured["msg"]
