@@ -60,7 +60,7 @@ jl gpus
 jl instance create --gpu A100 --name "my-instance"
 
 # Create an instance and expose a custom HTTP port
-jl instance create --gpu RTX5000 --http-ports 7860
+jl instance create --gpu L4 --http-ports 7860
 
 # SSH into it
 jl instance ssh <machine_id>
@@ -77,19 +77,19 @@ jl instance destroy <machine_id>
 
 ### Managed Runs
 
-Run scripts on GPU instances without manual setup. Code is uploaded, a virtual environment is created, and logs are tracked automatically.
+Run scripts on GPU instances without manual setup. Code is uploaded, a virtual environment is created (with template packages like torch visible by default), and logs are tracked automatically.
 
 For humans, the default mode stays attached to the run, streams logs, and can auto-pause or auto-destroy the instance after the run finishes. For agents, `--json` is meant for detached workflows and returns immediately, so use `--keep` and have the agent pause or destroy the instance after the run.
 
 ```bash
 # Run a training script on a fresh GPU (instance auto-pauses when done)
-jl run train.py --gpu RTX5000
+jl run train.py --gpu L4
 
 # Start a long-running web app on a fresh GPU and expose port 8000
-jl run app.py --gpu RTX5000 --http-ports 8000 --keep --no-follow
+jl run app.py --gpu L4 --http-ports 8000 --keep --no-follow
 
 # Pass script arguments
-jl run train.py --gpu RTX5000 -- --epochs 50 --lr 0.001
+jl run train.py --gpu L4 -- --epochs 50 --lr 0.001
 
 # Sync a project directory and run a script inside it
 jl run . --script train.py --gpu A100 --requirements requirements.txt

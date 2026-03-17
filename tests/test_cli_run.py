@@ -46,7 +46,6 @@ def test_run_start_requires_existing_instance_for_now(monkeypatch):
             num_gpus=1,
             setup=None,
             requirements=None,
-            setup_file=None,
             pause=False,
             destroy=False,
             keep=False,
@@ -83,7 +82,6 @@ def test_run_start_prompt_includes_region_when_provided(monkeypatch):
             http_ports="",
             setup=None,
             requirements=None,
-            setup_file=None,
             pause=False,
             destroy=False,
             keep=True,
@@ -119,7 +117,6 @@ def test_run_start_prompt_includes_http_ports_when_provided(monkeypatch):
             http_ports="7860",
             setup=None,
             requirements=None,
-            setup_file=None,
             pause=False,
             destroy=False,
             keep=True,
@@ -156,7 +153,6 @@ def test_run_start_passes_region_to_client(monkeypatch):
         http_ports="7860,8080",
         setup=None,
         requirements=None,
-        setup_file=None,
         pause=False,
         destroy=False,
         keep=True,
@@ -196,7 +192,6 @@ def test_run_start_rejects_region_with_on(monkeypatch):
             num_gpus=1,
             setup=None,
             requirements=None,
-            setup_file=None,
             pause=False,
             destroy=False,
             keep=False,
@@ -237,7 +232,6 @@ def test_run_start_rejects_json_lifecycle_for_fresh_runs(monkeypatch, flag):
             http_ports="",
             setup=None,
             requirements=None,
-            setup_file=None,
             follow=True,
             json_output=True,
             **kwargs,
@@ -364,6 +358,103 @@ def test_build_run_spec_rejects_script_option_for_file(monkeypatch, tmp_path):
         run._build_run_spec(str(source), [], script_path="other.py")
 
     assert captured["message"] == "--script can only be used with a directory target."
+
+
+# ── _detect_requirements tests ────────────────────────────────────────────
+
+
+def test_detect_requirements_finds_pyproject_with_project_table(tmp_path):
+    project = tmp_path / "myproject"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname = 'foo'\ndependencies = ['requests']\n")
+    spec = run.RunSpec(
+        target_kind="directory", local_target=project,
+        remote_target="/home/myproject", working_dir="/home/myproject",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) == "pyproject.toml"
+
+
+def test_detect_requirements_skips_tool_only_pyproject(tmp_path):
+    project = tmp_path / "myproject"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[tool.ruff]\nline-length = 88\n")
+    spec = run.RunSpec(
+        target_kind="directory", local_target=project,
+        remote_target="/home/myproject", working_dir="/home/myproject",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) is None
+
+
+def test_detect_requirements_falls_through_to_requirements_txt(tmp_path):
+    project = tmp_path / "myproject"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[tool.ruff]\nline-length = 88\n")
+    (project / "requirements.txt").write_text("requests\n")
+    spec = run.RunSpec(
+        target_kind="directory", local_target=project,
+        remote_target="/home/myproject", working_dir="/home/myproject",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) == "requirements.txt"
+
+
+def test_detect_requirements_finds_requirements_txt(tmp_path):
+    project = tmp_path / "myproject"
+    project.mkdir()
+    (project / "requirements.txt").write_text("torch\n")
+    spec = run.RunSpec(
+        target_kind="directory", local_target=project,
+        remote_target="/home/myproject", working_dir="/home/myproject",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) == "requirements.txt"
+
+
+def test_detect_requirements_returns_none_when_no_files(tmp_path):
+    project = tmp_path / "myproject"
+    project.mkdir()
+    (project / "train.py").write_text("print('hi')\n")
+    spec = run.RunSpec(
+        target_kind="directory", local_target=project,
+        remote_target="/home/myproject", working_dir="/home/myproject",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) is None
+
+
+def test_detect_requirements_skips_file_targets(tmp_path):
+    source = tmp_path / "train.py"
+    source.write_text("print('hi')\n")
+    spec = run.RunSpec(
+        target_kind="file", local_target=source,
+        remote_target="/home/train/train.py", working_dir="/home/train",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) is None
+
+
+def test_detect_requirements_skips_command_targets():
+    spec = run.RunSpec(
+        target_kind="command", local_target=None,
+        remote_target=None, working_dir=None,
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) is None
+
+
+def test_detect_requirements_pyproject_takes_priority_over_requirements(tmp_path):
+    project = tmp_path / "myproject"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname = 'foo'\ndependencies = ['torch']\n")
+    (project / "requirements.txt").write_text("requests\n")
+    spec = run.RunSpec(
+        target_kind="directory", local_target=project,
+        remote_target="/home/myproject", working_dir="/home/myproject",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) == "pyproject.toml"
 
 
 def test_write_remote_text_streams_content_over_ssh(monkeypatch):
@@ -531,6 +622,7 @@ def test_start_managed_run_json_mode_returns_summary(monkeypatch, tmp_path):
             'export PATH="$HOME/.local/bin:$PATH" && '
             "(test -d .venv || uv venv --system-site-packages --seed .venv) && "
             ". .venv/bin/activate && "
+            'echo "[jl] No dependency file detected, using template packages" && '
             "python train.py"
         ),
         "instance_origin": "fresh",
@@ -849,7 +941,6 @@ def test_run_start_defaults_fresh_runs_to_pause(monkeypatch):
         script_path=None,
         setup_command=None,
         requirements_path=None,
-        setup_file=None,
     ):
         captured["start"] = {
             "target": target,
@@ -861,7 +952,6 @@ def test_run_start_defaults_fresh_runs_to_pause(monkeypatch):
             "script_path": script_path,
             "setup_command": setup_command,
             "requirements_path": requirements_path,
-            "setup_file": setup_file,
         }
         return "r_fresh", 0
 
@@ -881,7 +971,6 @@ def test_run_start_defaults_fresh_runs_to_pause(monkeypatch):
         num_gpus=1,
         setup=None,
         requirements=None,
-        setup_file=None,
         pause=False,
         destroy=False,
         keep=False,
@@ -906,7 +995,6 @@ def test_compose_launch_command_bootstraps_uv_env():
         spec,
         setup_command="echo setup",
         requirements_name="requirements.txt",
-        setup_file_name="bootstrap.sh",
     )
 
     assert command == (
@@ -914,8 +1002,7 @@ def test_compose_launch_command_bootstraps_uv_env():
         'export PATH="$HOME/.local/bin:$PATH" && '
         "(test -d .venv || uv venv --system-site-packages --seed .venv) && "
         ". .venv/bin/activate && "
-        "uv pip install -r requirements.txt && "
-        "bash bootstrap.sh && "
+        "echo '[jl] Installing from' requirements.txt && uv pip install -r requirements.txt && "
         "echo setup && "
         "python3 train.py --epochs 5"
     )
@@ -924,8 +1011,6 @@ def test_compose_launch_command_bootstraps_uv_env():
 def test_prepare_support_files_uploads_requirements_and_setup(monkeypatch, tmp_path):
     requirements = tmp_path / "requirements.txt"
     requirements.write_text("transformers\n")
-    setup_file = tmp_path / "setup.sh"
-    setup_file.write_text("echo setup\n")
     inst = SimpleNamespace(machine_id=123, ssh_command="ssh root@example.com")
     spec = run.RunSpec(
         target_kind="directory",
@@ -942,19 +1027,16 @@ def test_prepare_support_files_uploads_requirements_and_setup(monkeypatch, tmp_p
         lambda inst, ssh_parts, source, destination, *, label: uploads.append((label, str(source), destination)),
     )
 
-    requirements_name, setup_name = run._prepare_support_files(
+    requirements_name = run._prepare_support_files(
         inst,
         ["ssh", "root@example.com"],
         spec,
         requirements_path=requirements,
-        setup_file=setup_file,
     )
 
     assert requirements_name == "requirements.txt"
-    assert setup_name == "setup.sh"
     assert uploads == [
         ("requirements file", str(requirements), "/home/project/requirements.txt"),
-        ("setup file", str(setup_file), "/home/project/setup.sh"),
     ]
 
 

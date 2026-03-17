@@ -156,6 +156,9 @@ def test_build_rsync_upload_command_preserves_ssh_transport():
         "-e",
         "ssh -o StrictHostKeyChecking=no -p 2222 -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR",
         "--delete",
+        "--exclude", ".venv/",
+        "--exclude", ".git/",
+        "--exclude", "__pycache__/",
         "/tmp/project/",
         "root@example.com:/home/project/",
     ]
