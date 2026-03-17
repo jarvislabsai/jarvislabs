@@ -322,59 +322,11 @@ Agent rule:
 - Do not assume `machine_id` is stable after `jl resume` — it may return a new ID. Always use the returned ID.
 - Do not forget to pause/destroy instances after experiments — they cost money.
 
-## Command Reference
+## Command Discovery
 
-### Account & Resources
+Every command supports `--help` for full flag details:
 
-| Command | Description |
-|---|---|
-| `jl setup --token <token> --yes` | Authenticate + install agent skills |
-| `jl logout` | Remove saved token |
-| `jl status --json` | Balance, running/paused counts |
-| `jl gpus --json` | GPU availability and pricing |
-| `jl templates --json` | Framework templates |
-
-### Instance Lifecycle
-
-| Command | Description |
-|---|---|
-| `jl create --gpu A100 --yes --json` | Create container instance (also: `--vm`, `--template`, `--storage`, `--fs-id`, `--script-id`) |
-| `jl list --json` | List all instances |
-| `jl get <id> --json` | Instance details (SSH, URLs, status) |
-| `jl pause <id> --yes --json` | Pause (stops compute billing, keeps data) |
-| `jl resume <id> --yes --json` | Resume (supports `--gpu`, `--storage`, `--num-gpus`, `--name`, `--http-ports`, `--fs-id`) |
-| `jl destroy <id> --yes --json` | Permanently delete |
-| `jl rename <id> --name "new-name" --yes --json` | Rename |
-
-### Instance Operations (require Running status)
-
-| Command | Description |
-|---|---|
-| `jl exec <id> -- <command>` | Run command remotely (use `--` separator) |
-| `jl exec <id> --json -- <command>` | Capture stdout, stderr, exit_code as JSON |
-| `jl ssh <id>` | Interactive SSH session |
-| `jl ssh <id> --print-command` | Print the SSH command |
-| `jl upload <id> ./local [/remote]` | Upload file or directory |
-| `jl download <id> /remote [./local] [-r]` | Download file or directory |
-
-### Managed Runs
-
-| Command | Description |
-|---|---|
-| `jl run <target> --on <id> --json --yes` | Start run on existing instance |
-| `jl run <target> --gpu <gpu> --keep --json --yes` | Fresh instance + run (agent must clean up) |
-| `jl run logs <run_id> --tail 50` | Recent logs with run state in header/footer |
-| `jl run status <run_id> --json` | Run state, exit_code, machine_id, launch_command |
-| `jl run stop <run_id> --json` | Kill the run (process group) |
-| `jl run list --refresh --json` | All runs with live status (`saved` without `--refresh`) |
-| `jl run list --limit 5 --json` | Most recent N runs |
-| `jl run list --status running --json` | Filter by state (auto-refreshes) |
-| `jl run list --machine <id> --json` | Filter by instance |
-
-### Infrastructure
-
-| Command | Description |
-|---|---|
-| `jl ssh-key list/add/remove` | Manage SSH keys |
-| `jl scripts list/add/update/remove` | Manage startup scripts |
-| `jl filesystem list/create/edit/remove` | Manage persistent filesystems |
+```bash
+jl create --help       jl run --help       jl ssh-key --help
+jl resume --help       jl run logs --help  jl filesystem --help
+```
