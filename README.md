@@ -5,33 +5,32 @@
 
 CLI and Python SDK for managing GPU instances on [JarvisLabs.ai](https://jarvislabs.ai).
 
-> **Beta release.** The v0.2 rewrite is in pre-release. Install with `--pre` to get it.
-
 See the docs on [Jarvislabs Docs](https://docs.jarvislabs.ai/cli/)
+
 ## Installation
 
 ### As a CLI tool (recommended)
 
 ```bash
-uv tool install --pre jarvislabs
+uv tool install jarvislabs
 ```
 
 To upgrade:
 
 ```bash
-uv tool upgrade --pre jarvislabs
+uv tool upgrade jarvislabs
 ```
 
 ### As a library
 
 ```bash
-pip install --pre jarvislabs
+pip install jarvislabs
 ```
 
 Or with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv pip install --pre jarvislabs
+uv pip install jarvislabs
 ```
 
 Requires Python 3.10+.
