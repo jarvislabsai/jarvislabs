@@ -8,7 +8,7 @@ version = "0.2.0b13"
 description = "CLI and SDK for JarvisLabs.ai GPU cloud"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 authors = [{ name = "Team Jarvislabs.ai", email = "hello@jarvislabs.ai" }]
 keywords = ["gpu", "cloud", "jarvislabs", "cli", "sdk"]
 classifiers = [
@@ -26,6 +26,7 @@ dependencies = [
     "rich>=13.0",
     "platformdirs>=4.0",
     "tomli-w>=1.0",
+    "tomli>=2.0; python_version < '3.11'",
     "questionary>=2.1.1",
 ]
 
