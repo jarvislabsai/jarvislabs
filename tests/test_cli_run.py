@@ -529,7 +529,7 @@ def test_start_managed_run_json_mode_returns_summary(monkeypatch, tmp_path):
         "command": (
             "command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; } && "
             'export PATH="$HOME/.local/bin:$PATH" && '
-            "(test -d .venv || uv venv .venv) && "
+            "(test -d .venv || uv venv --system-site-packages --seed .venv) && "
             ". .venv/bin/activate && "
             "python train.py"
         ),
@@ -912,7 +912,7 @@ def test_compose_launch_command_bootstraps_uv_env():
     assert command == (
         "command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; } && "
         'export PATH="$HOME/.local/bin:$PATH" && '
-        "(test -d .venv || uv venv .venv) && "
+        "(test -d .venv || uv venv --system-site-packages --seed .venv) && "
         ". .venv/bin/activate && "
         "uv pip install -r requirements.txt && "
         "bash bootstrap.sh && "

@@ -595,7 +595,7 @@ def _compose_launch_command(
     commands = [
         "command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; }",
         'export PATH="$HOME/.local/bin:$PATH"',
-        "(test -d .venv || uv venv .venv)",
+        "(test -d .venv || uv venv --system-site-packages --seed .venv)",
         ". .venv/bin/activate",
     ]
     if requirements_name:
