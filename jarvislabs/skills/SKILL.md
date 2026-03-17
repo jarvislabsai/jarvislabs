@@ -65,7 +65,7 @@ Container instances expose default HTTP ports (each gets its own HTTPS URL):
 | 7007 | IDE (`vs_url` field) |
 | 6006 | Available on generic templates like pytorch (`endpoints[0]`) |
 
-VM instances (`jl create --gpu ... --vm`) get SSH-only access. Use `ssh_command` from `jl get <id> --json`.
+VM instances (`jl create --gpu ... --vm`) get SSH-only access. VMs require at least one SSH key registered (`jl ssh-key add`). Use `ssh_command` from `jl get <id> --json`.
 
 To expose a service (FastAPI, Gradio, etc.), bind to `0.0.0.0:6006` — it's accessible via `endpoints[0]` on generic templates. Use `--http-ports "7860,8080"` at creation or resume to expose custom ports. Custom port URLs appear in `endpoints` after the default 6006 entry.
 
@@ -88,6 +88,11 @@ Run `jl get <id> --json` to find all service URLs (`url`, `vs_url`, `endpoints`)
 | No target, command after `--` | No upload, no environment setup. Runs the raw command directly. |
 
 Only `.py` and `.sh` file targets are supported. For other file types, use a directory target or `jl upload` + `jl exec`.
+
+Pass script arguments after `--`:
+```bash
+jl run train.py --on <id> --json --yes -- --epochs 50 --lr 0.001
+```
 
 ### Environment & setup
 
@@ -323,6 +328,9 @@ Agent rule:
 - Do not poll every few seconds — use 60-600s intervals based on expected run duration.
 - Do not use lifecycle flags (`--keep`, `--pause`, `--destroy`) with `--on` — they are rejected. Only for fresh instances.
 - Do not use `--pause` or `--destroy` with `--json` for fresh instances — rejected. Use `--keep --json` and clean up yourself.
+- Do not use `jl exec` for long-running tasks — it blocks until the command finishes. Use `jl run` which runs in the background with log tracking.
+- Do not trust `jl run list` without `--refresh` — state shows as `"saved"` (stale). Use `--refresh` or `--status` for live state.
+- Do not assume `machine_id` is stable after `jl resume` — it may return a new ID. Always use the returned ID.
 - Do not forget to pause/destroy instances after experiments — they cost money.
 
 ## Command Reference
@@ -341,7 +349,7 @@ Agent rule:
 
 | Command | Description |
 |---|---|
-| `jl create --gpu H100 --storage 100 --template pytorch --yes --json` | Create instance |
+| `jl create --gpu A100 --yes --json` | Create container instance (also: `--vm`, `--template`, `--storage`, `--fs-id`, `--script-id`) |
 | `jl list --json` | List all instances |
 | `jl get <id> --json` | Instance details (SSH, URLs, status) |
 | `jl pause <id> --yes --json` | Pause (stops compute billing, keeps data) |

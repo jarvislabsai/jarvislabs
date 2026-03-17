@@ -203,7 +203,9 @@ def test_instance_download_defaults_local_dest(monkeypatch):
     monkeypatch.setattr(state, "json_output", False)
 
     with pytest.raises(SystemExit) as exc:
-        instance.instance_download(machine_id=123, source="/root/output/model.pt", dest=None, recursive=False)
+        instance.instance_download(
+            machine_id=123, source="/root/output/model.pt", dest=None, recursive=False, json_output=True
+        )
 
     assert exc.value.code == 0
     assert recorded["parts"] == [
@@ -283,7 +285,9 @@ def test_instance_download_json_mode_returns_summary(monkeypatch):
     monkeypatch.setattr(instance.render, "print_json", lambda payload: captured.setdefault("payload", payload))
     monkeypatch.setattr(state, "json_output", True)
 
-    instance.instance_download(machine_id=123, source="/root/output/model.pt", dest=None, recursive=False)
+    instance.instance_download(
+        machine_id=123, source="/root/output/model.pt", dest=None, recursive=False, json_output=True
+    )
 
     assert captured["payload"] == {
         "machine_id": 123,
