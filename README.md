@@ -34,7 +34,7 @@ Or with [uv](https://docs.astral.sh/uv/):
 uv pip install --pre jarvislabs
 ```
 
-Requires Python 3.11+.
+Requires Python 3.10+.
 
 ## Authentication
 

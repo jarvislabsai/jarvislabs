@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import time
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
@@ -464,7 +464,7 @@ def _write_remote_metadata(ssh_parts: list[str], inst, paths: RunPaths, spec: Ru
         "remote_target": spec.remote_target,
         "working_dir": spec.working_dir,
         "launch_command": spec.launch_command,
-        "started_at": datetime.now(UTC).isoformat(),
+        "started_at": datetime.now(timezone.utc).isoformat(),
     }
     status = _write_remote_text(ssh_parts, paths.remote_meta, json.dumps(payload, indent=2) + "\n")
     if status != 0:
@@ -810,7 +810,7 @@ def _start_managed_run(
         remote_pid=paths.remote_pid,
         remote_exit_code=paths.remote_exit_code,
         launch_command=spec.launch_command,
-        started_at=datetime.now(UTC).isoformat(),
+        started_at=datetime.now(timezone.utc).isoformat(),
         instance_origin=instance_origin,
         lifecycle_policy=lifecycle_policy,
     )
