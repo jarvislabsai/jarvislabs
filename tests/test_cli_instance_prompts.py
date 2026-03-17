@@ -441,5 +441,6 @@ def test_create_vm_sets_template_and_bumps_storage(monkeypatch):
             json_output=False,
         )
 
+    assert captured["msg"].startswith("Create VM")
     assert "template=vm" in captured["msg"]
     assert "storage=100GB" in captured["msg"]

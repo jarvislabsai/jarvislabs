@@ -156,12 +156,13 @@ def instance_create(
         details.append(f"script_args={script_args!r}")
     if fs_id is not None:
         details.append(f"fs_id={fs_id}")
-    prompt = f"Create instance ({', '.join(details)})?"
+    noun = "VM" if template == "vm" else "instance"
+    prompt = f"Create {noun} ({', '.join(details)})?"
     if not render.confirm(prompt, skip=state.yes):
         raise typer.Exit()
 
     client = get_client()
-    with render.spinner("Creating instance — this may take a few seconds..."):
+    with render.spinner(f"Creating {noun} — this may take a few seconds..."):
         inst = client.instances.create(
             gpu_type=gpu,
             num_gpus=num_gpus,
@@ -179,7 +180,7 @@ def instance_create(
         render.print_json(inst)
         return
 
-    render.success(f"Instance {inst.machine_id} is Running.")
+    render.success(f"{'VM' if noun == 'VM' else 'Instance'} {inst.machine_id} is Running.")
     render.instance_detail(inst, client.account.currency())
 
 
