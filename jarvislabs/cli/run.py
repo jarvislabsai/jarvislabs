@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import shlex
 import shutil
@@ -46,19 +47,30 @@ class RunCommandGroup(TyperGroup):
             "  jl run TARGET --on <instance_id> [-- script args]\n"
             "  jl run TARGET --gpu <gpu> [-- script args]\n\n"
             "Common examples:\n"
-            "  jl run train.py --gpu RTX5000\n"
-            "  jl run train.py --gpu RTX5000 -- --epochs 5\n"
+            "  jl run train.py --gpu L4\n"
+            "  jl run train.py --gpu L4 -- --epochs 5\n"
             "  jl run . --script train.py --on <instance_id>\n"
             "  jl run --on <instance_id> -- python -c \"print('hi')\"\n\n"
             "Key start options:\n"
             "  --on INTEGER           Run on an existing instance.\n"
             "  --gpu TEXT             Create a fresh instance with this GPU.\n"
+            "  --vm                   Create a VM instead of a container.\n"
             "  --http-ports TEXT      Expose comma-separated HTTP ports on a fresh instance.\n"
             "  --script TEXT          Script path inside a directory target.\n"
-            "  --requirements PATH    Upload and install a local requirements file.\n"
+            "  --requirements PATH    Override auto-detection with a custom requirements file.\n"
             "  --setup TEXT           Shell command to run before the main command.\n"
-            "  --setup-file PATH      Local bash file to run before the main command.\n"
             "  --follow / --no-follow Stream logs after starting the run.\n"
+            "\n"
+            "Environment:\n"
+            "  For directory targets, pyproject.toml and requirements.txt are\n"
+            "  auto-detected and installed. Use --requirements to override.\n"
+            "\n"
+            "Lifecycle note:\n"
+            "  Human workflow: use the default mode where the CLI stays attached to the\n"
+            "  run and streams logs if you want it to pause or destroy the instance after\n"
+            "  the run finishes.\n"
+            "  Agent workflow: --json is for detached runs, so use --keep and have the\n"
+            "  agent clean up the instance after the run.\n"
         )
         return help_text + start_help
 
@@ -314,7 +326,7 @@ def _resolve_run_ssh(run_id: str) -> tuple[LocalRunRecord, list[str]]:
 
     if inst.status == "Paused":
         render.die(
-            f"Run {run_id} belongs to paused instance {record.machine_id}. Resume it first: jl instance resume {record.machine_id}"
+            f"Run {run_id} belongs to paused instance {record.machine_id}. Resume it first: jl resume {record.machine_id}"
         )
 
     if inst.status != "Running":
@@ -403,7 +415,7 @@ def _build_run_spec(
         else:
             render.die(
                 "Directory targets require --script <path> or a command after --. "
-                "Example: jl run . --script train.py --gpu RTX5000"
+                "Example: jl run . --script train.py --gpu L4"
             )
         return RunSpec(
             target_kind="directory",
@@ -530,6 +542,31 @@ def _prepare_remote_target(inst, ssh_parts: list[str], spec: RunSpec) -> None:
     _upload_file_to_instance(inst, ssh_parts, spec.local_target, spec.remote_target, label="file")
 
 
+def _detect_requirements(spec: RunSpec) -> str | None:
+    """Auto-detect a dependency file in the local directory target.
+
+    Returns the filename to install from on the remote (the file is synced via rsync).
+    Only applies to directory targets — file and command modes return None.
+    """
+    if spec.target_kind != "directory" or spec.local_target is None:
+        return None
+
+    pyproject = spec.local_target / "pyproject.toml"
+    if pyproject.exists():
+        try:
+            content = pyproject.read_text()
+            if re.search(r"^\s*\[project\]", content, re.MULTILINE):
+                return "pyproject.toml"
+        except OSError:
+            pass
+
+    requirements = spec.local_target / "requirements.txt"
+    if requirements.exists():
+        return "requirements.txt"
+
+    return None
+
+
 def _upload_support_file(inst, ssh_parts: list[str], source: Path, destination: str, *, label: str) -> None:
     _upload_file_to_instance(inst, ssh_parts, source, destination, label=label)
 
@@ -540,37 +577,22 @@ def _prepare_support_files(
     spec: RunSpec,
     *,
     requirements_path: Path | None,
-    setup_file: Path | None,
-) -> tuple[str | None, str | None]:
-    if requirements_path is None and setup_file is None:
-        return None, None
+) -> str | None:
+    if requirements_path is None:
+        return None
 
     if spec.working_dir is None:
-        render.die("--requirements and --setup-file require a file or directory target.")
+        render.die("--requirements requires a file or directory target.")
 
-    remote_requirements = None
-    if requirements_path is not None:
-        remote_requirements = requirements_path.name
-        _upload_support_file(
-            inst,
-            ssh_parts,
-            requirements_path,
-            (PurePosixPath(spec.working_dir) / requirements_path.name).as_posix(),
-            label="requirements file",
-        )
-
-    remote_setup_file = None
-    if setup_file is not None:
-        remote_setup_file = setup_file.name
-        _upload_support_file(
-            inst,
-            ssh_parts,
-            setup_file,
-            (PurePosixPath(spec.working_dir) / setup_file.name).as_posix(),
-            label="setup file",
-        )
-
-    return remote_requirements, remote_setup_file
+    requirements_name = requirements_path.name
+    _upload_support_file(
+        inst,
+        ssh_parts,
+        requirements_path,
+        (PurePosixPath(spec.working_dir) / requirements_path.name).as_posix(),
+        label="requirements file",
+    )
+    return requirements_name
 
 
 def _compose_launch_command(
@@ -578,23 +600,23 @@ def _compose_launch_command(
     *,
     setup_command: str | None,
     requirements_name: str | None,
-    setup_file_name: str | None,
 ) -> str:
     if spec.target_kind == "command":
-        if requirements_name or setup_file_name:
-            render.die("--requirements and --setup-file require a file or directory target.")
+        if requirements_name:
+            render.die("--requirements requires a file or directory target.")
         return _with_setup(spec.launch_command, setup_command)
 
     commands = [
         "command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; }",
         'export PATH="$HOME/.local/bin:$PATH"',
-        "(test -d .venv || uv venv .venv)",
+        "(test -d .venv || uv venv --system-site-packages --seed .venv)",
         ". .venv/bin/activate",
     ]
     if requirements_name:
-        commands.append(f"uv pip install -r {shlex.quote(requirements_name)}")
-    if setup_file_name:
-        commands.append(f"bash {shlex.quote(setup_file_name)}")
+        quoted = shlex.quote(requirements_name)
+        commands.append(f"echo '[jl] Installing from' {quoted} && uv pip install -r {quoted}")
+    else:
+        commands.append('echo "[jl] No dependency file detected, using template packages"')
     if setup_command:
         commands.append(setup_command)
     commands.append(spec.launch_command)
@@ -711,7 +733,7 @@ def _wait_for_ssh_ready(machine_id: int, *, timeout_s: int = 90, poll_s: int = 3
 
         last_status = inst.status
         if inst.status == "Paused":
-            render.die(f"Instance {machine_id} is paused. Resume it first: jl instance resume {machine_id}")
+            render.die(f"Instance {machine_id} is paused. Resume it first: jl resume {machine_id}")
         if inst.status != "Running":
             render.die(f"Instance {machine_id} is not available for runs yet (status: {inst.status}).")
 
@@ -723,7 +745,7 @@ def _wait_for_ssh_ready(machine_id: int, *, timeout_s: int = 90, poll_s: int = 3
 
     render.die(
         f"Instance {machine_id} is {last_status}, but SSH is not ready yet. "
-        f"Wait a bit and retry, or check it with: jl instance exec {machine_id} -- echo ok"
+        f"Wait a bit and retry, or check it with: jl exec {machine_id} -- echo ok"
     )
 
 
@@ -738,7 +760,6 @@ def _start_managed_run(
     script_path: str | None = None,
     setup_command: str | None = None,
     requirements_path: Path | None = None,
-    setup_file: Path | None = None,
 ) -> tuple[str, int | None]:
     inst, ssh_parts = _wait_for_ssh_ready(machine_id)
     spec = _build_run_spec(target, extra_args, script_path=script_path, ssh_command=inst.ssh_command)
@@ -749,13 +770,20 @@ def _start_managed_run(
         render.die(f"Failed to create remote run directory {paths.remote_run_dir}.")
 
     _prepare_remote_target(inst, ssh_parts, spec)
-    requirements_name, setup_file_name = _prepare_support_files(
-        inst,
-        ssh_parts,
-        spec,
-        requirements_path=requirements_path,
-        setup_file=setup_file,
-    )
+
+    # Determine which requirements to install:
+    # 1. Explicit --requirements overrides everything
+    # 2. Otherwise auto-detect from local directory (pyproject.toml > requirements.txt)
+    if requirements_path:
+        requirements_name = _prepare_support_files(
+            inst,
+            ssh_parts,
+            spec,
+            requirements_path=requirements_path,
+        )
+    else:
+        requirements_name = _detect_requirements(spec)
+
     spec = RunSpec(
         target_kind=spec.target_kind,
         local_target=spec.local_target,
@@ -765,7 +793,6 @@ def _start_managed_run(
             spec,
             setup_command=setup_command,
             requirements_name=requirements_name,
-            setup_file_name=setup_file_name,
         ),
     )
     _write_remote_wrapper(ssh_parts, paths, spec)
@@ -872,8 +899,9 @@ def run_start(
     script: str | None = typer.Option(
         None,
         "--script",
-        help="Python script path inside a directory target. Example: jl run . --script train.py --gpu RTX5000",
+        help="Python script path inside a directory target. Example: jl run . --script train.py --gpu L4",
     ),
+    vm: bool = typer.Option(False, "--vm", help="Create a VM instance instead of a container."),
     template: str = typer.Option("pytorch", "--template", "-t", help="Framework template for fresh instances."),
     storage: int = typer.Option(40, "--storage", "-s", help="Storage in GB for fresh instances."),
     name: str = typer.Option("jl-run", "--name", "-n", help="Instance name for fresh runs."),
@@ -883,12 +911,7 @@ def run_start(
     requirements: str | None = typer.Option(
         None,
         "--requirements",
-        help="Local requirements file to upload and install into the run .venv.",
-    ),
-    setup_file: str | None = typer.Option(
-        None,
-        "--setup-file",
-        help="Local bash file to upload and run inside the stable project directory before the main command.",
+        help="Override auto-detection: upload and install this requirements file instead.",
     ),
     pause: bool = typer.Option(False, "--pause", help="Pause a fresh instance after the run completes."),
     destroy: bool = typer.Option(False, "--destroy", help="Destroy a fresh instance after the run completes."),
@@ -901,7 +924,18 @@ def run_start(
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     target, extra_args = _parse_run_inputs(list(ctx.args))
     requirements_path = _resolve_local_input(requirements, label="Requirements file")
-    setup_file_path = _resolve_local_input(setup_file, label="Setup file")
+
+    # Handle --vm flag
+    if vm:
+        if template != "pytorch":
+            render.die("--vm and --template cannot be used together.")
+        template = "vm"
+        if storage == 40:
+            storage = 100
+        if http_ports:
+            render.die("--http-ports is not supported with --vm. VMs are SSH-only.")
+    if template.strip().lower() == "vm" and not vm:
+        render.die("Use --vm instead of --template vm.")
 
     lifecycle = _pick_lifecycle_policy(pause=pause, destroy=destroy, keep=keep)
 
@@ -909,6 +943,8 @@ def run_start(
         render.die("Use either --on <instance_id> or --gpu <type>, not both.")
 
     if on is not None:
+        if vm:
+            render.die("--vm is only supported with --gpu for fresh instances.")
         if region is not None:
             render.die("--region is only supported with --gpu for fresh instances.")
         if lifecycle is not None:
@@ -923,7 +959,6 @@ def run_start(
             script_path=script,
             setup_command=setup,
             requirements_path=requirements_path,
-            setup_file=setup_file_path,
         )
         if exit_code not in (None, 0):
             raise SystemExit(exit_code)
@@ -937,6 +972,17 @@ def run_start(
             render.die("--no-follow requires an explicit lifecycle flag. Use --keep, --pause, or --destroy.")
         lifecycle = "pause"
         render.info("No lifecycle flag provided for the fresh run. Defaulting to --pause.")
+
+    if state.json_output and lifecycle in {"pause", "destroy"}:
+        render.die(
+            f"--{lifecycle} is not supported with --json for fresh runs.\n\n"
+            "--json is mainly meant for agent workflows. It prints the run details and returns right away, "
+            f"so the run becomes detached from this CLI session. Because the CLI is no longer attached, it cannot "
+            f"{lifecycle} the instance when the run finishes.\n\n"
+            "What to do instead:\n"
+            f"  Agent workflow: use --keep --json, then have the agent watch the run and call jl {lifecycle} <machine_id> when it is done.\n"
+            f"  Human workflow: drop --json and use the default mode where the CLI stays attached to the run if you want it to apply --{lifecycle} after the run finishes."
+        )
 
     if not follow and lifecycle != "keep":
         render.die("--no-follow is only supported with --keep for fresh runs right now.")
@@ -975,11 +1021,10 @@ def run_start(
             script_path=script,
             setup_command=setup,
             requirements_path=requirements_path,
-            setup_file=setup_file_path,
         )
     except SystemExit:
         render.warning(
-            f"Run setup failed after creating instance {inst.machine_id}. Manage it manually with jl instance ssh/pause/destroy."
+            f"Run setup failed after creating instance {inst.machine_id}. Manage it manually with jl ssh/pause/destroy."
         )
         raise
 

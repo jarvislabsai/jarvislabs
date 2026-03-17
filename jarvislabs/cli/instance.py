@@ -1,4 +1,4 @@
-"""Instance commands for lifecycle, SSH, exec, and file transfer."""
+"""Machine commands — lifecycle, SSH, exec, and file transfer (registered on root app)."""
 
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ from jarvislabs.ssh import (
 if TYPE_CHECKING:
     from jarvislabs.models import Instance
 
-instance_app = typer.Typer(name="instance", help="Manage GPU instances.")
-app.add_typer(instance_app, rich_help_panel="Infrastructure")
+_MACHINE_PANEL = "Machine Management"
+_ACCESS_PANEL = "Remote Access"
 
 
 def _resolve_ssh(machine_id: int) -> tuple[Instance, list[str]]:
@@ -34,7 +34,7 @@ def _resolve_ssh(machine_id: int) -> tuple[Instance, list[str]]:
 
     if inst.status != "Running":
         if inst.status == "Paused":
-            render.die(f"Instance {machine_id} is paused. Resume it first: jl instance resume {machine_id}")
+            render.die(f"Instance {machine_id} is paused. Resume it first: jl resume {machine_id}")
         if inst.status in {"Creating", "Resuming"}:
             render.die(f"Instance {machine_id} is not ready yet (status: {inst.status}). Wait for it to reach Running.")
         render.die(f"Instance {machine_id} is not available for SSH (status: {inst.status}).")
@@ -77,7 +77,7 @@ def _default_download_dest(source: str) -> str:
     return name
 
 
-@instance_app.command("list")
+@app.command("list", rich_help_panel=_MACHINE_PANEL)
 def instance_list(
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -95,7 +95,7 @@ def instance_list(
     render.instances_table(instances, currency)
 
 
-@instance_app.command("get")
+@app.command("get", rich_help_panel=_MACHINE_PANEL)
 def instance_get(
     machine_id: int = typer.Argument(..., help="Instance ID."),
     json_output: cli_options.JsonOption = False,
@@ -114,10 +114,11 @@ def instance_get(
     render.instance_detail(inst, currency)
 
 
-@instance_app.command("create")
+@app.command("create", rich_help_panel=_MACHINE_PANEL)
 def instance_create(
-    gpu: str = typer.Option(..., "--gpu", "-g", help="GPU type (e.g. H100, A100, RTX5000)."),
-    template: str = typer.Option("pytorch", "--template", "-t", help="Framework template."),
+    gpu: str = typer.Option(..., "--gpu", "-g", help="GPU type (e.g. H100, A100, L4)."),
+    vm: bool = typer.Option(False, "--vm", help="Create a VM instance (SSH-only, no container)."),
+    template: str = typer.Option("pytorch", "--template", "-t", help="Framework template for container instances."),
     storage: int = typer.Option(40, "--storage", "-s", help="Storage in GB."),
     name: str = typer.Option("Name me", "--name", "-n", help="Instance name."),
     num_gpus: int = typer.Option(1, "--num-gpus", help="Number of GPUs."),
@@ -129,8 +130,21 @@ def instance_create(
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Create a new GPU instance."""
+    """Create a new GPU instance (container or VM)."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
+
+    # Handle --vm flag
+    if vm:
+        if template != "pytorch":
+            render.die("--vm and --template cannot be used together.")
+        template = "vm"
+        if storage == 40:
+            storage = 100
+        if http_ports:
+            render.die("--http-ports is not supported with --vm. VMs are SSH-only.")
+    if template.strip().lower() == "vm" and not vm:
+        render.die("Use --vm instead of --template vm.")
+
     details = [f"gpu={num_gpus}x {gpu}", f"template={template}", f"storage={storage}GB", f"name={name!r}"]
     if region:
         details.append(f"region={region.upper()}")
@@ -142,12 +156,13 @@ def instance_create(
         details.append(f"script_args={script_args!r}")
     if fs_id is not None:
         details.append(f"fs_id={fs_id}")
-    prompt = f"Create instance ({', '.join(details)})?"
+    noun = "VM" if template == "vm" else "instance"
+    prompt = f"Create {noun} ({', '.join(details)})?"
     if not render.confirm(prompt, skip=state.yes):
         raise typer.Exit()
 
     client = get_client()
-    with render.spinner("Creating instance — this may take a few seconds..."):
+    with render.spinner(f"Creating {noun} — this may take a few seconds..."):
         inst = client.instances.create(
             gpu_type=gpu,
             num_gpus=num_gpus,
@@ -165,11 +180,11 @@ def instance_create(
         render.print_json(inst)
         return
 
-    render.success(f"Instance {inst.machine_id} is Running.")
+    render.success(f"{'VM' if noun == 'VM' else 'Instance'} {inst.machine_id} is Running.")
     render.instance_detail(inst, client.account.currency())
 
 
-@instance_app.command("rename")
+@app.command("rename", rich_help_panel=_MACHINE_PANEL)
 def instance_rename(
     machine_id: int = typer.Argument(..., help="Instance ID to rename."),
     name: str = typer.Option(..., "--name", "-n", help="New instance name."),
@@ -192,7 +207,7 @@ def instance_rename(
     render.success(f"Instance {machine_id} renamed to {name!r}.")
 
 
-@instance_app.command("pause")
+@app.command("pause", rich_help_panel=_MACHINE_PANEL)
 def instance_pause(
     machine_id: int = typer.Argument(..., help="Instance ID to pause."),
     yes: cli_options.YesOption = False,
@@ -217,7 +232,7 @@ def instance_pause(
     render.success(f"Instance {machine_id} paused.")
 
 
-@instance_app.command("resume")
+@app.command("resume", rich_help_panel=_MACHINE_PANEL)
 def instance_resume(
     machine_id: int = typer.Argument(..., help="Instance ID to resume."),
     gpu: str | None = typer.Option(None, "--gpu", "-g", help="Resume with a different GPU type."),
@@ -280,7 +295,7 @@ def instance_resume(
     render.instance_detail(inst, client.account.currency())
 
 
-@instance_app.command("destroy")
+@app.command("destroy", rich_help_panel=_MACHINE_PANEL)
 def instance_destroy(
     machine_id: int = typer.Argument(..., help="Instance ID to destroy."),
     yes: cli_options.YesOption = False,
@@ -308,7 +323,7 @@ def instance_destroy(
     render.success(f"Instance {machine_id} destroyed.")
 
 
-@instance_app.command("ssh")
+@app.command("ssh", rich_help_panel=_ACCESS_PANEL)
 def instance_ssh(
     machine_id: int = typer.Argument(..., help="Instance ID."),
     print_command: bool = typer.Option(False, "--print-command", "-p", help="Print SSH command instead of connecting."),
@@ -333,7 +348,7 @@ def instance_ssh(
 
     if inst.status != "Running":
         if inst.status == "Paused":
-            render.die(f"Instance {machine_id} is paused. Resume it first: jl instance resume {machine_id}")
+            render.die(f"Instance {machine_id} is paused. Resume it first: jl resume {machine_id}")
         if inst.status in {"Creating", "Resuming"}:
             render.die(f"Instance {machine_id} is not ready yet (status: {inst.status}). Wait for it to reach Running.")
         render.die(f"Instance {machine_id} is not available for SSH (status: {inst.status}).")
@@ -347,8 +362,9 @@ def instance_ssh(
     raise SystemExit(subprocess.call(parts))
 
 
-@instance_app.command(
+@app.command(
     "exec",
+    rich_help_panel=_ACCESS_PANEL,
     context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
 )
 def instance_exec(
@@ -359,7 +375,7 @@ def instance_exec(
     """Execute a command on a running instance."""
     cli_options.apply_command_options(json_output=json_output)
     if not ctx.args:
-        render.die(f"No command specified. Use -- to separate: jl instance exec {machine_id} -- <command>")
+        render.die(f"No command specified. Use -- to separate: jl exec {machine_id} -- <command>")
 
     _, parts = _resolve_ssh(machine_id)
     try:
@@ -395,7 +411,7 @@ def instance_exec(
     raise SystemExit(exit_code)
 
 
-@instance_app.command("upload")
+@app.command("upload", rich_help_panel=_ACCESS_PANEL)
 def instance_upload(
     machine_id: int = typer.Argument(..., help="Instance ID."),
     source: Path = typer.Argument(
@@ -450,7 +466,7 @@ def instance_upload(
     raise SystemExit(subprocess.call(parts))
 
 
-@instance_app.command("download")
+@app.command("download", rich_help_panel=_ACCESS_PANEL)
 def instance_download(
     machine_id: int = typer.Argument(..., help="Instance ID."),
     source: str = typer.Argument(..., help="Remote file or directory to download."),

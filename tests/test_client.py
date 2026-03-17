@@ -318,7 +318,7 @@ class TestPollUntilRunning:
         with (
             patch("jarvislabs.client.time.monotonic", side_effect=[0, 100, 200]),
             patch("jarvislabs.client.time.sleep"),
-            pytest.raises(APIError, match=r"Timed out.*jl instance get 1"),
+            pytest.raises(APIError, match=r"Timed out.*jl get 1"),
         ):
             _poll_until_running(mock_transport, machine_id=1, region="india-01")
 
@@ -327,7 +327,7 @@ class TestPollUntilRunning:
         with (
             patch("jarvislabs.client.time.monotonic", side_effect=[0, 250, 301]),
             patch("jarvislabs.client.time.sleep"),
-            pytest.raises(APIError, match=r"Timed out.*jl instance get 1"),
+            pytest.raises(APIError, match=r"Timed out.*jl get 1"),
         ):
             _poll_until_running(mock_transport, machine_id=1, region=EUROPE_REGION)
 
@@ -773,6 +773,38 @@ class TestLifecycleRouting:
             params={"machine_id": 10},
             base_url=REGION_URLS["india-noida-01"],
         )
+
+    def test_destroy_treats_missing_instance_as_success_after_error_payload(self, mock_transport):
+        instance = MagicMock(template="pytorch", region="india-01")
+        with patch("jarvislabs.client._get_instance") as mock_get:
+            mock_get.side_effect = [
+                instance,
+                NotFoundError("Instance 10 not found"),
+            ]
+            mock_transport.request.return_value = {"error": "Unknown error"}
+
+            assert _make_instances(mock_transport).destroy(10) is True
+
+    def test_destroy_treats_missing_instance_as_success_after_api_error(self, mock_transport):
+        instance = MagicMock(template="pytorch", region="india-01")
+        with patch("jarvislabs.client._get_instance") as mock_get:
+            mock_get.side_effect = [
+                instance,
+                NotFoundError("Instance 10 not found"),
+            ]
+            mock_transport.request.side_effect = APIError(500, "Unknown error")
+
+            assert _make_instances(mock_transport).destroy(10) is True
+
+    def test_destroy_raises_when_instance_still_exists_after_error_payload(self, mock_transport):
+        instance = MagicMock(template="pytorch", region="india-01")
+        with (
+            patch("jarvislabs.client._get_instance", return_value=instance),
+            patch("jarvislabs.client.time.sleep"),
+            pytest.raises(APIError, match="Failed to destroy instance: Unknown error"),
+        ):
+            mock_transport.request.return_value = {"error": "Unknown error"}
+            _make_instances(mock_transport).destroy(10)
 
 
 class TestRenameInstance:

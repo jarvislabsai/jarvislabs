@@ -32,7 +32,7 @@ def test_instance_exec_requires_command(monkeypatch):
         instance.instance_exec(SimpleNamespace(args=[]), machine_id=123)
 
     assert exc.value.code == 1
-    assert captured["message"] == "No command specified. Use -- to separate: jl instance exec 123 -- <command>"
+    assert captured["message"] == "No command specified. Use -- to separate: jl exec 123 -- <command>"
 
 
 def test_instance_exec_rejects_non_running_instance(monkeypatch):
@@ -47,10 +47,10 @@ def test_instance_exec_rejects_non_running_instance(monkeypatch):
     monkeypatch.setattr(instance.render, "die", fake_die)
 
     with pytest.raises(SystemExit) as exc:
-        instance.instance_exec(SimpleNamespace(args=["python", "train.py"]), machine_id=123)
+        instance.instance_exec(SimpleNamespace(args=["python", "train.py"]), machine_id=123, json_output=True)
 
     assert exc.value.code == 1
-    assert captured["message"] == "Instance 123 is paused. Resume it first: jl instance resume 123"
+    assert captured["message"] == "Instance 123 is paused. Resume it first: jl resume 123"
 
 
 def test_instance_exec_rejects_missing_ssh_command(monkeypatch):
@@ -65,7 +65,7 @@ def test_instance_exec_rejects_missing_ssh_command(monkeypatch):
     monkeypatch.setattr(instance.render, "die", fake_die)
 
     with pytest.raises(SystemExit) as exc:
-        instance.instance_exec(SimpleNamespace(args=["python", "train.py"]), machine_id=123)
+        instance.instance_exec(SimpleNamespace(args=["python", "train.py"]), machine_id=123, json_output=True)
 
     assert exc.value.code == 1
     assert captured["message"] == "Instance 123 has no SSH command (status: Running)."
@@ -129,7 +129,7 @@ def test_instance_exec_json_mode_returns_summary(monkeypatch):
     monkeypatch.setattr(instance.render, "print_json", lambda payload: captured.setdefault("payload", payload))
     monkeypatch.setattr(state, "json_output", True)
 
-    instance.instance_exec(SimpleNamespace(args=["python", "train.py"]), machine_id=123)
+    instance.instance_exec(SimpleNamespace(args=["python", "train.py"]), machine_id=123, json_output=True)
 
     assert captured["parts"] == [
         "ssh",
@@ -176,6 +176,6 @@ def test_instance_exec_json_mode_propagates_nonzero_exit(monkeypatch):
     monkeypatch.setattr(state, "json_output", True)
 
     with pytest.raises(SystemExit) as exc:
-        instance.instance_exec(SimpleNamespace(args=["python", "train.py"]), machine_id=123)
+        instance.instance_exec(SimpleNamespace(args=["python", "train.py"]), machine_id=123, json_output=True)
 
     assert exc.value.code == 7

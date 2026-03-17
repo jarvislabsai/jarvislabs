@@ -353,6 +353,16 @@ def build_rsync_upload_command(
     command = ["rsync", "-az", "-e", shlex.join(transport)]
     if delete:
         command.append("--delete")
+    command.extend(
+        [
+            "--exclude",
+            ".venv/",
+            "--exclude",
+            ".git/",
+            "--exclude",
+            "__pycache__/",
+        ]
+    )
     command.extend([source_path, f"{info.user}@{info.host}:{dest_path}"])
     return command
 

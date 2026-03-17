@@ -20,7 +20,7 @@ def test_run_help_shows_direct_start_usage():
 
     assert result.exit_code == 0
     assert "Start a run directly:" in result.output
-    assert "jl run train.py --gpu RTX5000" in result.output
+    assert "jl run train.py --gpu L4" in result.output
     assert "--http-ports TEXT" in result.output
     assert "--requirements PATH" in result.output
 
@@ -40,13 +40,13 @@ def test_run_start_requires_existing_instance_for_now(monkeypatch):
             on=None,
             gpu=None,
             script=None,
+            vm=False,
             template="pytorch",
             storage=40,
             name="jl-run",
             num_gpus=1,
             setup=None,
             requirements=None,
-            setup_file=None,
             pause=False,
             destroy=False,
             keep=False,
@@ -73,9 +73,10 @@ def test_run_start_prompt_includes_region_when_provided(monkeypatch):
         run.run_start(
             SimpleNamespace(args=["train.py"]),
             on=None,
-            gpu="RTX5000",
+            gpu="L4",
             region="IN2",
             script=None,
+            vm=False,
             template="pytorch",
             storage=40,
             name="jl-run",
@@ -83,7 +84,6 @@ def test_run_start_prompt_includes_region_when_provided(monkeypatch):
             http_ports="",
             setup=None,
             requirements=None,
-            setup_file=None,
             pause=False,
             destroy=False,
             keep=True,
@@ -92,7 +92,7 @@ def test_run_start_prompt_includes_region_when_provided(monkeypatch):
 
     assert (
         captured["msg"]
-        == "Create 1x RTX5000 instance for jl run (template=pytorch, storage=40GB, name='jl-run', region=IN2)?"
+        == "Create 1x L4 instance for jl run (template=pytorch, storage=40GB, name='jl-run', region=IN2)?"
     )
 
 
@@ -109,9 +109,10 @@ def test_run_start_prompt_includes_http_ports_when_provided(monkeypatch):
         run.run_start(
             SimpleNamespace(args=["train.py"]),
             on=None,
-            gpu="RTX5000",
+            gpu="L4",
             region="IN1",
             script=None,
+            vm=False,
             template="pytorch",
             storage=40,
             name="jl-run",
@@ -119,7 +120,6 @@ def test_run_start_prompt_includes_http_ports_when_provided(monkeypatch):
             http_ports="7860",
             setup=None,
             requirements=None,
-            setup_file=None,
             pause=False,
             destroy=False,
             keep=True,
@@ -128,7 +128,7 @@ def test_run_start_prompt_includes_http_ports_when_provided(monkeypatch):
 
     assert (
         captured["msg"]
-        == "Create 1x RTX5000 instance for jl run (template=pytorch, storage=40GB, name='jl-run', region=IN1, http_ports='7860')?"
+        == "Create 1x L4 instance for jl run (template=pytorch, storage=40GB, name='jl-run', region=IN1, http_ports='7860')?"
     )
 
 
@@ -146,9 +146,10 @@ def test_run_start_passes_region_to_client(monkeypatch):
     run.run_start(
         SimpleNamespace(args=["train.py"]),
         on=None,
-        gpu="RTX5000",
+        gpu="L4",
         region="EU1",
         script=None,
+        vm=False,
         template="pytorch",
         storage=40,
         name="jl-run",
@@ -156,7 +157,6 @@ def test_run_start_passes_region_to_client(monkeypatch):
         http_ports="7860,8080",
         setup=None,
         requirements=None,
-        setup_file=None,
         pause=False,
         destroy=False,
         keep=True,
@@ -190,13 +190,13 @@ def test_run_start_rejects_region_with_on(monkeypatch):
             gpu=None,
             region="IN2",
             script=None,
+            vm=False,
             template="pytorch",
             storage=40,
             name="jl-run",
             num_gpus=1,
             setup=None,
             requirements=None,
-            setup_file=None,
             pause=False,
             destroy=False,
             keep=False,
@@ -204,6 +204,197 @@ def test_run_start_rejects_region_with_on(monkeypatch):
         )
 
     assert captured["message"] == "--region is only supported with --gpu for fresh instances."
+
+
+@pytest.mark.parametrize("flag", ["pause", "destroy"])
+def test_run_start_rejects_json_lifecycle_for_fresh_runs(monkeypatch, flag):
+    captured: dict[str, str] = {}
+
+    def fake_die(message: str, code: int = 1) -> None:
+        captured["message"] = message
+        raise SystemExit(code)
+
+    monkeypatch.setattr(run.render, "die", fake_die)
+
+    kwargs = {
+        "pause": False,
+        "destroy": False,
+        "keep": False,
+    }
+    kwargs[flag] = True
+
+    with pytest.raises(SystemExit):
+        run.run_start(
+            SimpleNamespace(args=["train.py"]),
+            on=None,
+            gpu="L4",
+            region=None,
+            script=None,
+            vm=False,
+            template="pytorch",
+            storage=40,
+            name="jl-run",
+            num_gpus=1,
+            http_ports="",
+            setup=None,
+            requirements=None,
+            follow=True,
+            json_output=True,
+            **kwargs,
+        )
+
+    assert captured["message"] == (
+        f"--{flag} is not supported with --json for fresh runs.\n\n"
+        "--json is mainly meant for agent workflows. It prints the run details and returns right away, "
+        f"so the run becomes detached from this CLI session. Because the CLI is no longer attached, it cannot "
+        f"{flag} the instance when the run finishes.\n\n"
+        "What to do instead:\n"
+        f"  Agent workflow: use --keep --json, then have the agent watch the run and call jl {flag} <machine_id> when it is done.\n"
+        f"  Human workflow: drop --json and use the default mode where the CLI stays attached to the run if you want it to apply --{flag} after the run finishes."
+    )
+
+
+# ── --vm flag tests for run_start ─────────────────────────────────────────
+
+
+def test_run_start_vm_rejects_template_vm(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_die(message: str, code: int = 1) -> None:
+        captured["message"] = message
+        raise SystemExit(code)
+
+    monkeypatch.setattr(run.render, "die", fake_die)
+
+    with pytest.raises(SystemExit):
+        run.run_start(
+            SimpleNamespace(args=["train.py"]),
+            on=None,
+            gpu="A100",
+            region=None,
+            script=None,
+            vm=False,
+            template="vm",
+            storage=40,
+            name="jl-run",
+            num_gpus=1,
+            http_ports="",
+            setup=None,
+            requirements=None,
+            pause=False,
+            destroy=False,
+            keep=True,
+            follow=False,
+            yes=True,
+            json_output=False,
+        )
+
+    assert captured["message"] == "Use --vm instead of --template vm."
+
+
+def test_run_start_vm_rejects_http_ports(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_die(message: str, code: int = 1) -> None:
+        captured["message"] = message
+        raise SystemExit(code)
+
+    monkeypatch.setattr(run.render, "die", fake_die)
+
+    with pytest.raises(SystemExit):
+        run.run_start(
+            SimpleNamespace(args=["train.py"]),
+            on=None,
+            gpu="A100",
+            region=None,
+            script=None,
+            vm=True,
+            template="pytorch",
+            storage=40,
+            name="jl-run",
+            num_gpus=1,
+            http_ports="8080",
+            setup=None,
+            requirements=None,
+            pause=False,
+            destroy=False,
+            keep=True,
+            follow=False,
+            yes=True,
+            json_output=False,
+        )
+
+    assert captured["message"] == "--http-ports is not supported with --vm. VMs are SSH-only."
+
+
+def test_run_start_vm_rejects_template_conflict(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_die(message: str, code: int = 1) -> None:
+        captured["message"] = message
+        raise SystemExit(code)
+
+    monkeypatch.setattr(run.render, "die", fake_die)
+
+    with pytest.raises(SystemExit):
+        run.run_start(
+            SimpleNamespace(args=["train.py"]),
+            on=None,
+            gpu="A100",
+            region=None,
+            script=None,
+            vm=True,
+            template="tensorflow",
+            storage=40,
+            name="jl-run",
+            num_gpus=1,
+            http_ports="",
+            setup=None,
+            requirements=None,
+            pause=False,
+            destroy=False,
+            keep=True,
+            follow=False,
+            yes=True,
+            json_output=False,
+        )
+
+    assert captured["message"] == "--vm and --template cannot be used together."
+
+
+def test_run_start_vm_rejects_on_flag(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_die(message: str, code: int = 1) -> None:
+        captured["message"] = message
+        raise SystemExit(code)
+
+    monkeypatch.setattr(run.render, "die", fake_die)
+
+    with pytest.raises(SystemExit):
+        run.run_start(
+            SimpleNamespace(args=["train.py"]),
+            on=12345,
+            gpu=None,
+            region=None,
+            script=None,
+            vm=True,
+            template="pytorch",
+            storage=40,
+            name="jl-run",
+            num_gpus=1,
+            http_ports="",
+            setup=None,
+            requirements=None,
+            pause=False,
+            destroy=False,
+            keep=False,
+            follow=True,
+            yes=True,
+            json_output=False,
+        )
+
+    assert captured["message"] == "--vm is only supported with --gpu for fresh instances."
 
 
 def test_build_run_spec_for_python_file(monkeypatch, tmp_path):
@@ -297,7 +488,7 @@ def test_build_run_spec_rejects_directory_without_command(monkeypatch, tmp_path)
 
     assert (
         captured["message"]
-        == "Directory targets require --script <path> or a command after --. Example: jl run . --script train.py --gpu RTX5000"
+        == "Directory targets require --script <path> or a command after --. Example: jl run . --script train.py --gpu L4"
     )
 
 
@@ -316,6 +507,119 @@ def test_build_run_spec_rejects_script_option_for_file(monkeypatch, tmp_path):
         run._build_run_spec(str(source), [], script_path="other.py")
 
     assert captured["message"] == "--script can only be used with a directory target."
+
+
+# ── _detect_requirements tests ────────────────────────────────────────────
+
+
+def test_detect_requirements_finds_pyproject_with_project_table(tmp_path):
+    project = tmp_path / "myproject"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname = 'foo'\ndependencies = ['requests']\n")
+    spec = run.RunSpec(
+        target_kind="directory",
+        local_target=project,
+        remote_target="/home/myproject",
+        working_dir="/home/myproject",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) == "pyproject.toml"
+
+
+def test_detect_requirements_skips_tool_only_pyproject(tmp_path):
+    project = tmp_path / "myproject"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[tool.ruff]\nline-length = 88\n")
+    spec = run.RunSpec(
+        target_kind="directory",
+        local_target=project,
+        remote_target="/home/myproject",
+        working_dir="/home/myproject",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) is None
+
+
+def test_detect_requirements_falls_through_to_requirements_txt(tmp_path):
+    project = tmp_path / "myproject"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[tool.ruff]\nline-length = 88\n")
+    (project / "requirements.txt").write_text("requests\n")
+    spec = run.RunSpec(
+        target_kind="directory",
+        local_target=project,
+        remote_target="/home/myproject",
+        working_dir="/home/myproject",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) == "requirements.txt"
+
+
+def test_detect_requirements_finds_requirements_txt(tmp_path):
+    project = tmp_path / "myproject"
+    project.mkdir()
+    (project / "requirements.txt").write_text("torch\n")
+    spec = run.RunSpec(
+        target_kind="directory",
+        local_target=project,
+        remote_target="/home/myproject",
+        working_dir="/home/myproject",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) == "requirements.txt"
+
+
+def test_detect_requirements_returns_none_when_no_files(tmp_path):
+    project = tmp_path / "myproject"
+    project.mkdir()
+    (project / "train.py").write_text("print('hi')\n")
+    spec = run.RunSpec(
+        target_kind="directory",
+        local_target=project,
+        remote_target="/home/myproject",
+        working_dir="/home/myproject",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) is None
+
+
+def test_detect_requirements_skips_file_targets(tmp_path):
+    source = tmp_path / "train.py"
+    source.write_text("print('hi')\n")
+    spec = run.RunSpec(
+        target_kind="file",
+        local_target=source,
+        remote_target="/home/train/train.py",
+        working_dir="/home/train",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) is None
+
+
+def test_detect_requirements_skips_command_targets():
+    spec = run.RunSpec(
+        target_kind="command",
+        local_target=None,
+        remote_target=None,
+        working_dir=None,
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) is None
+
+
+def test_detect_requirements_pyproject_takes_priority_over_requirements(tmp_path):
+    project = tmp_path / "myproject"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname = 'foo'\ndependencies = ['torch']\n")
+    (project / "requirements.txt").write_text("requests\n")
+    spec = run.RunSpec(
+        target_kind="directory",
+        local_target=project,
+        remote_target="/home/myproject",
+        working_dir="/home/myproject",
+        launch_command="python3 train.py",
+    )
+    assert run._detect_requirements(spec) == "pyproject.toml"
 
 
 def test_write_remote_text_streams_content_over_ssh(monkeypatch):
@@ -481,8 +785,9 @@ def test_start_managed_run_json_mode_returns_summary(monkeypatch, tmp_path):
         "command": (
             "command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; } && "
             'export PATH="$HOME/.local/bin:$PATH" && '
-            "(test -d .venv || uv venv .venv) && "
+            "(test -d .venv || uv venv --system-site-packages --seed .venv) && "
             ". .venv/bin/activate && "
+            'echo "[jl] No dependency file detected, using template packages" && '
             "python train.py"
         ),
         "instance_origin": "fresh",
@@ -801,7 +1106,6 @@ def test_run_start_defaults_fresh_runs_to_pause(monkeypatch):
         script_path=None,
         setup_command=None,
         requirements_path=None,
-        setup_file=None,
     ):
         captured["start"] = {
             "target": target,
@@ -813,7 +1117,6 @@ def test_run_start_defaults_fresh_runs_to_pause(monkeypatch):
             "script_path": script_path,
             "setup_command": setup_command,
             "requirements_path": requirements_path,
-            "setup_file": setup_file,
         }
         return "r_fresh", 0
 
@@ -825,15 +1128,15 @@ def test_run_start_defaults_fresh_runs_to_pause(monkeypatch):
     run.run_start(
         SimpleNamespace(args=["train.py"]),
         on=None,
-        gpu="RTX5000",
+        gpu="L4",
         script=None,
+        vm=False,
         template="pytorch",
         storage=40,
         name="jl-run",
         num_gpus=1,
         setup=None,
         requirements=None,
-        setup_file=None,
         pause=False,
         destroy=False,
         keep=False,
@@ -858,16 +1161,14 @@ def test_compose_launch_command_bootstraps_uv_env():
         spec,
         setup_command="echo setup",
         requirements_name="requirements.txt",
-        setup_file_name="bootstrap.sh",
     )
 
     assert command == (
         "command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; } && "
         'export PATH="$HOME/.local/bin:$PATH" && '
-        "(test -d .venv || uv venv .venv) && "
+        "(test -d .venv || uv venv --system-site-packages --seed .venv) && "
         ". .venv/bin/activate && "
-        "uv pip install -r requirements.txt && "
-        "bash bootstrap.sh && "
+        "echo '[jl] Installing from' requirements.txt && uv pip install -r requirements.txt && "
         "echo setup && "
         "python3 train.py --epochs 5"
     )
@@ -876,8 +1177,6 @@ def test_compose_launch_command_bootstraps_uv_env():
 def test_prepare_support_files_uploads_requirements_and_setup(monkeypatch, tmp_path):
     requirements = tmp_path / "requirements.txt"
     requirements.write_text("transformers\n")
-    setup_file = tmp_path / "setup.sh"
-    setup_file.write_text("echo setup\n")
     inst = SimpleNamespace(machine_id=123, ssh_command="ssh root@example.com")
     spec = run.RunSpec(
         target_kind="directory",
@@ -894,19 +1193,16 @@ def test_prepare_support_files_uploads_requirements_and_setup(monkeypatch, tmp_p
         lambda inst, ssh_parts, source, destination, *, label: uploads.append((label, str(source), destination)),
     )
 
-    requirements_name, setup_name = run._prepare_support_files(
+    requirements_name = run._prepare_support_files(
         inst,
         ["ssh", "root@example.com"],
         spec,
         requirements_path=requirements,
-        setup_file=setup_file,
     )
 
     assert requirements_name == "requirements.txt"
-    assert setup_name == "setup.sh"
     assert uploads == [
         ("requirements file", str(requirements), "/home/project/requirements.txt"),
-        ("setup file", str(setup_file), "/home/project/setup.sh"),
     ]
 
 

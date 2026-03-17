@@ -68,6 +68,13 @@ class Filesystem(BaseModel):
     fs_id: int
     fs_name: str | None = None
     storage: int | None = None
+    region: str | None = None
+
+    @field_serializer("region")
+    def _display_region(self, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return REGION_DISPLAY_CODES.get(v, v)
 
 
 # ── Templates ─────────────────────────────────────────────────────────────────

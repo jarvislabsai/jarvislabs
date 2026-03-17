@@ -374,7 +374,7 @@ wait_for_instance_status() {
   local interval=3
 
   while [[ $elapsed -lt $timeout_sec ]]; do
-    run_raw jl --json instance get "$machine_id"
+    run_raw jl --json get "$machine_id"
     if [[ $LAST_RC -eq 0 ]]; then
       local status
       status="$(json_read 'data.get("status")' 2>/dev/null || true)"
@@ -405,7 +405,7 @@ cleanup() {
 
   for (( i=${#CLEANUP_INSTANCES[@]}-1; i>=0; i-- )); do
     id="${CLEANUP_INSTANCES[$i]}"
-    jl --yes --json instance destroy "$id" >/dev/null 2>&1 || true
+    jl --yes --json destroy "$id" >/dev/null 2>&1 || true
   done
 
   for (( i=${#CLEANUP_FILESYSTEMS[@]}-1; i>=0; i-- )); do
@@ -465,7 +465,7 @@ run_expect_success "jl --help" jl --help
 assert_output_contains "help lists scripts" "scripts"
 assert_output_contains "help lists filesystem" "filesystem"
 
-run_expect_success "jl instance --help" jl instance --help
+run_expect_success "jl --help" jl --help
 assert_output_contains "instance help lists create" "create"
 assert_output_contains "instance help lists resume" "resume"
 
@@ -478,7 +478,7 @@ assert_output_contains "gpus output has GPU" "GPU"
 run_expect_success "table: templates" jl templates
 assert_output_contains "templates output has Template" "Template"
 
-run_expect_success "table: instance list" jl instance list
+run_expect_success "table: instance list" jl list
 assert_output_contains "instance list has ID header" "ID"
 
 run_expect_success "table: ssh-key list" jl ssh-key list
@@ -492,13 +492,13 @@ assert_output_contains_any "filesystem list has expected output" "ID" "No filesy
 
 section "2. Error Paths"
 
-run_expect_failure "instance get invalid id fails" jl instance get 999999999
-run_expect_failure "instance pause invalid id fails" jl --yes instance pause 999999999
-run_expect_failure "instance resume invalid id fails" jl --yes instance resume 999999999
-run_expect_failure "instance destroy invalid id fails" jl --yes instance destroy 999999999
-run_expect_failure "instance ssh invalid id fails" jl instance ssh 999999999 --print-command
+run_expect_failure "instance get invalid id fails" jl get 999999999
+run_expect_failure "instance pause invalid id fails" jl --yes pause 999999999
+run_expect_failure "instance resume invalid id fails" jl --yes resume 999999999
+run_expect_failure "instance destroy invalid id fails" jl --yes destroy 999999999
+run_expect_failure "instance ssh invalid id fails" jl ssh 999999999 --print-command
 
-run_expect_failure "validation: vm create without ssh key fails" jl --yes instance create --gpu L4 --template vm
+run_expect_failure "validation: vm create without ssh key fails" jl --yes create --gpu L4 --vm
 run_expect_failure "validation: filesystem create below min storage fails" \
   jl --yes filesystem create --name "${RUN_TAG}-fs-bad" --storage 10
 touch "$TMP_DIR/empty.pub"
@@ -623,7 +623,7 @@ if [[ -z "$SCRIPT_ID" || -z "$FS_ID" ]]; then
   record_fail "instance lifecycle prerequisites" "need both script_id and fs_id"
 else
   run_raw \
-    jl --yes --json instance create \
+    jl --yes --json create \
       --gpu "$TEST_GPU" \
       --template pytorch \
       --storage 40 \
@@ -641,7 +641,7 @@ else
     if [[ -n "$retry_gpu" ]]; then
       TEST_GPU="$retry_gpu"
       run_raw \
-        jl --yes --json instance create \
+        jl --yes --json create \
           --gpu "$TEST_GPU" \
           --template pytorch \
           --storage 40 \
@@ -681,11 +681,11 @@ else
   fi
 
   if [[ -n "$INSTANCE_ID" ]]; then
-    run_expect_success "instance get (table)" jl instance get "$INSTANCE_ID"
+    run_expect_success "instance get (table)" jl get "$INSTANCE_ID"
     assert_output_contains "instance get includes name" "$INSTANCE_NAME"
-    run_expect_success "instance ssh --print-command" jl instance ssh "$INSTANCE_ID" --print-command
+    run_expect_success "instance ssh --print-command" jl ssh "$INSTANCE_ID" --print-command
     assert_output_contains "instance ssh command contains ssh" "ssh "
-    run_expect_success "instance ssh --json" jl --json instance ssh "$INSTANCE_ID"
+    run_expect_success "instance ssh --json" jl --json ssh "$INSTANCE_ID"
     if [[ $LAST_RC -eq 0 ]]; then
       ssh_cmd="$(json_read 'data.get("ssh_command")' 2>/dev/null || true)"
       if [[ "$ssh_cmd" == ssh* ]]; then
@@ -695,8 +695,8 @@ else
       fi
     fi
 
-    run_expect_success "instance rename" jl --yes instance rename "$INSTANCE_ID" --name "$RENAMED_NAME"
-    run_expect_success "instance get renamed (json)" jl --json instance get "$INSTANCE_ID"
+    run_expect_success "instance rename" jl --yes rename "$INSTANCE_ID" --name "$RENAMED_NAME"
+    run_expect_success "instance get renamed (json)" jl --json get "$INSTANCE_ID"
     if [[ $LAST_RC -eq 0 ]]; then
       got_name="$(json_read 'data.get("name")' 2>/dev/null || true)"
       if [[ "$got_name" == "$RENAMED_NAME" ]]; then
@@ -706,7 +706,7 @@ else
       fi
     fi
 
-    run_expect_success "instance pause" jl --yes instance pause "$INSTANCE_ID"
+    run_expect_success "instance pause" jl --yes pause "$INSTANCE_ID"
     if wait_for_instance_status "$INSTANCE_ID" "Paused" 120; then
       record_pass "instance reached Paused status"
     else
@@ -714,7 +714,7 @@ else
     fi
 
     run_expect_success "instance resume (json)" \
-      jl --yes --json instance resume "$INSTANCE_ID" --name "$RESUMED_NAME" --storage 60 --fs-id "$FS_ID"
+      jl --yes --json resume "$INSTANCE_ID" --name "$RESUMED_NAME" --storage 60 --fs-id "$FS_ID"
     if [[ $LAST_RC -eq 0 ]]; then
       RESUMED_ID="$(json_read 'data.get("machine_id")' 2>/dev/null || true)"
       resumed_status="$(json_read 'data.get("status")' 2>/dev/null || true)"
@@ -737,7 +737,7 @@ else
     fi
 
     if [[ -n "$RESUMED_ID" ]]; then
-      run_expect_success "instance get resumed (json)" jl --json instance get "$RESUMED_ID"
+      run_expect_success "instance get resumed (json)" jl --json get "$RESUMED_ID"
       if [[ $LAST_RC -eq 0 ]]; then
         resumed_name="$(json_read 'data.get("name")' 2>/dev/null || true)"
         if [[ "$resumed_name" == "$RESUMED_NAME" ]]; then
@@ -747,9 +747,9 @@ else
         fi
       fi
 
-      run_expect_success "instance destroy" jl --yes instance destroy "$RESUMED_ID"
+      run_expect_success "instance destroy" jl --yes destroy "$RESUMED_ID"
       remove_cleanup_instance "$RESUMED_ID"
-      run_expect_failure "instance get after destroy fails" jl instance get "$RESUMED_ID"
+      run_expect_failure "instance get after destroy fails" jl get "$RESUMED_ID"
     fi
   fi
 fi
@@ -776,31 +776,31 @@ else
   VM_ID=""
 
   run_expect_success "create H100 instance (json)" \
-    jl --yes --json instance create --gpu H100 --template pytorch --storage 100 --name "${RUN_TAG}-h100"
+    jl --yes --json create --gpu H100 --template pytorch --storage 100 --name "${RUN_TAG}-h100"
   if [[ $LAST_RC -eq 0 ]]; then
     H100_ID="$(json_read 'data.get("machine_id")' 2>/dev/null || true)"
     if [[ -n "$H100_ID" ]]; then
       CLEANUP_INSTANCES+=("$H100_ID")
       record_pass "H100 machine_id=$H100_ID"
-      run_expect_success "pause H100" jl --yes instance pause "$H100_ID"
+      run_expect_success "pause H100" jl --yes pause "$H100_ID"
       if wait_for_instance_status "$H100_ID" "Paused" 180; then
         record_pass "H100 reached Paused"
       else
         record_warn "H100 reached Paused" "timeout"
       fi
-      run_expect_success "destroy H100" jl --yes instance destroy "$H100_ID"
+      run_expect_success "destroy H100" jl --yes destroy "$H100_ID"
       remove_cleanup_instance "$H100_ID"
     fi
   fi
 
   run_expect_success "create H200 instance (json)" \
-    jl --yes --json instance create --gpu H200 --template pytorch --storage 100 --name "${RUN_TAG}-h200"
+    jl --yes --json create --gpu H200 --template pytorch --storage 100 --name "${RUN_TAG}-h200"
   if [[ $LAST_RC -eq 0 ]]; then
     H200_ID="$(json_read 'data.get("machine_id")' 2>/dev/null || true)"
     if [[ -n "$H200_ID" ]]; then
       CLEANUP_INSTANCES+=("$H200_ID")
       record_pass "H200 machine_id=$H200_ID"
-      run_expect_success "destroy H200" jl --yes instance destroy "$H200_ID"
+      run_expect_success "destroy H200" jl --yes destroy "$H200_ID"
       remove_cleanup_instance "$H200_ID"
     fi
   fi
@@ -818,21 +818,21 @@ else
       for VM_GPU in A100 L4; do
         VM_GPU_LOWER="$(printf '%s' "$VM_GPU" | tr '[:upper:]' '[:lower:]')"
         run_expect_success "create ${VM_GPU} VM (json)" \
-          jl --yes --json instance create --gpu "$VM_GPU" --template vm --storage 100 --name "${RUN_TAG}-${VM_GPU_LOWER}-vm"
+          jl --yes --json create --gpu "$VM_GPU" --vm --storage 100 --name "${RUN_TAG}-${VM_GPU_LOWER}-vm"
         if [[ $LAST_RC -eq 0 ]]; then
           VM_ID="$(json_read 'data.get("machine_id")' 2>/dev/null || true)"
           if [[ -n "$VM_ID" ]]; then
             CLEANUP_INSTANCES+=("$VM_ID")
             record_pass "${VM_GPU} VM machine_id=$VM_ID"
-            run_expect_success "${VM_GPU} VM ssh command" jl instance ssh "$VM_ID" --print-command
+            run_expect_success "${VM_GPU} VM ssh command" jl ssh "$VM_ID" --print-command
             assert_output_contains "${VM_GPU} VM ssh command contains ssh" "ssh "
-            run_expect_success "pause ${VM_GPU} VM" jl --yes instance pause "$VM_ID"
+            run_expect_success "pause ${VM_GPU} VM" jl --yes pause "$VM_ID"
             if wait_for_instance_status "$VM_ID" "Paused" 180; then
               record_pass "${VM_GPU} VM reached Paused"
             else
               record_warn "${VM_GPU} VM reached Paused" "timeout"
             fi
-            run_expect_success "resume ${VM_GPU} VM (json)" jl --yes --json instance resume "$VM_ID"
+            run_expect_success "resume ${VM_GPU} VM (json)" jl --yes --json resume "$VM_ID"
             RESUMED_VM_ID="$(json_read 'data.get("machine_id")' 2>/dev/null || true)"
             if [[ -n "$RESUMED_VM_ID" ]]; then
               remove_cleanup_instance "$VM_ID"
@@ -840,7 +840,7 @@ else
               CLEANUP_INSTANCES+=("$VM_ID")
               record_pass "${VM_GPU} VM resumed as machine_id=$VM_ID"
             fi
-            run_expect_success "destroy ${VM_GPU} VM" jl --yes instance destroy "$VM_ID"
+            run_expect_success "destroy ${VM_GPU} VM" jl --yes destroy "$VM_ID"
             remove_cleanup_instance "$VM_ID"
           fi
         fi

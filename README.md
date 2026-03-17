@@ -56,38 +56,43 @@ export JL_API_KEY="your_api_key"
 # See available GPUs and pricing
 jl gpus
 
-# Create an instance
-jl instance create --gpu A100 --name "my-instance"
+# Create a container instance (pre-configured with PyTorch, Jupyter, IDE)
+jl create --gpu A100 --name "my-instance"
+
+# Create a VM instance (bare-metal SSH access)
+jl create --gpu A100-80GB --vm --name "my-vm"
 
 # Create an instance and expose a custom HTTP port
-jl instance create --gpu RTX5000 --http-ports 7860
+jl create --gpu L4 --http-ports 7860
 
 # SSH into it
-jl instance ssh <machine_id>
+jl ssh <machine_id>
 
 # Pause when done (stops compute billing, data persists)
-jl instance pause <machine_id>
+jl pause <machine_id>
 
 # Resume later — optionally with different hardware
-jl instance resume <machine_id> --gpu H100
+jl resume <machine_id> --gpu H100
 
 # Destroy when no longer needed
-jl instance destroy <machine_id>
+jl destroy <machine_id>
 ```
 
 ### Managed Runs
 
-Run scripts on GPU instances without manual setup. Code is uploaded, a virtual environment is created, and logs are tracked automatically.
+Run scripts on GPU instances without manual setup. Code is uploaded, a virtual environment is created (with template packages like torch visible by default), and logs are tracked automatically.
+
+For humans, the default mode stays attached to the run, streams logs, and can auto-pause or auto-destroy the instance after the run finishes. For agents, `--json` is meant for detached workflows and returns immediately, so use `--keep` and have the agent pause or destroy the instance after the run.
 
 ```bash
 # Run a training script on a fresh GPU (instance auto-pauses when done)
-jl run train.py --gpu RTX5000
+jl run train.py --gpu L4
 
 # Start a long-running web app on a fresh GPU and expose port 8000
-jl run app.py --gpu RTX5000 --http-ports 8000 --keep --no-follow
+jl run app.py --gpu L4 --http-ports 8000 --keep --no-follow
 
 # Pass script arguments
-jl run train.py --gpu RTX5000 -- --epochs 50 --lr 0.001
+jl run train.py --gpu L4 -- --epochs 50 --lr 0.001
 
 # Sync a project directory and run a script inside it
 jl run . --script train.py --gpu A100 --requirements requirements.txt
@@ -106,14 +111,14 @@ jl run stop <run_id>
 ```bash
 jl status                   # Account info and balance
 jl templates                # Available framework templates
-jl instance list            # List all instances
-jl instance exec <id> -- nvidia-smi   # Run a command remotely
-jl instance upload <id> ./data        # Upload files
-jl instance download <id> /home/results.csv  # Download files
+jl list            # List all instances
+jl exec <id> -- nvidia-smi   # Run a command remotely
+jl upload <id> ./data        # Upload files
+jl download <id> /home/results.csv  # Download files
 jl ssh-key add ~/.ssh/id_ed25519.pub --name "my-key"
 jl scripts add ./setup.sh --name "install-deps"
 jl filesystem create --name "datasets" --storage 200
-jl instance get <id>                  # Shows Jupyter + exposed port URLs
+jl get <id>                  # Shows Jupyter + exposed port URLs
 ```
 
 Every command supports `--help`, `--json` (machine-readable output), and `--yes` (skip confirmations).
