@@ -219,6 +219,8 @@ jl exec <id> -- ps -ef
 jl exec <id> -- df -h
 ```
 
+Use `jl exec`, `jl run logs`, and `jl run status` without `--json` — the raw output is easier to read and parse. Reserve `--json` for commands where you need structured data (`create`, `list`, `get`, `run start`).
+
 Exit code of the remote command is propagated. For pipes or shell syntax, wrap in `sh -lc`:
 
 ```bash
