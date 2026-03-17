@@ -96,35 +96,24 @@ jl run train.py --on <id> --json --yes -- --epochs 50 --lr 0.001
 
 ### Environment & setup
 
-For file and directory targets, `jl run` creates a `.venv` inside the project working directory on the remote machine. This venv:
-- **Inherits template packages** — on a pytorch template, `import torch` works without installing anything.
-- **Has pip available** — `pip install X` in `--setup` installs into the venv.
-- **Persists across runs** — on the same instance with the same target, the venv and installed packages are reused.
+`jl run` creates a `.venv` on the remote machine. Template packages (torch, etc.) are visible by default — no need to install them.
 
-**Auto-detection (directory targets only):** The CLI checks the local directory before upload. If `pyproject.toml` with a `[project]` table exists, dependencies are installed from it. Otherwise, if `requirements.txt` exists, it's installed. If neither exists, no packages are installed — template packages are enough for simple scripts.
+**How dependencies get installed:**
 
-**`--requirements <file>`** overrides auto-detection. The specified file is uploaded and installed instead.
-
-**`--setup <command>`** runs a shell command after dependency installation, before your script. Use for quick one-off installs (`--setup "pip install flash-attn"`) or system commands (`--setup "apt-get install -y libsndfile1"`).
-
-Setup chain (runs before your script, chained with `&&`):
-
-1. `uv` installed if missing
-2. `.venv` created if it doesn't exist (with template package visibility and pip)
-3. `.venv` activated
-4. Dependencies installed (auto-detected `pyproject.toml` or `requirements.txt`, or explicit `--requirements`)
-5. `--setup` command (if provided)
-6. Main script runs
+- **Directory targets** — auto-detected. If your directory has `requirements.txt` or `pyproject.toml` (with `[project]`), deps are installed automatically. No flag needed.
+- **Single file targets** — no auto-detection. Pass `--requirements requirements.txt` if you need extra packages.
+- **`--requirements <file>`** — overrides auto-detection. Uploads and installs the specified file instead.
+- **`--setup <command>`** — runs a shell command before your script (e.g., `--setup "pip install flash-attn"`).
 
 ```bash
-# Directory with requirements.txt → auto-detected, no flag needed
+# Directory — auto-detects requirements.txt
 jl run . --script train.py --on <id> --json --yes
 
-# Override auto-detection with a custom file
-jl run . --script train.py --on <id> --requirements custom-reqs.txt --json --yes
-
-# Single file target → no auto-detection, pass --requirements if needed
+# Single file — pass requirements explicitly
 jl run train.py --on <id> --requirements requirements.txt --json --yes
+
+# Extra setup command
+jl run . --script train.py --on <id> --setup "pip install flash-attn" --json --yes
 ```
 
 **Command mode** — when you pass a raw command after `--` with no file or directory target. Useful when code already exists on the instance (e.g., the agent wrote files directly via `exec`, or a previous run left scripts on the remote). No upload, no venv — the command runs on system Python with template packages. You still get `jl run` log tracking (`logs`, `status`, `stop`), which is the main advantage over `jl exec`. Only `--setup` is available as a hook. `--requirements` is not supported in command mode.
