@@ -272,7 +272,7 @@ class Instances:
                 "VM instances require at least one SSH key. Add one with: jl ssh-key add <pubkey-file> --name 'my-key'"
             )
         if fs_id is not None:
-            _ensure_filesystem_exists(self._t, fs_id)
+            _ensure_filesystem_exists(self._t, fs_id, region=region)
 
         payload: dict = {
             "gpu_type": gpu_type,
@@ -343,13 +343,13 @@ class Instances:
             raise ValidationError(f"Can only resume a Paused instance (current status: {instance.status})")
         if name:
             _validate_instance_name(name)
-        if fs_id is not None:
-            _ensure_filesystem_exists(self._t, fs_id)
-
         # Resume is region-locked — backend always uses instance's original region
         region = instance.region or DEFAULT_REGION
         base_url = _region_url(region)
         is_vm = instance.template == "vm"
+
+        if fs_id is not None:
+            _ensure_filesystem_exists(self._t, fs_id, region=region)
 
         # Warn early if the requested GPU isn't available in this region
         if gpu_type and gpu_type != instance.gpu_type:
@@ -496,7 +496,7 @@ def _validate_filesystem_storage(storage: int) -> None:
         raise ValidationError("Filesystem storage must be between 50GB and 2048GB")
 
 
-def _ensure_filesystem_exists(transport: Transport, fs_id: int) -> None:
+def _ensure_filesystem_exists(transport: Transport, fs_id: int, region: str | None = None) -> None:
     resp = transport.request("GET", "filesystem/list")
     if not isinstance(resp, list):
         raise APIError(0, "Failed to fetch filesystems: unexpected response")
@@ -505,6 +505,14 @@ def _ensure_filesystem_exists(transport: Transport, fs_id: int) -> None:
         if not isinstance(item, dict):
             continue
         if int(item.get("fs_id", -1)) == fs_id:
+            if region and item.get("region"):
+                fs_region = item["region"]
+                if fs_region != region:
+                    raise ValidationError(
+                        f"Filesystem {fs_id} is in {_region_label(fs_region)}, "
+                        f"but the instance is in {_region_label(region)}. "
+                        f"Filesystems can only be attached to instances in the same region."
+                    )
             return
 
     raise ValidationError(f"Filesystem {fs_id} not found. Check the ID with: jl filesystem list")
