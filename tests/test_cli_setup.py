@@ -164,87 +164,74 @@ def test_load_bundled_skill_reads_file():
 
 def test_parse_agents_all():
     result = setup._parse_agents_flag("all")
-    assert result == setup.ALL_AGENTS
+    assert result == list(setup.ADDITIONAL_AGENTS.keys())
 
 
 def test_parse_agents_specific():
-    result = setup._parse_agents_flag("claude-code,codex")
-    assert result == ["claude-code", "codex"]
+    result = setup._parse_agents_flag("claude-code")
+    assert result == ["claude-code"]
+
+
+def test_parse_agents_universal_filtered_out():
+    result = setup._parse_agents_flag("universal,claude-code")
+    assert result == ["claude-code"]
 
 
 def test_parse_agents_invalid_dies(monkeypatch):
     monkeypatch.setattr(setup.render, "die", MagicMock(side_effect=SystemExit(1)))
     with pytest.raises(SystemExit):
-        setup._parse_agents_flag("claude-code,invalid-agent")
+        setup._parse_agents_flag("invalid-agent")
 
 
-# ── _install_skill ───────────────────────────────────────────────────────────
+# ── _install_skill_to_path ───────────────────────────────────────────────────
 
 
-def test_install_skill_writes_to_correct_paths(tmp_path, monkeypatch):
-    test_paths = {
-        "claude-code": ("Claude Code", tmp_path / ".claude" / "skills" / "jarvislabs" / "SKILL.md"),
-        "codex": ("Codex", tmp_path / ".agents" / "skills" / "jarvislabs" / "SKILL.md"),
-    }
-    monkeypatch.setattr(setup, "AGENT_PATHS", test_paths)
-
-    installed = setup._install_skill(SKILL_CONTENT, ["claude-code", "codex"])
-
-    assert len(installed) == 2
-    for _label, path in installed:
-        assert path.exists()
-        assert path.read_text() == SKILL_CONTENT
+def test_install_skill_to_path_writes_content(tmp_path):
+    path = tmp_path / "skills" / "jarvislabs" / "SKILL.md"
+    resolved = setup._install_skill_to_path(SKILL_CONTENT, path)
+    assert resolved.exists()
+    assert resolved.read_text() == SKILL_CONTENT
 
 
-def test_install_skill_creates_directories(tmp_path, monkeypatch):
+def test_install_skill_to_path_creates_directories(tmp_path):
     deep_path = tmp_path / "a" / "b" / "c" / "SKILL.md"
-    test_paths = {"claude-code": ("Claude Code", deep_path)}
-    monkeypatch.setattr(setup, "AGENT_PATHS", test_paths)
-
-    setup._install_skill(SKILL_CONTENT, ["claude-code"])
-
+    setup._install_skill_to_path(SKILL_CONTENT, deep_path)
     assert deep_path.exists()
     assert deep_path.read_text() == SKILL_CONTENT
 
 
-def test_install_skill_overwrites_existing(tmp_path, monkeypatch):
+def test_install_skill_to_path_overwrites_existing(tmp_path):
     skill_path = tmp_path / "SKILL.md"
-    skill_path.parent.mkdir(parents=True, exist_ok=True)
     skill_path.write_text("old content")
-
-    test_paths = {"claude-code": ("Claude Code", skill_path)}
-    monkeypatch.setattr(setup, "AGENT_PATHS", test_paths)
-
-    setup._install_skill(SKILL_CONTENT, ["claude-code"])
-
+    setup._install_skill_to_path(SKILL_CONTENT, skill_path)
     assert skill_path.read_text() == SKILL_CONTENT
 
 
 # ── _select_agents_noninteractive ────────────────────────────────────────────
 
 
-def test_select_agents_noninteractive_returns_all():
+def test_select_agents_noninteractive_returns_all_additional():
     result = setup._select_agents_noninteractive()
-    assert result == setup.ALL_AGENTS
+    assert result == list(setup.ADDITIONAL_AGENTS.keys())
 
 
-# ── _select_agents_interactive ───────────────────────────────────────────────
+# ── _select_additional_agents_interactive ────────────────────────────────────
 
 
-def test_select_agents_interactive_returns_selection(monkeypatch):
+def test_select_additional_agents_interactive_returns_selection(monkeypatch):
     monkeypatch.setattr(
-        setup.questionary, "checkbox", lambda message, choices, **kw: MagicMock(ask=lambda: ["claude-code", "cursor"])
+        setup.questionary, "checkbox", lambda message, choices, **kw: MagicMock(ask=lambda: ["claude-code"])
     )
-    result = setup._select_agents_interactive()
-    assert result == ["claude-code", "cursor"]
+    result = setup._select_additional_agents_interactive()
+    assert result == ["claude-code"]
 
 
-def test_select_agents_interactive_exits_on_ctrl_c(monkeypatch):
+def test_select_additional_agents_interactive_exits_on_ctrl_c(monkeypatch):
     import typer
 
     monkeypatch.setattr(setup.questionary, "checkbox", lambda message, choices, **kw: MagicMock(ask=lambda: None))
     with pytest.raises(typer.Exit):
-        setup._select_agents_interactive()
+        setup._select_additional_agents_interactive()
 
 
 # ── _skill_install_flow ──────────────────────────────────────────────────────
@@ -258,45 +245,62 @@ def test_skill_install_flow_skips_when_declined(monkeypatch):
     assert result == []
 
 
-def test_skill_install_flow_with_agents_flag(tmp_path, monkeypatch):
-    test_paths = {
-        "claude-code": ("Claude Code", tmp_path / ".claude" / "skills" / "jarvislabs" / "SKILL.md"),
-    }
-    monkeypatch.setattr(setup, "AGENT_PATHS", test_paths)
+def test_skill_install_flow_always_installs_universal(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup, "UNIVERSAL_PATH", tmp_path / ".agents" / "skills" / "jarvislabs" / "SKILL.md")
+    monkeypatch.setattr(setup, "ADDITIONAL_AGENTS", {})
     monkeypatch.setattr(state, "yes", True)
 
-    result = setup._skill_install_flow(agents_flag="claude-code")
-    assert len(result) == 1
-    assert result[0][1].exists()
-
-
-def test_skill_install_flow_with_yes_selects_all(tmp_path, monkeypatch):
-    test_paths = {
-        "claude-code": ("Claude Code", tmp_path / ".claude" / "SKILL.md"),
-        "codex": ("Codex", tmp_path / ".agents" / "SKILL.md"),
-    }
-    monkeypatch.setattr(setup, "AGENT_PATHS", test_paths)
-    monkeypatch.setattr(setup, "ALL_AGENTS", list(test_paths.keys()))
-    monkeypatch.setattr(state, "yes", True)
-
-    confirm_calls = iter([True])  # "Install agent skills?" -> yes
+    confirm_calls = iter([True])
     monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: next(confirm_calls))
 
     result = setup._skill_install_flow(agents_flag=None)
+    # Universal is always installed
+    assert len(result) >= 1
+    assert result[0][1].exists()
+
+
+def test_skill_install_flow_with_agents_flag(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup, "UNIVERSAL_PATH", tmp_path / ".agents" / "skills" / "jarvislabs" / "SKILL.md")
+    monkeypatch.setattr(
+        setup,
+        "ADDITIONAL_AGENTS",
+        {"claude-code": ("Claude Code", tmp_path / ".claude" / "skills" / "jarvislabs" / "SKILL.md")},
+    )
+    monkeypatch.setattr(state, "yes", True)
+
+    result = setup._skill_install_flow(agents_flag="claude-code")
+    # Universal + claude-code
+    assert len(result) == 2
+    for _label, path in result:
+        assert path.exists()
+
+
+def test_skill_install_flow_with_yes_installs_universal_and_all_additional(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup, "UNIVERSAL_PATH", tmp_path / ".agents" / "skills" / "jarvislabs" / "SKILL.md")
+    monkeypatch.setattr(
+        setup,
+        "ADDITIONAL_AGENTS",
+        {"claude-code": ("Claude Code", tmp_path / ".claude" / "SKILL.md")},
+    )
+    monkeypatch.setattr(state, "yes", True)
+
+    confirm_calls = iter([True])
+    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: next(confirm_calls))
+
+    result = setup._skill_install_flow(agents_flag=None)
+    # Universal + claude-code
     assert len(result) == 2
 
 
 # ── AGENT_PATHS ──────────────────────────────────────────────────────────────
 
 
-def test_all_agent_paths_are_unique():
-    """Each agent should have its own native path."""
-    paths = [str(path) for _, path in setup.AGENT_PATHS.values()]
-    assert len(paths) == len(set(paths))
+def test_universal_path_uses_agents_skills():
+    assert ".agents/skills/jarvislabs" in str(setup.UNIVERSAL_PATH)
 
 
-def test_agent_paths_use_jarvislabs_name():
-    """Skill directory should be named 'jarvislabs', not 'jl-gpu'."""
-    for _label, path in setup.AGENT_PATHS.values():
+def test_all_paths_use_jarvislabs_name():
+    """Skill directory should be named 'jarvislabs'."""
+    assert "jarvislabs" in str(setup.UNIVERSAL_PATH)
+    for _label, path in setup.ADDITIONAL_AGENTS.values():
         assert "jarvislabs" in str(path)
-        assert "jl-gpu" not in str(path)

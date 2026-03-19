@@ -18,12 +18,29 @@ from jarvislabs.config import load_config, save_config
 if TYPE_CHECKING:
     from jarvislabs.client import Client
 
-# Agent name → (display label, native skill path)
-AGENT_PATHS: dict[str, tuple[str, Path]] = {
+# Universal path — always installed, covers most agents
+UNIVERSAL_PATH = Path("~/.agents/skills/jarvislabs/SKILL.md")
+UNIVERSAL_AGENTS = [
+    "Codex",
+    "Cursor",
+    "OpenCode",
+    "Amp",
+    "Cline",
+    "Gemini CLI",
+    "GitHub Copilot",
+    "Kimi Code CLI",
+    "Warp",
+]
+
+# Additional agent-specific paths (agents with their own skill directories)
+ADDITIONAL_AGENTS: dict[str, tuple[str, Path]] = {
     "claude-code": ("Claude Code", Path("~/.claude/skills/jarvislabs/SKILL.md")),
-    "codex": ("Codex", Path("~/.agents/skills/jarvislabs/SKILL.md")),
-    "cursor": ("Cursor", Path("~/.cursor/skills/jarvislabs/SKILL.md")),
-    "opencode": ("OpenCode", Path("~/.config/opencode/skills/jarvislabs/SKILL.md")),
+}
+
+# Combined for backward compat with --agents flag
+AGENT_PATHS: dict[str, tuple[str, Path]] = {
+    "universal": ("Universal (.agents/skills)", UNIVERSAL_PATH),
+    **ADDITIONAL_AGENTS,
 }
 
 ALL_AGENTS = list(AGENT_PATHS.keys())
@@ -92,8 +109,11 @@ def _load_bundled_skill() -> str:
 # ── Agent selection ──────────────────────────────────────────────────────────
 
 
-def _select_agents_interactive() -> list[str]:
-    """Interactive multi-select with spacebar toggle. Returns selected agent keys."""
+def _select_additional_agents_interactive() -> list[str]:
+    """Interactive multi-select for additional agent-specific paths. Returns selected agent keys."""
+    if not ADDITIONAL_AGENTS:
+        return []
+
     import questionary.prompts.common as _qc
 
     _qc.INDICATOR_SELECTED = "✓"
@@ -104,11 +124,17 @@ def _select_agents_interactive() -> list[str]:
             title=f"{label:12s}  →  {path.expanduser()}",
             value=key,
         )
-        for key, (label, path) in AGENT_PATHS.items()
+        for key, (label, path) in ADDITIONAL_AGENTS.items()
     ]
 
+    render.console.print()
+    render.console.print("[bold]Universal (.agents/skills)[/bold] [dim]— always included[/dim]")
+    for name in UNIVERSAL_AGENTS:
+        render.console.print(f"  [dim]•[/dim] {name}")
+    render.console.print()
+
     selected = questionary.checkbox(
-        "Select agents (space to toggle, enter to confirm):",
+        "Install to additional agent-specific paths?",
         choices=choices,
         style=questionary.Style(
             [
@@ -127,33 +153,31 @@ def _select_agents_interactive() -> list[str]:
 
 def _select_agents_noninteractive() -> list[str]:
     """Auto-select all agents when --yes is set."""
-    return list(ALL_AGENTS)
+    return list(ADDITIONAL_AGENTS.keys())
 
 
 def _parse_agents_flag(agents: str) -> list[str]:
-    """Parse --agents flag value into validated list of agent keys."""
+    """Parse --agents flag value into validated list of additional agent keys."""
     if agents == "all":
-        return list(ALL_AGENTS)
+        return list(ADDITIONAL_AGENTS.keys())
     agent_list = [a.strip() for a in agents.split(",")]
-    invalid = [a for a in agent_list if a not in AGENT_PATHS]
+    valid_keys = {*ADDITIONAL_AGENTS.keys(), "universal"}
+    invalid = [a for a in agent_list if a not in valid_keys]
     if invalid:
-        render.die(f"Unknown agents: {', '.join(invalid)}. Valid: {', '.join(ALL_AGENTS)}")
-    return agent_list
+        render.die(f"Unknown agents: {', '.join(invalid)}. Valid: {', '.join(ADDITIONAL_AGENTS.keys())}, all")
+    # Filter out "universal" since it's always installed
+    return [a for a in agent_list if a != "universal"]
 
 
 # ── Skill installation ───────────────────────────────────────────────────────
 
 
-def _install_skill(content: str, agents: list[str]) -> list[tuple[str, Path]]:
-    """Write skill file to each agent's native path."""
-    installed = []
-    for key in agents:
-        label, path = AGENT_PATHS[key]
-        resolved = path.expanduser()
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        resolved.write_text(content)
-        installed.append((label, resolved))
-    return installed
+def _install_skill_to_path(content: str, path: Path) -> Path:
+    """Write skill file to a single path. Returns resolved path."""
+    resolved = path.expanduser()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(content)
+    return resolved
 
 
 def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
@@ -161,9 +185,8 @@ def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
     render.console.print()
     render.console.print("[bold cyan]Agent Skills[/bold cyan]")
     render.console.print(
-        "  Skills teach your coding agents (Claude Code, Codex, Cursor, OpenCode)\n"
-        "  how to use [bold]jl[/bold] to create and manage GPU instances, run training\n"
-        "  scripts, and monitor experiments on JarvisLabs cloud on your behalf."
+        "  Skills teach your coding agents how to use [bold]jl[/bold] to create and manage\n"
+        "  GPU instances, run training scripts, and monitor experiments on your behalf."
     )
     render.console.print()
 
@@ -171,25 +194,31 @@ def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
         render.info("Skipped. You can run [bold]jl setup[/bold] again later.")
         return []
 
-    # Determine which agents
-    if agents_flag:
-        agent_list = _parse_agents_flag(agents_flag)
-    elif state.yes:
-        agent_list = _select_agents_noninteractive()
-    else:
-        agent_list = _select_agents_interactive()
-
-    if not agent_list:
-        render.info("No agents selected. Run [bold]jl setup[/bold] again to install later.")
-        return []
-
     content = _load_bundled_skill()
-    installed = _install_skill(content, agent_list)
+    installed: list[tuple[str, Path]] = []
+
+    # Always install universal (.agents/skills)
+    universal_resolved = _install_skill_to_path(content, UNIVERSAL_PATH)
+    agents_covered = ", ".join(UNIVERSAL_AGENTS)
+    installed.append((f"Universal ({agents_covered})", universal_resolved))
+
+    # Determine additional agent-specific installs
+    if agents_flag:
+        additional = _parse_agents_flag(agents_flag)
+    elif state.yes:
+        additional = _select_agents_noninteractive()
+    else:
+        additional = _select_additional_agents_interactive()
+
+    for key in additional:
+        label, path = ADDITIONAL_AGENTS[key]
+        resolved = _install_skill_to_path(content, path)
+        installed.append((label, resolved))
 
     render.console.print()
     render.console.print("[bold]Skills installed:[/bold]")
     for label, path in installed:
-        render.success(f"{label:12s}  →  {path}")
+        render.success(f"{label}  →  {path}")
 
     return installed
 
@@ -348,7 +377,9 @@ def _show_getting_started() -> None:
 @app.command(rich_help_panel="Account")
 def setup(
     token: str = typer.Option(None, "--token", "-t", help="API token (skips interactive prompt)."),
-    agents: str = typer.Option(None, "--agents", help="Comma-separated: claude-code,codex,cursor,opencode,all"),
+    agents: str = typer.Option(
+        None, "--agents", help="Comma-separated additional agents: claude-code,all (.agents/skills always installed)"
+    ),
     yes: cli_options.YesOption = False,
 ) -> None:
     """Set up the JarvisLabs CLI: authenticate and install agent skills."""
