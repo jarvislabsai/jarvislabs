@@ -292,7 +292,20 @@ def test_skill_install_flow_with_yes_installs_universal_and_all_additional(tmp_p
     assert len(result) == 2
 
 
-# ── AGENT_PATHS ──────────────────────────────────────────────────────────────
+def test_skill_install_flow_invalid_flag_writes_nothing(tmp_path, monkeypatch):
+    """Invalid --agents flag should not write any files."""
+    universal = tmp_path / ".agents" / "skills" / "jarvislabs" / "SKILL.md"
+    monkeypatch.setattr(setup, "UNIVERSAL_PATH", universal)
+    monkeypatch.setattr(setup.render, "die", MagicMock(side_effect=SystemExit(1)))
+    monkeypatch.setattr(state, "yes", True)
+
+    with pytest.raises(SystemExit):
+        setup._skill_install_flow(agents_flag="invalid-agent")
+
+    assert not universal.exists()
+
+
+# ── Paths ────────────────────────────────────────────────────────────────────
 
 
 def test_universal_path_uses_agents_skills():

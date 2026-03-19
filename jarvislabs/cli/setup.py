@@ -37,14 +37,6 @@ ADDITIONAL_AGENTS: dict[str, tuple[str, Path]] = {
     "claude-code": ("Claude Code", Path("~/.claude/skills/jarvislabs/SKILL.md")),
 }
 
-# Combined for backward compat with --agents flag
-AGENT_PATHS: dict[str, tuple[str, Path]] = {
-    "universal": ("Universal (.agents/skills)", UNIVERSAL_PATH),
-    **ADDITIONAL_AGENTS,
-}
-
-ALL_AGENTS = list(AGENT_PATHS.keys())
-
 _MUTED = "#8a8a8a"
 
 
@@ -194,6 +186,14 @@ def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
         render.info("Skipped. You can run [bold]jl setup[/bold] again later.")
         return []
 
+    # Determine additional agent-specific installs (validate before any writes)
+    if agents_flag:
+        additional = _parse_agents_flag(agents_flag)
+    elif state.yes:
+        additional = _select_agents_noninteractive()
+    else:
+        additional = _select_additional_agents_interactive()
+
     content = _load_bundled_skill()
     installed: list[tuple[str, Path]] = []
 
@@ -201,14 +201,6 @@ def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
     universal_resolved = _install_skill_to_path(content, UNIVERSAL_PATH)
     agents_covered = ", ".join(UNIVERSAL_AGENTS)
     installed.append((f"Universal ({agents_covered})", universal_resolved))
-
-    # Determine additional agent-specific installs
-    if agents_flag:
-        additional = _parse_agents_flag(agents_flag)
-    elif state.yes:
-        additional = _select_agents_noninteractive()
-    else:
-        additional = _select_additional_agents_interactive()
 
     for key in additional:
         label, path = ADDITIONAL_AGENTS[key]
