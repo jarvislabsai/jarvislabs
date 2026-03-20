@@ -850,7 +850,9 @@ def test_get_run_snapshot_reports_running(monkeypatch):
         started_at="2026-03-09T10:00:00+00:00",
     )
     monkeypatch.setattr(
-        run, "_get_instance", lambda machine_id: SimpleNamespace(status="Running", ssh_command="ssh root@example.com")
+        run,
+        "_get_instance",
+        lambda machine_id: SimpleNamespace(status="Running", ssh_command="ssh root@example.com", cost=0.79),
     )
     monkeypatch.setattr(run, "_ssh_parts_from_instance", lambda inst: ["ssh", "root@example.com"])
     monkeypatch.setattr(run, "_fetch_exit_code_path", lambda ssh_parts, path: None)
@@ -859,6 +861,7 @@ def test_get_run_snapshot_reports_running(monkeypatch):
 
     assert snapshot.state == "running"
     assert snapshot.exit_code is None
+    assert snapshot.instance_cost == 0.79
 
 
 def test_get_run_snapshot_reports_instance_paused(monkeypatch):
@@ -876,12 +879,15 @@ def test_get_run_snapshot_reports_instance_paused(monkeypatch):
         started_at="2026-03-09T10:00:00+00:00",
     )
     monkeypatch.setattr(
-        run, "_get_instance", lambda machine_id: SimpleNamespace(status="Paused", ssh_command="ssh root@example.com")
+        run,
+        "_get_instance",
+        lambda machine_id: SimpleNamespace(status="Paused", ssh_command="ssh root@example.com", cost=0.05),
     )
 
     snapshot = run._get_run_snapshot(record)
 
     assert snapshot.state == "instance-paused"
+    assert snapshot.instance_cost == 0.05
 
 
 def test_run_logs_json_returns_content(monkeypatch):

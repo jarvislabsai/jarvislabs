@@ -133,6 +133,7 @@ class RunStatusSnapshot:
     exit_code: int | None
     remote_log: str
     lifecycle_policy: str
+    instance_cost: float | None = None
 
 
 def _make_run_id() -> str:
@@ -253,6 +254,31 @@ def _get_instance(machine_id: int) -> Instance | None:
         return None
 
 
+_cached_currency_sym: str | None = None
+
+
+def _currency_symbol() -> str:
+    global _cached_currency_sym
+    if _cached_currency_sym is None:
+        try:
+            _cached_currency_sym = "₹" if get_client().account.currency() == "INR" else "$"
+        except Exception:
+            return "$"
+    return _cached_currency_sym
+
+
+def _format_instance_cost(machine_id: int) -> str:
+    """Best-effort fetch of instance cost for display. Returns empty string on failure."""
+    try:
+        inst = _get_instance(machine_id)
+        if inst is not None:
+            sym = _currency_symbol()
+            return f" Instance cost: {sym}{inst.cost:.2f}"
+    except Exception:
+        pass
+    return ""
+
+
 def _ssh_parts_from_instance(inst: Instance) -> list[str] | None:
     if not inst.ssh_command:
         return None
@@ -278,6 +304,7 @@ def _snapshot(
     state: str,
     instance_status: str | None = None,
     exit_code: int | None = None,
+    instance_cost: float | None = None,
 ) -> RunStatusSnapshot:
     return RunStatusSnapshot(
         run_id=record.run_id,
@@ -289,6 +316,7 @@ def _snapshot(
         exit_code=exit_code,
         remote_log=record.remote_log,
         lifecycle_policy=record.lifecycle_policy,
+        instance_cost=instance_cost,
     )
 
 
@@ -297,15 +325,19 @@ def _get_run_snapshot(record: LocalRunRecord) -> RunStatusSnapshot:
     if inst is None:
         return _snapshot(record, state="instance-missing")
 
+    cost = inst.cost
+
     if inst.status == "Paused":
-        return _snapshot(record, state="instance-paused", instance_status=inst.status)
+        return _snapshot(record, state="instance-paused", instance_status=inst.status, instance_cost=cost)
 
     if inst.status != "Running":
-        return _snapshot(record, state=f"instance-{inst.status.lower()}", instance_status=inst.status)
+        return _snapshot(
+            record, state=f"instance-{inst.status.lower()}", instance_status=inst.status, instance_cost=cost
+        )
 
     ssh_parts = _ssh_parts_from_instance(inst)
     if ssh_parts is None:
-        return _snapshot(record, state="unknown", instance_status=inst.status)
+        return _snapshot(record, state="unknown", instance_status=inst.status, instance_cost=cost)
 
     exit_code = _fetch_exit_code_path(ssh_parts, record.remote_exit_code)
     if exit_code is None:
@@ -315,7 +347,7 @@ def _get_run_snapshot(record: LocalRunRecord) -> RunStatusSnapshot:
     else:
         state_name = "failed"
 
-    return _snapshot(record, state=state_name, instance_status=inst.status, exit_code=exit_code)
+    return _snapshot(record, state=state_name, instance_status=inst.status, exit_code=exit_code, instance_cost=cost)
 
 
 def _resolve_run_ssh(run_id: str) -> tuple[LocalRunRecord, list[str]]:
@@ -853,10 +885,11 @@ def _start_managed_run(
         _print_run_followups(paths.run_id)
         return paths.run_id, None
 
+    cost_str = _format_instance_cost(machine_id)
     if exit_code == 0:
-        render.success(f"Run {paths.run_id} completed successfully.")
+        render.success(f"Run {paths.run_id} completed successfully.{cost_str}")
     else:
-        render.warning(f"Run {paths.run_id} finished with exit code {exit_code}.")
+        render.warning(f"Run {paths.run_id} finished with exit code {exit_code}.{cost_str}")
 
     _print_run_followups(paths.run_id)
     return paths.run_id, exit_code
@@ -1115,6 +1148,10 @@ def run_status(
     render.info(f"Run ID: {snapshot.run_id}")
     render.info(f"Machine: {snapshot.machine_id}")
     render.info(f"State: {snapshot.state}")
+    if snapshot.instance_cost is not None:
+        cost_label = "Storage cost" if snapshot.instance_status == "Paused" else "Instance cost"
+        sym = _currency_symbol()
+        render.info(f"{cost_label}: {sym}{snapshot.instance_cost:.2f}")
     render.info(f"Lifecycle: {snapshot.lifecycle_policy}")
     render.info(f"Started: {snapshot.started_at}")
     render.info(f"Command: {record.launch_command}")
