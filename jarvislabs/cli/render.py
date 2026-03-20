@@ -175,8 +175,17 @@ def instance_detail(inst, currency: str = "USD") -> None:
         ("Region", _region_label(inst.region)),
         (cost_label, f"[green]{sym}{inst.cost:.2f}[/green]"),
         ("SSH", f"[cyan]{inst.ssh_command}[/cyan]" if inst.ssh_command else "—"),
-        ("HTTP Ports", inst.http_ports or "—"),
     ]
+
+    # Public IP for running VMs only (paused VMs have stale, released IPs)
+    _ip = (inst.public_ip or "").strip()
+    if inst.template == "vm" and inst.status == "Running" and _ip:
+        rows.append(("Public IP", f"[cyan]{_ip}[/cyan]"))
+
+    # VMs are SSH-only, skip the always-empty HTTP Ports row for them
+    if inst.template != "vm":
+        rows.append(("HTTP Ports", inst.http_ports or "—"))
+
     rows.extend(_service_url_rows(inst))
 
     for field, value in rows:

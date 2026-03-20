@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from io import StringIO
 from types import SimpleNamespace
+
+from rich.console import Console
 
 from jarvislabs.cli import render
 
@@ -31,3 +34,84 @@ def test_service_url_rows_maps_builtin_and_custom_ports():
     assert "abc1231.notebooksn.jarvislabs.net" in rows[2][1]
     assert "abc1232.notebooksn.jarvislabs.net" in rows[3][1]
     assert "abc1233.notebooksn.jarvislabs.net" in rows[4][1]
+
+
+# ── Helpers for instance_detail() tests ─────────────────────────────────────
+
+
+def _capture_detail(inst, currency="USD"):
+    """Render instance_detail() and return captured text."""
+    buf = StringIO()
+    old_console = render.stdout_console
+    render.stdout_console = Console(file=buf, force_terminal=False, color_system=None, width=120)
+    try:
+        render.instance_detail(inst, currency)
+    finally:
+        render.stdout_console = old_console
+    return buf.getvalue()
+
+
+def _make_inst(**overrides):
+    """Create a minimal instance namespace with sensible defaults."""
+    defaults = {
+        "machine_id": 100,
+        "name": "test-inst",
+        "status": "Running",
+        "gpu_type": "A100",
+        "num_gpus": 1,
+        "template": "pytorch",
+        "storage_gb": 40,
+        "region": "india-noida-01",
+        "cost": 0.50,
+        "ssh_command": "ssh root@1.2.3.4 -p 22",
+        "public_ip": "1.2.3.4",
+        "http_ports": "",
+        "url": None,
+        "vs_url": None,
+        "endpoints": None,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+# ── instance_detail(): Public IP display ─────────────────────────────────────
+
+
+def test_instance_detail_shows_public_ip_for_running_vm():
+    inst = _make_inst(template="vm", status="Running", public_ip="217.18.55.33")
+    output = _capture_detail(inst)
+    assert "Public IP" in output
+    assert "217.18.55.33" in output
+
+
+def test_instance_detail_hides_public_ip_for_paused_vm():
+    inst = _make_inst(template="vm", status="Paused", public_ip="217.18.55.33")
+    output = _capture_detail(inst)
+    assert "Public IP" not in output
+
+
+def test_instance_detail_hides_public_ip_for_running_container():
+    inst = _make_inst(template="pytorch", status="Running", public_ip="5.6.7.8")
+    output = _capture_detail(inst)
+    assert "Public IP" not in output
+
+
+def test_instance_detail_hides_public_ip_for_vm_with_no_ip():
+    inst = _make_inst(template="vm", status="Running", public_ip=None)
+    output = _capture_detail(inst)
+    assert "Public IP" not in output
+
+
+# ── instance_detail(): HTTP Ports hidden for VMs ─────────────────────────────
+
+
+def test_instance_detail_hides_http_ports_for_vm():
+    inst = _make_inst(template="vm", status="Running")
+    output = _capture_detail(inst)
+    assert "HTTP Ports" not in output
+
+
+def test_instance_detail_shows_http_ports_for_container():
+    inst = _make_inst(template="pytorch", status="Running", http_ports="7860,8080")
+    output = _capture_detail(inst)
+    assert "HTTP Ports" in output
