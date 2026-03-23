@@ -178,7 +178,7 @@ def finish_update_check() -> None:
 
         console.print(f"\n[yellow]Update available:[/yellow] {_current} → {_cached_latest}")
         console.print(f"Run: [bold]{_get_upgrade_command()}[/bold]")
-        console.print("[bold]After upgrading, run:[/bold] jl setup --yes")
+        console.print("[bold]After upgrading, run:[/bold] jl setup --yes [bold]to update agent skills[/bold]")
 
         cache["notified_at"] = time.time()
         _write_cache(cache)
