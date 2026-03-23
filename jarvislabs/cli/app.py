@@ -61,7 +61,10 @@ def get_client():
 def main() -> None:
     """Entry point for `jl` command (wired via pyproject.toml [project.scripts])."""
     from jarvislabs.cli import commands, instance, run, setup  # noqa: F401
+    from jarvislabs.cli.update_check import finish_update_check, start_update_check
     from jarvislabs.exceptions import JarvislabsError
+
+    start_update_check()
 
     try:
         app()
@@ -69,3 +72,5 @@ def main() -> None:
         from jarvislabs.cli.render import die
 
         die(str(e))
+    finally:
+        finish_update_check()
