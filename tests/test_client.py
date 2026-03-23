@@ -222,42 +222,139 @@ def test_region_url(region, expected):
 
 
 class TestResolveRegion:
-    def test_exception_fallback_europe_gpu(self, mock_transport):
-        mock_transport.request.side_effect = Exception("network error")
-        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == EUROPE_REGION
+    # ── Fallback tests (API down) ───────────────────────────────────────────
 
-    def test_exception_fallback_india_gpu(self, mock_transport):
+    def test_fallback_h100_goes_to_in2(self, mock_transport):
+        """H100 exists in IN2 — fallback should be IN2, not EU."""
+        mock_transport.request.side_effect = Exception("network error")
+        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == INDIA_NOIDA_REGION
+
+    def test_fallback_h200_goes_to_eu(self, mock_transport):
+        """H200 is EU-exclusive — fallback should be EU."""
+        mock_transport.request.side_effect = Exception("network error")
+        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1) == EUROPE_REGION
+
+    def test_fallback_rtx5000_goes_to_in1(self, mock_transport):
+        """RTX5000 is IN1-exclusive — fallback should be IN1."""
         mock_transport.request.side_effect = Exception("network error")
         assert _resolve_region(mock_transport, gpu_type="RTX5000", num_gpus=1) == DEFAULT_REGION
 
-    def test_vm_exception_fallback_noida(self, mock_transport):
+    def test_fallback_l4_goes_to_in2(self, mock_transport):
+        """L4 is in IN2, not in fallback map — defaults to IN2."""
+        mock_transport.request.side_effect = Exception("network error")
+        assert _resolve_region(mock_transport, gpu_type="L4", num_gpus=1) == INDIA_NOIDA_REGION
+
+    def test_fallback_unknown_gpu_goes_to_in2(self, mock_transport):
+        """Unknown GPU not in map defaults to IN2."""
+        mock_transport.request.side_effect = Exception("network error")
+        assert _resolve_region(mock_transport, gpu_type="NEW_GPU", num_gpus=1) == INDIA_NOIDA_REGION
+
+    # ── VM fallback tests (API down + VM clamp) ────────────────────────────
+
+    def test_vm_fallback_l4_goes_to_in2(self, mock_transport):
         mock_transport.request.side_effect = Exception("network error")
         assert _resolve_region(mock_transport, gpu_type="L4", num_gpus=1, template="vm") == INDIA_NOIDA_REGION
 
-    def test_vm_exception_fallback_europe(self, mock_transport):
+    def test_vm_fallback_h200_goes_to_eu(self, mock_transport):
+        """H200 VM fallback → EU (EU is in VM_SUPPORTED_REGIONS)."""
         mock_transport.request.side_effect = Exception("network error")
-        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1, template="vm") == EUROPE_REGION
+        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1, template="vm") == EUROPE_REGION
 
-    def test_empty_candidates(self, mock_transport):
+    def test_vm_fallback_rtx5000_clamped_to_in2(self, mock_transport):
+        """RTX5000 maps to IN1, but IN1 is not VM-supported — clamp to IN2."""
+        mock_transport.request.side_effect = Exception("network error")
+        assert _resolve_region(mock_transport, gpu_type="RTX5000", num_gpus=1, template="vm") == INDIA_NOIDA_REGION
+
+    # ── Empty candidates ────────────────────────────────────────────────────
+
+    def test_empty_candidates_h100(self, mock_transport):
         mock_transport.request.return_value = {"server_meta": []}
-        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == EUROPE_REGION
+        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == INDIA_NOIDA_REGION
 
-    def test_candidate_with_free_devices(self, mock_transport):
+    def test_empty_candidates_h200(self, mock_transport):
+        mock_transport.request.return_value = {"server_meta": []}
+        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1) == EUROPE_REGION
+
+    # ── Priority sorting tests (API works) ──────────────────────────────────
+
+    def test_h100_prefers_in2_over_eu(self, mock_transport):
+        """Backend returns EU first, but priority sort should pick IN2."""
         mock_transport.request.return_value = {
             "server_meta": [
-                {"gpu_type": "H100", "region": "europe-01", "num_free_devices": 3},
+                {"gpu_type": "H100", "region": "europe-01", "num_free_devices": 4},
+                {"gpu_type": "H100", "region": "india-noida-01", "num_free_devices": 4},
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == "india-noida-01"
+
+    def test_h100_8gpu_prefers_in2(self, mock_transport):
+        """8x H100 should still prefer IN2 when IN2 has capacity."""
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "H100", "region": "europe-01", "num_free_devices": 8},
+                {"gpu_type": "H100", "region": "india-noida-01", "num_free_devices": 8},
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=8) == "india-noida-01"
+
+    def test_h100_falls_to_eu_when_in2_full(self, mock_transport):
+        """IN2 has no capacity → should fall through to EU."""
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "H100", "region": "europe-01", "num_free_devices": 8},
+                {"gpu_type": "H100", "region": "india-noida-01", "num_free_devices": 0},
             ]
         }
         assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == "europe-01"
 
-    def test_all_full_returns_first_candidate(self, mock_transport):
+    def test_single_region_candidate(self, mock_transport):
+        """H200 only in EU — returns EU."""
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "H200", "region": "europe-01", "num_free_devices": 3},
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1) == "europe-01"
+
+    def test_all_full_returns_highest_priority(self, mock_transport):
+        """No capacity anywhere → returns highest-priority region."""
         mock_transport.request.return_value = {
             "server_meta": [
                 {"gpu_type": "H100", "region": "europe-01", "num_free_devices": 0},
-                {"gpu_type": "H100", "region": "europe-02", "num_free_devices": 0},
+                {"gpu_type": "H100", "region": "india-noida-01", "num_free_devices": 0},
             ]
         }
-        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == "europe-01"
+        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == "india-noida-01"
+
+    def test_in2_preferred_over_in1(self, mock_transport):
+        """A100 in both IN2 and IN1 — should pick IN2."""
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "A100", "region": "india-01", "num_free_devices": 4},
+                {"gpu_type": "A100", "region": "india-noida-01", "num_free_devices": 4},
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="A100", num_gpus=1) == "india-noida-01"
+
+    def test_in1_preferred_over_eu(self, mock_transport):
+        """GPU in both IN1 and EU1 — should pick IN1."""
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "A6000", "region": "europe-01", "num_free_devices": 4},
+                {"gpu_type": "A6000", "region": "india-01", "num_free_devices": 4},
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="A6000", num_gpus=1) == "india-01"
+
+    def test_unknown_region_sorts_last(self, mock_transport):
+        """Unknown region should sort after all known regions."""
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "H100", "region": "unknown-region", "num_free_devices": 8},
+                {"gpu_type": "H100", "region": "india-noida-01", "num_free_devices": 8},
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == "india-noida-01"
 
     def test_gpu_type_none(self, mock_transport):
         mock_transport.request.return_value = {
@@ -265,7 +362,9 @@ class TestResolveRegion:
                 {"gpu_type": "H100", "region": "europe-01", "num_free_devices": 5},
             ]
         }
-        assert _resolve_region(mock_transport, gpu_type=None, num_gpus=1) == DEFAULT_REGION
+        assert _resolve_region(mock_transport, gpu_type=None, num_gpus=1) == INDIA_NOIDA_REGION
+
+    # ── VM routing tests (API works) ────────────────────────────────────────
 
     def test_vm_filters_out_unsupported_regions(self, mock_transport):
         mock_transport.request.return_value = {
@@ -595,7 +694,7 @@ class TestCreatePayload:
         mock_transport.request.return_value = {"machine_id": 1}
         mock_get.return_value = MagicMock(machine_id=1)
 
-        _make_instances(mock_transport).create(gpu_type="H100", storage=20)
+        _make_instances(mock_transport).create(gpu_type="H200", storage=20)
         assert mock_transport.request.call_args.kwargs["json"]["hdd"] >= EUROPE_MIN_STORAGE_GB
 
     @patch("jarvislabs.client._resolve_region", return_value="india-01")

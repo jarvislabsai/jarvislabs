@@ -135,3 +135,4 @@ dmypy.json
 research/
 .claude/
 docs.md
+benchmarks/

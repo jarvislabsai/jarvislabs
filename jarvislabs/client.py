@@ -26,6 +26,8 @@ from jarvislabs.constants import (
     POLL_INTERVAL_S,
     REGION_CODE_TO_REGION,
     REGION_DISPLAY_CODES,
+    REGION_GPU_FALLBACK,
+    REGION_PRIORITY,
     REGION_URLS,
     VM_MIN_STORAGE_GB,
     VM_SUPPORTED_REGIONS,
@@ -527,11 +529,10 @@ def _normalize_success(data: dict) -> bool:
 
 
 def _resolve_region(transport: Transport, *, gpu_type: str | None, num_gpus: int, template: str = "pytorch") -> str:
-    """Auto-route to the best region via server_meta. Hardcoded fallback if call fails."""
-    if template == "vm":
-        fallback = EUROPE_REGION if gpu_type in EUROPE_GPU_TYPES else INDIA_NOIDA_REGION
-    else:
-        fallback = EUROPE_REGION if gpu_type in EUROPE_GPU_TYPES else DEFAULT_REGION
+    """Auto-route to the best region via server_meta, preferring IN2 > IN1 > EU1."""
+    fallback = REGION_GPU_FALLBACK.get(gpu_type, INDIA_NOIDA_REGION)
+    if template == "vm" and fallback not in VM_SUPPORTED_REGIONS:
+        fallback = INDIA_NOIDA_REGION
 
     try:
         resp = transport.request("GET", "misc/server_meta")
@@ -544,6 +545,9 @@ def _resolve_region(transport: Transport, *, gpu_type: str | None, num_gpus: int
         candidates = [s for s in candidates if s.region in VM_SUPPORTED_REGIONS]
     if not candidates:
         return fallback
+
+    _priority = {r: i for i, r in enumerate(REGION_PRIORITY)}
+    candidates.sort(key=lambda s: _priority.get(s.region, len(REGION_PRIORITY)))
 
     for server in candidates:
         if server.num_free_devices >= num_gpus:
