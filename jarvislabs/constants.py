@@ -8,6 +8,7 @@ only this file needs updating.
 
 DEFAULT_REGION = "india-01"
 INDIA_NOIDA_REGION = "india-noida-01"
+EUROPE_REGION = "europe-01"
 
 REGION_URLS: dict[str, str] = {
     "india-01": "https://backendprod.jarvislabs.net/",
@@ -23,9 +24,23 @@ REGION_DISPLAY_CODES: dict[str, str] = {
 
 REGION_CODE_TO_REGION: dict[str, str] = {code.lower(): region for region, code in REGION_DISPLAY_CODES.items()}
 
+# ── Region routing ──────────────────────────────────────────────────────────
+
+# Preferred order for auto-routing when user doesn't specify --region
+REGION_PRIORITY: list[str] = [INDIA_NOIDA_REGION, DEFAULT_REGION, EUROPE_REGION]
+
+# Hardcoded fallback when server_meta API is unreachable.
+# GPUs not in this map default to INDIA_NOIDA_REGION (first in priority).
+REGION_GPU_FALLBACK: dict[str, str] = {
+    "H200": "europe-01",  # EU-exclusive
+    "RTX5000": "india-01",  # IN1-exclusive
+    "A5000Pro": "india-01",
+    "A6000": "india-01",
+    "RTX6000Ada": "india-01",
+}
+
 # ── Europe region constraints ────────────────────────────────────────────────
 
-EUROPE_REGION = "europe-01"
 EUROPE_GPU_TYPES: frozenset[str] = frozenset({"H100", "H200"})
 EUROPE_GPU_COUNTS: frozenset[int] = frozenset({1, 8})
 EUROPE_MIN_STORAGE_GB = 100
