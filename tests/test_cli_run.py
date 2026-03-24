@@ -405,8 +405,8 @@ def test_build_run_spec_for_python_file(monkeypatch, tmp_path):
 
     assert spec.target_kind == "file"
     assert spec.local_target == source
-    assert spec.remote_target == f"/home/{source.stem}/{source.name}"
-    assert spec.working_dir == f"/home/{source.stem}"
+    assert spec.remote_target == f"/home/{source.name}"
+    assert spec.working_dir == "/home"
     assert spec.launch_command == f"python3 {source.name} --epochs 5"
 
 
@@ -417,8 +417,8 @@ def test_build_run_spec_for_bash_file(tmp_path):
     spec = run._build_run_spec(str(source), ["--fast"])
 
     assert spec.target_kind == "file"
-    assert spec.remote_target == "/home/train/train.sh"
-    assert spec.working_dir == "/home/train"
+    assert spec.remote_target == "/home/train.sh"
+    assert spec.working_dir == "/home"
     assert spec.launch_command == "bash train.sh --fast"
 
 
@@ -589,8 +589,8 @@ def test_detect_requirements_skips_file_targets(tmp_path):
     spec = run.RunSpec(
         target_kind="file",
         local_target=source,
-        remote_target="/home/train/train.py",
-        working_dir="/home/train",
+        remote_target="/home/train.py",
+        working_dir="/home",
         launch_command="python3 train.py",
     )
     assert run._detect_requirements(spec) is None
@@ -731,12 +731,12 @@ def test_start_managed_run_for_file_launches_detached_and_saves_local_record(mon
 
     spec = captured["spec"]
     assert spec.target_kind == "file"
-    assert spec.remote_target == "/home/train/train.py"
+    assert spec.remote_target == "/home/train.py"
     assert spec.launch_command == "python3 train.py --epochs 5"
     record = captured["record"]
     assert record.run_id == "r_test123"
     assert record.machine_id == 123
-    assert record.remote_target == "/home/train/train.py"
+    assert record.remote_target == "/home/train.py"
     assert record.remote_log == "/home/jl-runs/r_test123/output.log"
     assert record.instance_origin == "existing"
     assert record.lifecycle_policy == "none"
@@ -804,8 +804,8 @@ def test_iter_local_runs_sorts_newest_first(monkeypatch, tmp_path):
         machine_id=1,
         target_kind="file",
         local_target="/tmp/old.py",
-        remote_target="/home/old/old.py",
-        working_dir="/home/old",
+        remote_target="/home/old.py",
+        working_dir="/home",
         remote_log="/home/jl-runs/r_old/output.log",
         remote_pid="/home/jl-runs/r_old/pid",
         remote_exit_code="/home/jl-runs/r_old/exit_code",
@@ -841,8 +841,8 @@ def test_get_run_snapshot_reports_running(monkeypatch):
         machine_id=123,
         target_kind="file",
         local_target="/tmp/train.py",
-        remote_target="/home/train/train.py",
-        working_dir="/home/train",
+        remote_target="/home/train.py",
+        working_dir="/home",
         remote_log="/home/jl-runs/r_run/output.log",
         remote_pid="/home/jl-runs/r_run/pid",
         remote_exit_code="/home/jl-runs/r_run/exit_code",
@@ -870,8 +870,8 @@ def test_get_run_snapshot_reports_instance_paused(monkeypatch):
         machine_id=123,
         target_kind="file",
         local_target="/tmp/train.py",
-        remote_target="/home/train/train.py",
-        working_dir="/home/train",
+        remote_target="/home/train.py",
+        working_dir="/home",
         remote_log="/home/jl-runs/r_paused/output.log",
         remote_pid="/home/jl-runs/r_paused/pid",
         remote_exit_code="/home/jl-runs/r_paused/exit_code",
@@ -896,8 +896,8 @@ def test_run_logs_json_returns_content(monkeypatch):
         machine_id=123,
         target_kind="file",
         local_target="/tmp/train.py",
-        remote_target="/home/train/train.py",
-        working_dir="/home/train",
+        remote_target="/home/train.py",
+        working_dir="/home",
         remote_log="/home/jl-runs/r_logs/output.log",
         remote_pid="/home/jl-runs/r_logs/pid",
         remote_exit_code="/home/jl-runs/r_logs/exit_code",
@@ -933,8 +933,8 @@ def test_run_logs_follow_shows_followups(monkeypatch):
         machine_id=123,
         target_kind="file",
         local_target="/tmp/train.py",
-        remote_target="/home/train/train.py",
-        working_dir="/home/train",
+        remote_target="/home/train.py",
+        working_dir="/home",
         remote_log="/home/jl-runs/r_logs/output.log",
         remote_pid="/home/jl-runs/r_logs/pid",
         remote_exit_code="/home/jl-runs/r_logs/exit_code",
@@ -965,8 +965,8 @@ def test_run_list_does_not_refresh_by_default(monkeypatch, tmp_path):
         machine_id=123,
         target_kind="file",
         local_target="/tmp/train.py",
-        remote_target="/home/train/train.py",
-        working_dir="/home/train",
+        remote_target="/home/train.py",
+        working_dir="/home",
         remote_log="/home/jl-runs/r_saved/output.log",
         remote_pid="/home/jl-runs/r_saved/pid",
         remote_exit_code="/home/jl-runs/r_saved/exit_code",
@@ -1008,8 +1008,8 @@ def test_run_stop_reports_completed_run(monkeypatch):
         machine_id=123,
         target_kind="file",
         local_target="/tmp/train.py",
-        remote_target="/home/train/train.py",
-        working_dir="/home/train",
+        remote_target="/home/train.py",
+        working_dir="/home",
         remote_log="/home/jl-runs/r_done/output.log",
         remote_pid="/home/jl-runs/r_done/pid",
         remote_exit_code="/home/jl-runs/r_done/exit_code",
@@ -1049,8 +1049,8 @@ def test_run_stop_sends_term_to_running_process(monkeypatch):
         machine_id=123,
         target_kind="file",
         local_target="/tmp/train.py",
-        remote_target="/home/train/train.py",
-        working_dir="/home/train",
+        remote_target="/home/train.py",
+        working_dir="/home",
         remote_log="/home/jl-runs/r_live/output.log",
         remote_pid="/home/jl-runs/r_live/pid",
         remote_exit_code="/home/jl-runs/r_live/exit_code",

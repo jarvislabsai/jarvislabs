@@ -13,7 +13,7 @@ Use `--help` on any command to discover flags (e.g., `jl run --help`, `jl create
 
 ## Mental Model
 
-- Machine commands (`jl create/list/pause/resume/destroy/ssh/exec/upload/download`) = GPU instance lifecycle and access.
+- Machine commands (`jl create/list/get/pause/resume/destroy/rename/ssh/exec/upload/download`) = GPU instance lifecycle and access.
 - `jl run` = managed job on an instance. Uploads code, sets up a Python environment, runs your script in the background with log tracking.
 - `jl exec` = run a quick command on an instance (nvidia-smi, ps, df) and low-level instance access. No environment setup, no tracking.
 
@@ -83,11 +83,13 @@ Run `jl get <id> --json` to find all service URLs (`url`, `vs_url`, `endpoints`)
 
 | Target | What happens |
 |---|---|
-| `train.py` | Uploads the file, creates working dir, runs `python3 train.py` (or `bash` for `.sh`) |
-| `.` or `./project` with `--script train.py` | Rsyncs the directory, runs inside it. Requires `rsync` locally. |
-| No target, command after `--` | No upload, no environment setup. Runs the raw command directly. |
+| `train.py` | Uploads to `<home>/train.py`, runs in `<home>/` with shared venv at `$HOME/.venv` |
+| `.` or `./project` with `--script train.py` | Rsyncs the directory to `<home>/<dirname>/`, runs inside it with project venv at `<home>/<dirname>/.venv` |
+| No target, command after `--` | No upload. Runs from `~`. If `$HOME/.venv` exists (from a previous file run), its `bin/` is prepended to PATH so `python` and `pip` resolve to venv versions. Otherwise uses system Python. |
 
-Only `.py` and `.sh` file targets are supported. For other file types, use a directory target or `jl upload` + `jl exec`.
+Only `.py` and `.sh` file targets are supported. For other file types, use a directory target or `jl upload` + `jl exec`. Directory targets require `rsync` installed locally.
+
+**Note:** File targets with the same basename overwrite each other on the remote (e.g., `foo/train.py` and `bar/train.py` both land at `/home/train.py`). Use directory targets for projects with nested structure.
 
 Pass script arguments after `--`:
 ```bash
@@ -96,14 +98,19 @@ jl run train.py --on <id> --json --yes -- --epochs 50 --lr 0.001
 
 ### Environment & setup
 
-`jl run` creates a `.venv` on the remote machine. Template packages (torch, etc.) are visible by default — no need to install them.
+`jl run` manages a Python venv on the remote instance. Template packages (torch, etc.) are inherited via `--system-site-packages` — no need to install them. Venvs persist under the remote home directory across pause/resume.
+
+**Venv locations:**
+- **File targets:** shared instance-level venv at `$HOME/.venv`. All file runs share it — deps installed for one script are available to all.
+- **Directory targets:** per-project venv at `<home>/<dirname>/.venv`. Isolated per project.
+- **Command mode:** no venv is created. If `$HOME/.venv` exists from a previous file run, `python` and `pip` automatically resolve to it via PATH prepend.
 
 **How dependencies get installed:**
 
 - **Directory targets** — auto-detected. If your directory has `requirements.txt` or `pyproject.toml` (with `[project]`), deps are installed automatically. No flag needed.
-- **Single file targets** — no auto-detection. Pass `--requirements requirements.txt` if you need extra packages.
+- **File targets** — no auto-detection. Pass `--requirements requirements.txt` if you need extra packages.
 - **`--requirements <file>`** — overrides auto-detection. Uploads and installs the specified file instead.
-- **`--setup <command>`** — runs a shell command before your script (e.g., `--setup "pip install flash-attn"`).
+- **`--setup <command>`** — runs a shell command before your script (e.g., `--setup "pip install flash-attn"`). Runs inside the venv for file/dir targets, raw for command mode.
 
 ```bash
 # Directory — auto-detects requirements.txt
@@ -116,11 +123,13 @@ jl run train.py --on <id> --requirements requirements.txt --json --yes
 jl run . --script train.py --on <id> --setup "pip install flash-attn" --json --yes
 ```
 
-**Command mode** — when you pass a raw command after `--` with no file or directory target. Useful when code already exists on the instance (e.g., the agent wrote files directly via `exec`, or a previous run left scripts on the remote). No upload, no venv — the command runs on system Python with template packages. You still get `jl run` log tracking (`logs`, `status`, `stop`), which is the main advantage over `jl exec`. Only `--setup` is available as a hook. `--requirements` is not supported in command mode.
+**Command mode** — when you pass a raw command after `--` with no file or directory target. Useful when code already exists on the instance (e.g., uploaded via `jl upload`, written via `jl exec`, or left by a previous run). If `$HOME/.venv` exists from a prior file run, its `bin/` is prepended to PATH so `python` and `pip` resolve to venv versions. You still get `jl run` log tracking (`logs`, `status`, `stop`), which is the main advantage over `jl exec`. `--requirements` is not supported in command mode.
+
+**Important:** Command mode runs from `~` (the remote shell home). Use absolute paths or `cd` explicitly for scripts in specific directories.
 
 ```bash
-jl run --on <id> --json --yes -- python3 /home/train/train.py
-jl run --on <id> --json --yes -- torchrun --nproc_per_node=2 train.py
+jl run --on <id> --json --yes -- python3 /home/train.py
+jl run --on <id> --json --yes -- sh -lc 'cd /home && torchrun --nproc_per_node=2 train.py'
 ```
 
 ### Running on an existing instance
@@ -138,7 +147,7 @@ Lifecycle flags (`--keep`, `--pause`, `--destroy`) are not allowed with `--on` �
 jl run . --script train.py --gpu L4 --keep --json --yes
 ```
 
-Creates a new instance, uploads code, runs the script. Additional flags: `--vm` (VM instead of container), `--template` (default: pytorch), `--storage` (default: 40GB), `--num-gpus` (default: 1), `--region`, `--http-ports`.
+Creates a new instance, uploads code, runs the script. Additional flags: `--vm` (VM instead of container, auto-bumps storage to 100GB, disallows `--template` and `--http-ports`), `--template` (default: pytorch; run `jl templates --json` to list available), `--storage` (default: 40GB), `--num-gpus` (default: 1), `--region`, `--http-ports`.
 
 **Lifecycle rules for fresh instances:**
 
@@ -219,7 +228,7 @@ jl exec <id> -- ps -ef
 jl exec <id> -- df -h
 ```
 
-Use `jl exec`, `jl run logs`, and `jl run status` without `--json` — the raw output is easier to read and parse. Reserve `--json` for commands where you need structured data (`create`, `list`, `get`, `run start`).
+Prefer raw output for `jl exec` and `jl run logs` — easier to read and parse. Use `--json` when you need machine-readable state: `create`, `get`, `list`, `run start`, `run status`.
 
 Exit code of the remote command is propagated. For pipes or shell syntax, wrap in `sh -lc`:
 
@@ -245,7 +254,7 @@ The remote home directory (`/home/` on containers, `/home/<user>/` on VMs) persi
 
 **Persists:**
 - Files and directories under the home directory
-- `.venv` created by `jl run` (inside the project working directory)
+- `$HOME/.venv` (shared venv for file runs) and `<project>/.venv` (per-project venv for directory runs)
 - Attached filesystems (mounted at `/home/jl_fs/`)
 - Run metadata under `<home>/jl-runs/<run_id>/`
 
@@ -253,20 +262,36 @@ The remote home directory (`/home/` on containers, `/home/<user>/` on VMs) persi
 - System-level installs (`apt-get`, global pip packages outside the home directory)
 - Files outside the home directory (`/tmp`, `/root`, etc.)
 
-Use `--setup` for system-level reinstalls (e.g., `apt-get`). Python packages in the venv persist. For recurring system setup, use startup scripts (`jl scripts add`).
+Use `--setup` for system-level reinstalls (e.g., `apt-get`). Python packages in the venv persist across pause/resume. For recurring system setup, use startup scripts (`jl scripts add`).
 
 ### Remote file paths
 
-- Uploaded directories: `<home>/<directory_name>/`
-- Uploaded files (via `jl run`): `<home>/<file_stem>/<file>` (e.g., `train.py` → `/home/train/train.py`)
+`<home>` is `/home/` on containers, `/home/<user>/` on VMs.
+
+- Uploaded files (via `jl run`): `<home>/<filename>` (e.g., `train.py` → `/home/train.py`)
+- Uploaded directories (via `jl run`): `<home>/<directory_name>/`
 - Uploaded files (via `jl upload`): `<home>/<filename>`
+- Shared venv (file runs): `<home>/.venv/`
+- Project venv (directory runs): `<home>/<directory_name>/.venv/`
 - Run metadata: `<home>/jl-runs/<run_id>/`
 
-### Filesystems
+### Filesystems & supporting commands
 
-- **Region-bound:** A filesystem created in IN2 is only visible to IN2 instances. Use `jl filesystem list --json` to see each filesystem's region.
+Attach a filesystem at creation with `--fs-id <id>`. Attach a startup script with `--script-id <id>` (and `--script-args`). These flags work on both `jl create` and `jl resume`.
+
+```bash
+jl templates --json                    # list available templates
+jl ssh-key list --json                 # list registered SSH keys
+jl ssh-key add <pubkey-file> --name x  # add SSH key (required for VMs)
+jl scripts list --json                 # list startup scripts
+jl filesystem list --json              # list filesystems
+jl filesystem create --name x --storage 100 --json  # create filesystem
+```
+
+**Filesystem caveats:**
+- **Region-bound:** A filesystem created in IN2 is only visible to IN2 instances.
 - **ID changes on edit:** Expanding a filesystem (`jl filesystem edit`) may return a new `fs_id`. Always use the returned ID.
-- The CLI validates that `fs_id` exists before creating/resuming, but does **not** validate that the filesystem's region matches the instance's region. Ensure they match yourself.
+- The CLI validates that `fs_id` exists before creating/resuming, but does **not** validate region match. Ensure they match yourself.
 
 ## Agent Workflow (End-to-End)
 
