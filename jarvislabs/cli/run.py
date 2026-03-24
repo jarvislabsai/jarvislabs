@@ -466,7 +466,7 @@ def _build_run_spec(
             "Use a directory target or the instance upload/exec primitives for other files."
         )
 
-    remote_root = PurePosixPath(_remote_home(ssh_command)) / (local_target.stem or local_target.name)
+    remote_root = PurePosixPath(_remote_home(ssh_command))
     remote_target = (remote_root / local_target.name).as_posix()
     return RunSpec(
         target_kind="file",
@@ -636,14 +636,24 @@ def _compose_launch_command(
     if spec.target_kind == "command":
         if requirements_name:
             render.die("--requirements requires a file or directory target.")
-        return _with_setup(spec.launch_command, setup_command)
+        # Detect existing venv from previous file/dir runs — prepend to PATH if found
+        venv_detect = 'if [ -x "$HOME/.venv/bin/python" ]; then export PATH="$HOME/.venv/bin:$PATH"; fi'
+        return _with_setup(f"{venv_detect} && {spec.launch_command}", setup_command)
 
     commands = [
         "command -v uv >/dev/null 2>&1 || { curl -LsSf https://astral.sh/uv/install.sh | sh >/dev/null 2>&1; }",
         'export PATH="$HOME/.local/bin:$PATH"',
-        "(test -d .venv || uv venv --system-site-packages --seed .venv)",
-        ". .venv/bin/activate",
     ]
+
+    if spec.target_kind == "file":
+        # File targets: shared instance-level venv at $HOME/.venv
+        commands.append('(test -d "$HOME/.venv" || uv venv --system-site-packages --seed "$HOME/.venv")')
+        commands.append('. "$HOME/.venv/bin/activate"')
+    else:
+        # Directory targets: per-project venv inside the project directory
+        commands.append("(test -d .venv || uv venv --system-site-packages --seed .venv)")
+        commands.append(". .venv/bin/activate")
+
     if requirements_name:
         quoted = shlex.quote(requirements_name)
         commands.append(f"echo '[jl] Installing from' {quoted} && uv pip install -r {quoted}")
