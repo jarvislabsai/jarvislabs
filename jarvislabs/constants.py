@@ -44,13 +44,12 @@ REGION_GPU_FALLBACK: dict[str, str] = {
 EUROPE_GPU_TYPES: frozenset[str] = frozenset({"H100", "H200"})
 EUROPE_GPU_COUNTS: frozenset[int] = frozenset({1, 8})
 EUROPE_MIN_STORAGE_GB = 100
-EUROPE_POLL_TIMEOUT_S = 300
 VM_MIN_STORAGE_GB = 100
 VM_SUPPORTED_REGIONS: frozenset[str] = frozenset({EUROPE_REGION, INDIA_NOIDA_REGION})
 
 # ── Timeouts & Polling ───────────────────────────────────────────────────────
 
-DEFAULT_POLL_TIMEOUT_S = 180  # 3 min for India regions
+DEFAULT_POLL_TIMEOUT_S = 600
 POLL_INTERVAL_S = 3
 FETCH_RETRY_INTERVAL_S = 2
 HTTP_TIMEOUT_CONNECT_S = 10
