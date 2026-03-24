@@ -15,7 +15,7 @@ Use `--help` on any command to discover flags (e.g., `jl run --help`, `jl create
 
 - Machine commands (`jl create/list/get/pause/resume/destroy/rename/ssh/exec/upload/download`) = GPU instance lifecycle and access.
 - `jl run` = managed job on an instance. Uploads code, sets up a Python environment, runs your script in the background with log tracking.
-- `jl exec` = run a quick command on an instance (nvidia-smi, ps, df) and low-level instance access. No environment setup, no tracking.
+- `jl exec` = run any command on an instance. Use for system checks (nvidia-smi, ps, df), debugging failed runs, inspecting files, or any raw shell access. No environment setup, no tracking. This is your escape hatch when `jl run` doesn't cover your use case.
 
 ## Instances
 
