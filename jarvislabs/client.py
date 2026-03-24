@@ -19,7 +19,6 @@ from jarvislabs.constants import (
     EUROPE_GPU_COUNTS,
     EUROPE_GPU_TYPES,
     EUROPE_MIN_STORAGE_GB,
-    EUROPE_POLL_TIMEOUT_S,
     EUROPE_REGION,
     FETCH_RETRY_INTERVAL_S,
     INDIA_NOIDA_REGION,
@@ -675,9 +674,10 @@ def _region_url(region: str | None) -> str:
 
 def _poll_until_running(transport: Transport, machine_id: int, region: str) -> None:
     """Poll /misc/status until Running or Failed. Raises on failure/timeout."""
-    timeout = EUROPE_POLL_TIMEOUT_S if region == EUROPE_REGION else DEFAULT_POLL_TIMEOUT_S
     base_url = _region_url(region)
-    deadline = time.monotonic() + timeout
+    deadline = time.monotonic() + DEFAULT_POLL_TIMEOUT_S
+    transient_errors = 0
+    max_transient_errors = 5
 
     while time.monotonic() < deadline:
         try:
@@ -688,8 +688,20 @@ def _poll_until_running(transport: Transport, machine_id: int, region: str) -> N
                 base_url=base_url,
             )
             status = StatusResponse(**resp)
+            transient_errors = 0  # reset on success
         except NotFoundError:
             # 404 = no ErrorLog row yet → still creating, keep polling
+            transient_errors = 0
+            time.sleep(POLL_INTERVAL_S)
+            continue
+        except APIError as exc:
+            # Only retry transient errors (timeouts, server errors, rate limits).
+            # Permanent errors (400, 422, etc.) should fail immediately.
+            if exc.status_code not in {0, 429, 500, 502, 503, 504}:
+                raise
+            transient_errors += 1
+            if transient_errors >= max_transient_errors:
+                raise
             time.sleep(POLL_INTERVAL_S)
             continue
 
@@ -703,7 +715,7 @@ def _poll_until_running(transport: Transport, machine_id: int, region: str) -> N
 
     raise APIError(
         0,
-        f"Timed out after {timeout}s waiting for instance {machine_id} to start. "
+        f"Timed out after {DEFAULT_POLL_TIMEOUT_S}s waiting for instance {machine_id} to start. "
         f"It may still come up shortly. Check it with: jl get {machine_id}",
     )
 

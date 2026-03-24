@@ -415,20 +415,57 @@ class TestPollUntilRunning:
     def test_timeout_raises(self, mock_transport):
         mock_transport.request.return_value = {"status": "Creating", "error": None, "code": None}
         with (
-            patch("jarvislabs.client.time.monotonic", side_effect=[0, 100, 200]),
+            patch("jarvislabs.client.time.monotonic", side_effect=[0, 500, 601]),
             patch("jarvislabs.client.time.sleep"),
             pytest.raises(APIError, match=r"Timed out.*jl get 1"),
         ):
             _poll_until_running(mock_transport, machine_id=1, region="india-01")
 
-    def test_europe_uses_300s_timeout(self, mock_transport):
+    def test_europe_uses_same_timeout(self, mock_transport):
         mock_transport.request.return_value = {"status": "Creating", "error": None, "code": None}
         with (
-            patch("jarvislabs.client.time.monotonic", side_effect=[0, 250, 301]),
+            patch("jarvislabs.client.time.monotonic", side_effect=[0, 500, 601]),
             patch("jarvislabs.client.time.sleep"),
             pytest.raises(APIError, match=r"Timed out.*jl get 1"),
         ):
             _poll_until_running(mock_transport, machine_id=1, region=EUROPE_REGION)
+
+    def test_transient_api_errors_tolerated(self, mock_transport):
+        mock_transport.request.side_effect = [
+            APIError(502, "bad gateway"),
+            APIError(500, "server error"),
+            {"status": "Running", "error": None, "code": None},
+        ]
+        with patch("jarvislabs.client.time.sleep"):
+            _poll_until_running(mock_transport, machine_id=1, region="india-01")
+        assert mock_transport.request.call_count == 3
+
+    def test_repeated_transient_errors_raises(self, mock_transport):
+        mock_transport.request.side_effect = [APIError(502, "bad gateway")] * 5
+        with (
+            patch("jarvislabs.client.time.sleep"),
+            pytest.raises(APIError, match="bad gateway"),
+        ):
+            _poll_until_running(mock_transport, machine_id=1, region="india-01")
+
+    def test_permanent_api_error_raises_immediately(self, mock_transport):
+        mock_transport.request.side_effect = APIError(400, "bad request")
+        with pytest.raises(APIError, match="bad request"):
+            _poll_until_running(mock_transport, machine_id=1, region="india-01")
+        assert mock_transport.request.call_count == 1
+
+    def test_notfound_resets_transient_counter(self, mock_transport):
+        mock_transport.request.side_effect = [
+            APIError(502, "bad gateway"),
+            APIError(502, "bad gateway"),
+            NotFoundError("not found"),  # resets counter
+            APIError(502, "bad gateway"),
+            APIError(502, "bad gateway"),
+            {"status": "Running", "error": None, "code": None},
+        ]
+        with patch("jarvislabs.client.time.sleep"):
+            _poll_until_running(mock_transport, machine_id=1, region="india-01")
+        assert mock_transport.request.call_count == 6
 
 
 # ── _fetch_instances ─────────────────────────────────────────────────────────
