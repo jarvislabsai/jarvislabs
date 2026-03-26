@@ -514,12 +514,6 @@ def _validate_filesystem_storage(storage: int) -> None:
         raise ValidationError("Filesystem storage must be between 50GB and 2048GB")
 
 
-def _validate_filesystem_region(region: str) -> None:
-    if region not in FILESYSTEM_REGIONS:
-        valid = ", ".join(sorted(_region_label(r) for r in FILESYSTEM_REGIONS))
-        raise ValidationError(f"Invalid filesystem region. Allowed: {valid}")
-
-
 def _ensure_filesystem_exists(transport: Transport, fs_id: int, region: str | None = None) -> None:
     resp = transport.request("GET", "filesystem/list")
     if not isinstance(resp, list):
