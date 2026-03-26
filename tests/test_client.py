@@ -589,8 +589,39 @@ class TestFilesystems:
         mock_transport.request.assert_called_with(
             "POST",
             "filesystem/create",
-            json={"fs_name": "data", "storage": 120},
+            json={"fs_name": "data", "storage": 120, "region": "india-noida-01"},
+            base_url="https://backendn.jarvislabs.net/",
         )
+
+    def test_create_with_region(self, mock_transport):
+        mock_transport.request.return_value = {"fs_id": 16}
+        fs_id = _make_filesystems(mock_transport).create("data", 120, region="IN1")
+
+        assert fs_id == 16
+        mock_transport.request.assert_called_with(
+            "POST",
+            "filesystem/create",
+            json={"fs_name": "data", "storage": 120, "region": "india-01"},
+            base_url="https://backendprod.jarvislabs.net/",
+        )
+
+    def test_create_rejects_eu1(self, mock_transport):
+        with pytest.raises(ValidationError, match="Region EU1 is not available"):
+            _make_filesystems(mock_transport).create("data", 100, region="EU1")
+
+    def test_create_rejects_unknown_region(self, mock_transport):
+        with pytest.raises(ValidationError, match="Unknown region"):
+            _make_filesystems(mock_transport).create("data", 100, region="XX9")
+
+    def test_edit_raises_for_regionless_filesystem(self, mock_transport):
+        mock_transport.request.return_value = [{"fs_id": 7, "fs_name": "old", "storage": 100}]
+        with pytest.raises(ValidationError, match="no region set"):
+            _make_filesystems(mock_transport).edit(7, 200)
+
+    def test_remove_raises_for_missing_filesystem(self, mock_transport):
+        mock_transport.request.return_value = [{"fs_id": 99, "fs_name": "other", "storage": 50, "region": "india-01"}]
+        with pytest.raises(ValidationError, match="not found"):
+            _make_filesystems(mock_transport).remove(7)
 
     def test_create_validates_inputs(self, mock_transport):
         with pytest.raises(ValidationError, match="cannot be empty"):
@@ -601,7 +632,10 @@ class TestFilesystems:
             _make_filesystems(mock_transport).create("data", 49)
 
     def test_edit_uses_expected_payload(self, mock_transport):
-        mock_transport.request.return_value = {"message": "Filesystem updated successfully", "fs_id": 21}
+        mock_transport.request.side_effect = [
+            [{"fs_id": 7, "fs_name": "data", "storage": 100, "region": "india-noida-01"}],  # list for _fs_region
+            {"message": "Filesystem updated successfully", "fs_id": 21},  # edit
+        ]
         fs_id = _make_filesystems(mock_transport).edit(7, 180)
 
         assert fs_id == 21
@@ -609,16 +643,25 @@ class TestFilesystems:
             "POST",
             "filesystem/edit",
             json={"fs_id": 7, "storage": 180},
+            base_url="https://backendn.jarvislabs.net/",
         )
 
     def test_remove_uses_expected_query(self, mock_transport):
-        mock_transport.request.return_value = {"success": True}
+        mock_transport.request.side_effect = [
+            [{"fs_id": 9, "fs_name": "data", "storage": 100, "region": "india-01"}],  # list for _fs_region
+            {"success": True},  # delete
+        ]
         ok = _make_filesystems(mock_transport).remove(9)
         assert ok is True
-        mock_transport.request.assert_called_with("POST", "filesystem/delete", params={"fs_id": 9})
+        mock_transport.request.assert_called_with(
+            "POST", "filesystem/delete", params={"fs_id": 9}, base_url="https://backendprod.jarvislabs.net/"
+        )
 
     def test_remove_raises_when_backend_reports_failure(self, mock_transport):
-        mock_transport.request.return_value = {"success": False, "error": "busy"}
+        mock_transport.request.side_effect = [
+            [{"fs_id": 9, "fs_name": "data", "storage": 100, "region": "india-01"}],  # list for _fs_region
+            {"success": False, "error": "busy"},  # delete
+        ]
         with pytest.raises(APIError, match="Failed to remove filesystem"):
             _make_filesystems(mock_transport).remove(9)
 

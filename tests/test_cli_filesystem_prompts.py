@@ -16,9 +16,24 @@ def test_filesystem_create_prompt(monkeypatch):
     monkeypatch.setattr(commands.render, "confirm", fake_confirm)
 
     with pytest.raises(typer.Exit):
-        commands.filesystem_create(name="data", storage=120)
+        commands.filesystem_create(name="data", storage=120, region=None)
 
     assert captured["msg"] == "Create filesystem (name='data', storage=120GB)?"
+
+
+def test_filesystem_create_prompt_with_region(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_confirm(msg: str, *, skip: bool = False) -> bool:
+        captured["msg"] = msg
+        return False
+
+    monkeypatch.setattr(commands.render, "confirm", fake_confirm)
+
+    with pytest.raises(typer.Exit):
+        commands.filesystem_create(name="data", storage=120, region="IN2")
+
+    assert captured["msg"] == "Create filesystem (name='data', storage=120GB, region=IN2)?"
 
 
 def test_filesystem_edit_prompt(monkeypatch):

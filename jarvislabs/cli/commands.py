@@ -269,20 +269,24 @@ def filesystem_list(
 def filesystem_create(
     name: str = typer.Option(..., "--name", "-n", help="Filesystem name."),
     storage: int = typer.Option(..., "--storage", "-s", help="Storage in GB (50-2048)."),
+    region: str | None = typer.Option(None, "--region", help="Region (e.g. IN1, IN2). Defaults to IN2."),
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Create a filesystem."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
-    if not render.confirm(f"Create filesystem (name={name!r}, storage={storage}GB)?", skip=state.yes):
+    region_display = f", region={region}" if region else ""
+    if not render.confirm(f"Create filesystem (name={name!r}, storage={storage}GB{region_display})?", skip=state.yes):
         raise typer.Exit()
 
     client = get_client()
     with render.spinner("Creating filesystem..."):
-        fs_id = client.filesystems.create(fs_name=name, storage=storage)
+        fs_id = client.filesystems.create(fs_name=name, storage=storage, region=region)
 
     if state.json_output:
-        render.print_json({"success": True, "fs_id": fs_id, "fs_name": name, "storage": storage})
+        render.print_json(
+            {"success": True, "fs_id": fs_id, "fs_name": name, "storage": storage, "region": region or "IN2"}
+        )
         return
 
     render.success(f"Filesystem {fs_id} created.")

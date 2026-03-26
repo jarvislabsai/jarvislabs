@@ -46,6 +46,7 @@ EUROPE_GPU_COUNTS: frozenset[int] = frozenset({1, 8})
 EUROPE_MIN_STORAGE_GB = 100
 VM_MIN_STORAGE_GB = 100
 VM_SUPPORTED_REGIONS: frozenset[str] = frozenset({EUROPE_REGION, INDIA_NOIDA_REGION})
+FILESYSTEM_REGIONS: frozenset[str] = frozenset({DEFAULT_REGION, INDIA_NOIDA_REGION})
 
 # ── Timeouts & Polling ───────────────────────────────────────────────────────
 

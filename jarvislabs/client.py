@@ -21,6 +21,7 @@ from jarvislabs.constants import (
     EUROPE_MIN_STORAGE_GB,
     EUROPE_REGION,
     FETCH_RETRY_INTERVAL_S,
+    FILESYSTEM_REGIONS,
     INDIA_NOIDA_REGION,
     POLL_INTERVAL_S,
     REGION_CODE_TO_REGION,
@@ -188,13 +189,15 @@ class Filesystems:
             raise APIError(0, "Failed to fetch filesystems: unexpected response")
         return [Filesystem(**item) for item in resp]
 
-    def create(self, fs_name: str, storage: int, deployment_id: str | None = None) -> int:
+    def create(self, fs_name: str, storage: int, *, region: str | None = None, deployment_id: str | None = None) -> int:
         _validate_filesystem_name(fs_name)
         _validate_filesystem_storage(storage)
-        payload: dict[str, str | int] = {"fs_name": fs_name, "storage": storage}
+        region = _normalize_region_input(region, allowed=FILESYSTEM_REGIONS) or INDIA_NOIDA_REGION
+        payload: dict[str, str | int] = {"fs_name": fs_name, "storage": storage, "region": region}
         if deployment_id:
             payload["deployment_id"] = deployment_id
-        resp = self._t.request("POST", "filesystem/create", json=payload)
+        base_url = _region_url(region)
+        resp = self._t.request("POST", "filesystem/create", json=payload, base_url=base_url)
         fs_id = resp.get("fs_id") if isinstance(resp, dict) else None
         if fs_id is None:
             raise APIError(0, f"Failed to create filesystem: {_backend_msg(resp if isinstance(resp, dict) else {})}")
@@ -202,19 +205,33 @@ class Filesystems:
 
     def edit(self, fs_id: int, storage: int) -> int:
         _validate_filesystem_storage(storage)
-        resp = self._t.request("POST", "filesystem/edit", json={"fs_id": fs_id, "storage": storage})
+        base_url = _region_url(self._fs_region(fs_id))
+        resp = self._t.request("POST", "filesystem/edit", json={"fs_id": fs_id, "storage": storage}, base_url=base_url)
         edited_fs_id = resp.get("fs_id") if isinstance(resp, dict) else None
         if edited_fs_id is None:
             raise APIError(0, f"Failed to edit filesystem: {_backend_msg(resp if isinstance(resp, dict) else {})}")
         return int(edited_fs_id)
 
     def remove(self, fs_id: int) -> bool:
-        resp = self._t.request("POST", "filesystem/delete", params={"fs_id": fs_id})
+        base_url = _region_url(self._fs_region(fs_id))
+        resp = self._t.request("POST", "filesystem/delete", params={"fs_id": fs_id}, base_url=base_url)
         if isinstance(resp, dict) and ("success" in resp or "sucess" in resp):
             if not _normalize_success(resp):
                 raise APIError(0, f"Failed to remove filesystem: {_backend_msg(resp)}")
             return True
         return True
+
+    def _fs_region(self, fs_id: int) -> str:
+        """Look up the region of a filesystem by ID."""
+        for fs in self.list():
+            if fs.fs_id == fs_id:
+                if not fs.region:
+                    raise ValidationError(
+                        f"Filesystem {fs_id} has no region set. "
+                        "It may have been created before region support. Please recreate it."
+                    )
+                return fs.region
+        raise ValidationError(f"Filesystem {fs_id} not found. Check the ID with: jl filesystem list")
 
 
 # ── Instances ────────────────────────────────────────────────────────────────
@@ -497,6 +514,12 @@ def _validate_filesystem_storage(storage: int) -> None:
         raise ValidationError("Filesystem storage must be between 50GB and 2048GB")
 
 
+def _validate_filesystem_region(region: str) -> None:
+    if region not in FILESYSTEM_REGIONS:
+        valid = ", ".join(sorted(_region_label(r) for r in FILESYSTEM_REGIONS))
+        raise ValidationError(f"Invalid filesystem region. Allowed: {valid}")
+
+
 def _ensure_filesystem_exists(transport: Transport, fs_id: int, region: str | None = None) -> None:
     resp = transport.request("GET", "filesystem/list")
     if not isinstance(resp, list):
@@ -647,7 +670,7 @@ def _validate_create_region(
     _check_gpu_in_region(transport, gpu_type, num_gpus, region)
 
 
-def _normalize_region_input(region: str | None) -> str | None:
+def _normalize_region_input(region: str | None, *, allowed: frozenset[str] | None = None) -> str | None:
     if region is None:
         return None
 
@@ -657,9 +680,16 @@ def _normalize_region_input(region: str | None) -> str | None:
 
     upper = normalized.upper()
     if upper in REGION_DISPLAY_CODES.values():
-        return REGION_CODE_TO_REGION[upper.lower()]
+        internal = REGION_CODE_TO_REGION[upper.lower()]
+        if allowed is not None and internal not in allowed:
+            valid = ", ".join(sorted(_region_label(r) for r in allowed))
+            raise ValidationError(f"Region {upper} is not available for this resource. Allowed: {valid}")
+        return internal
 
-    valid_codes = ", ".join(sorted(REGION_DISPLAY_CODES.values()))
+    if allowed is not None:
+        valid_codes = ", ".join(sorted(_region_label(r) for r in allowed))
+    else:
+        valid_codes = ", ".join(sorted(REGION_DISPLAY_CODES.values()))
     raise ValidationError(f"Unknown region {region!r}. Use one of: {valid_codes}")
 
 
