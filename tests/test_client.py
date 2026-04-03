@@ -375,13 +375,74 @@ class TestResolveRegion:
         }
         assert _resolve_region(mock_transport, gpu_type="L4", num_gpus=1, template="vm") == INDIA_NOIDA_REGION
 
-    def test_vm_falls_back_when_only_v1_region_matches(self, mock_transport):
+    def test_vm_raises_when_gpu_only_in_unsupported_region(self, mock_transport):
+        """A100 only in IN1 (not VM-supported) — should fail early, not silently fall back."""
         mock_transport.request.return_value = {
             "server_meta": [
                 {"gpu_type": "A100", "region": "india-01", "num_free_devices": 8},
             ]
         }
-        assert _resolve_region(mock_transport, gpu_type="A100", num_gpus=1, template="vm") == INDIA_NOIDA_REGION
+        with pytest.raises(ValidationError, match="not available for VM"):
+            _resolve_region(mock_transport, gpu_type="A100", num_gpus=1, template="vm")
+
+    # ── workload_type filtering tests ──────────────────────────────────────
+
+    def test_container_ignores_vm_only_entries(self, mock_transport):
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "H100", "region": "india-noida-01", "workload_type": "vm", "num_free_devices": 8},
+                {"gpu_type": "H100", "region": "india-noida-01", "workload_type": "container", "num_free_devices": 2},
+            ]
+        }
+        # Container routing should use the container entry (2 free), not the vm entry (8 free)
+        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == "india-noida-01"
+
+    def test_container_raises_when_only_vm_entries(self, mock_transport):
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "H100", "region": "india-noida-01", "workload_type": "vm", "num_free_devices": 8},
+            ]
+        }
+        with pytest.raises(ValidationError, match="not available for container"):
+            _resolve_region(mock_transport, gpu_type="H100", num_gpus=1)
+
+    def test_vm_ignores_container_only_entries(self, mock_transport):
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "H100", "region": "india-noida-01", "workload_type": "container", "num_free_devices": 8},
+                {"gpu_type": "H100", "region": "india-noida-01", "workload_type": "vm", "num_free_devices": 3},
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1, template="vm") == "india-noida-01"
+
+    def test_vm_raises_when_only_container_entries(self, mock_transport):
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "H100", "region": "india-noida-01", "workload_type": "container", "num_free_devices": 8},
+            ]
+        }
+        with pytest.raises(ValidationError, match="not available for VM"):
+            _resolve_region(mock_transport, gpu_type="H100", num_gpus=1, template="vm")
+
+    def test_null_workload_type_matches_both(self, mock_transport):
+        """Legacy entries with workload_type=None work for both container and VM."""
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "H100", "region": "india-noida-01", "num_free_devices": 4},
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == "india-noida-01"
+        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1, template="vm") == "india-noida-01"
+
+    def test_vm_picks_null_over_nothing(self, mock_transport):
+        """EU1 entry with workload_type=null (supports both) should serve VM routing."""
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "H100", "region": "europe-01", "workload_type": None, "num_free_devices": 4},
+                {"gpu_type": "H100", "region": "india-noida-01", "workload_type": "container", "num_free_devices": 8},
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1, template="vm") == "europe-01"
 
 
 # ── _poll_until_running ──────────────────────────────────────────────────────
@@ -716,7 +777,7 @@ class TestCreatePayload:
         _make_instances(mock_transport).create(gpu_type="RTX5000", region="IN2")
 
         _resolve.assert_not_called()
-        mock_check_region.assert_called_once_with(mock_transport, "RTX5000", 1, "india-noida-01")
+        mock_check_region.assert_called_once_with(mock_transport, "RTX5000", 1, "india-noida-01", template="pytorch")
         assert mock_transport.request.call_args.kwargs["json"]["region"] == "india-noida-01"
         assert mock_transport.request.call_args.kwargs["base_url"] == REGION_URLS["india-noida-01"]
 

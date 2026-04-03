@@ -53,7 +53,7 @@ Valid region codes: `IN1`, `IN2`, `EU1`. If `--region` is omitted, the CLI picks
 | EU1 | H100 and H200 only, 1 or 8 GPUs, 100 GB minimum storage (auto-bumped) |
 | VM template | IN2 and EU1 only, requires at least one SSH key, 100 GB minimum storage |
 
-Run `jl gpus --json` to check current availability and pricing.
+Run `jl gpus` to check current availability and pricing. Output shows two tables — **Containers** and **VMs** — with separate availability for each. The `--json` output includes a `workload_type` field (`"container"`, `"vm"`, or `null` for regions that support both).
 
 ### Ports & Services
 

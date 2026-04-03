@@ -104,6 +104,7 @@ class ServerMetaGPU(BaseModel):
     arc: str | None = None
     cpus_per_gpu: int | None = None
     ram_per_gpu: int | None = None
+    workload_type: str | None = None
 
     @field_serializer("region")
     def _display_region(self, v: str) -> str:

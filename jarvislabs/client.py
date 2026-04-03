@@ -371,7 +371,14 @@ class Instances:
 
         # Warn early if the requested GPU isn't available in this region
         if gpu_type and gpu_type != instance.gpu_type:
-            _check_gpu_in_region(self._t, gpu_type, num_gpus or instance.num_gpus or 1, region, resume_only=True)
+            _check_gpu_in_region(
+                self._t,
+                gpu_type,
+                num_gpus or instance.num_gpus or 1,
+                region,
+                resume_only=True,
+                template=instance.template,
+            )
         if is_vm and not self._ssh_keys.list():
             raise ValidationError(
                 "VM instances require at least one SSH key. Add one with: jl ssh-key add <pubkey-file> --name 'my-key'"
@@ -556,10 +563,16 @@ def _resolve_region(transport: Transport, *, gpu_type: str | None, num_gpus: int
     except Exception:
         return fallback
 
-    candidates = [s for s in meta.server_meta if s.gpu_type == gpu_type and s.region]
+    all_for_gpu = [s for s in meta.server_meta if s.gpu_type == gpu_type and s.region]
     if template == "vm":
-        candidates = [s for s in candidates if s.region in VM_SUPPORTED_REGIONS]
+        candidates = [s for s in all_for_gpu if s.region in VM_SUPPORTED_REGIONS and s.workload_type in ("vm", None)]
+    else:
+        candidates = [s for s in all_for_gpu if s.workload_type in ("container", None)]
     if not candidates:
+        # GPU exists but not for this workload type — fail early
+        if all_for_gpu:
+            kind = "VM" if template == "vm" else "container"
+            raise ValidationError(f"{gpu_type} is not available for {kind} instances right now.")
         return fallback
 
     _priority = {r: i for i, r in enumerate(REGION_PRIORITY)}
@@ -625,6 +638,7 @@ def _check_gpu_in_region(
     region: str,
     *,
     resume_only: bool = False,
+    template: str = "pytorch",
 ) -> None:
     """Raise early if the requested GPU isn't available in the target region."""
     try:
@@ -637,6 +651,10 @@ def _check_gpu_in_region(
         return  # No data — let the backend decide
 
     in_region = [s for s in meta.server_meta if s.gpu_type == gpu_type and s.region == region]
+    if template == "vm":
+        in_region = [s for s in in_region if s.workload_type in ("vm", None)]
+    else:
+        in_region = [s for s in in_region if s.workload_type in ("container", None)]
     label = _region_label(region)
     if not in_region:
         if resume_only:
@@ -661,7 +679,7 @@ def _validate_create_region(
     if template == "vm" and region not in VM_SUPPORTED_REGIONS:
         valid_codes = ", ".join(sorted(_region_label(r) for r in VM_SUPPORTED_REGIONS))
         raise ValidationError(f"VM instances are only available in: {valid_codes}")
-    _check_gpu_in_region(transport, gpu_type, num_gpus, region)
+    _check_gpu_in_region(transport, gpu_type, num_gpus, region, template=template)
 
 
 def _normalize_region_input(region: str | None, *, allowed: frozenset[str] | None = None) -> str | None:
