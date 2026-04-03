@@ -115,3 +115,69 @@ def test_instance_detail_shows_http_ports_for_container():
     inst = _make_inst(template="pytorch", status="Running", http_ports="7860,8080")
     output = _capture_detail(inst)
     assert "HTTP Ports" in output
+
+
+# ── gpu_table(): workload_type split ────────────────────────────────────────
+
+
+def _capture_gpu_table(gpus, currency="USD"):
+    buf = StringIO()
+    old_console = render.stdout_console
+    render.stdout_console = Console(file=buf, force_terminal=False, color_system=None, width=120)
+    try:
+        render.gpu_table(gpus, currency)
+    finally:
+        render.stdout_console = old_console
+    return buf.getvalue()
+
+
+def _make_gpu(**overrides):
+    defaults = {
+        "gpu_type": "H100",
+        "region": "india-noida-01",
+        "num_free_devices": 4,
+        "price_per_hour": 3.50,
+        "vram": "80",
+        "cpus_per_gpu": 12,
+        "ram_per_gpu": 96,
+        "workload_type": None,
+    }
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
+
+
+def test_gpu_table_splits_container_and_vm():
+    gpus = [
+        _make_gpu(workload_type="container", num_free_devices=8),
+        _make_gpu(workload_type="vm", num_free_devices=2),
+    ]
+    output = _capture_gpu_table(gpus)
+    assert "Containers" in output
+    assert "VMs" in output
+
+
+def test_gpu_table_container_only():
+    gpus = [_make_gpu(workload_type="container")]
+    output = _capture_gpu_table(gpus)
+    assert "Containers" in output
+    assert "VMs" not in output
+
+
+def test_gpu_table_vm_only():
+    gpus = [_make_gpu(workload_type="vm")]
+    output = _capture_gpu_table(gpus)
+    assert "VMs" in output
+    assert "Containers" not in output
+
+
+def test_gpu_table_null_appears_in_both():
+    gpus = [_make_gpu(workload_type=None)]
+    output = _capture_gpu_table(gpus)
+    assert "Containers" in output
+    assert "VMs" in output
+
+
+def test_gpu_table_empty(capsys):
+    render.gpu_table([], "USD")
+    assert "No GPU data available" in capsys.readouterr().err
+    assert "Containers" not in capsys.readouterr().out
