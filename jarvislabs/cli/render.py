@@ -270,14 +270,12 @@ def gpu_table(gpus: list, currency: str = "USD") -> None:
     vm_gpus = [g for g in gpus if g.workload_type in ("vm", None)]
 
     if container_gpus:
-        _gpu_subtable(container_gpus, sym, title="Containers")
+        _gpu_subtable(container_gpus, sym, title="Containers", caption=not vm_gpus)
     if vm_gpus:
-        _gpu_subtable(vm_gpus, sym, title="VMs")
-
-    stdout_console.print("[green]●[/green] available  [dim]○ unavailable[/dim]", justify="center")
+        _gpu_subtable(vm_gpus, sym, title="VMs", caption=True)
 
 
-def _gpu_subtable(gpus: list, sym: str, title: str) -> None:
+def _gpu_subtable(gpus: list, sym: str, title: str, *, caption: bool = False) -> None:
     available = [g for g in gpus if g.num_free_devices > 0]
     unavailable = [g for g in gpus if g.num_free_devices <= 0]
 
@@ -312,6 +310,9 @@ def _gpu_subtable(gpus: list, sym: str, title: str) -> None:
             f"[dim]{sym}{gpu.price_per_hour:.2f}[/dim]" if gpu.price_per_hour else "[dim]—[/dim]",
         )
 
+    if caption:
+        table.caption = "[green]●[/green] available  [dim]○ unavailable[/dim]"
+        table.caption_justify = "center"
     stdout_console.print(table)
 
 
