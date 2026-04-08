@@ -1,4 +1,8 @@
-"""Machine commands — lifecycle, SSH, exec, and file transfer (registered on root app)."""
+"""Machine commands — lifecycle, SSH, exec, and file transfer.
+
+Canonical form: jl instance <verb>
+All commands are also available as hidden top-level aliases (e.g. jl create, jl ssh).
+"""
 
 from __future__ import annotations
 
@@ -23,8 +27,10 @@ from jarvislabs.ssh import (
 if TYPE_CHECKING:
     from jarvislabs.models import Instance
 
-_MACHINE_PANEL = "Machine Management"
-_ACCESS_PANEL = "Remote Access"
+instance_app = typer.Typer(name="instance", help="Manage GPU instances.")
+
+
+# ── Helpers ─────────────────────────────────────────────────────────────────
 
 
 def _resolve_ssh(machine_id: int) -> tuple[Instance, list[str]]:
@@ -77,7 +83,9 @@ def _default_download_dest(source: str) -> str:
     return name
 
 
-@app.command("list", rich_help_panel=_MACHINE_PANEL)
+# ── Commands (bare functions — registered at bottom of file) ────────────────
+
+
 def instance_list(
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -95,7 +103,6 @@ def instance_list(
     render.instances_table(instances, currency)
 
 
-@app.command("get", rich_help_panel=_MACHINE_PANEL)
 def instance_get(
     machine_id: int = typer.Argument(..., help="Instance ID."),
     json_output: cli_options.JsonOption = False,
@@ -114,7 +121,6 @@ def instance_get(
     render.instance_detail(inst, currency)
 
 
-@app.command("create", rich_help_panel=_MACHINE_PANEL)
 def instance_create(
     gpu: str = typer.Option(..., "--gpu", "-g", help="GPU type (e.g. H100, A100, L4)."),
     vm: bool = typer.Option(False, "--vm", help="Create a VM instance (SSH-only, no container)."),
@@ -184,7 +190,6 @@ def instance_create(
     render.instance_detail(inst, client.account.currency())
 
 
-@app.command("rename", rich_help_panel=_MACHINE_PANEL)
 def instance_rename(
     machine_id: int = typer.Argument(..., help="Instance ID to rename."),
     name: str = typer.Option(..., "--name", "-n", help="New instance name."),
@@ -207,7 +212,6 @@ def instance_rename(
     render.success(f"Instance {machine_id} renamed to {name!r}.")
 
 
-@app.command("pause", rich_help_panel=_MACHINE_PANEL)
 def instance_pause(
     machine_id: int = typer.Argument(..., help="Instance ID to pause."),
     yes: cli_options.YesOption = False,
@@ -232,7 +236,6 @@ def instance_pause(
     render.success(f"Instance {machine_id} paused.")
 
 
-@app.command("resume", rich_help_panel=_MACHINE_PANEL)
 def instance_resume(
     machine_id: int = typer.Argument(..., help="Instance ID to resume."),
     gpu: str | None = typer.Option(None, "--gpu", "-g", help="Resume with a different GPU type."),
@@ -285,7 +288,7 @@ def instance_resume(
         )
 
     if inst.machine_id != machine_id:
-        render.warning(f"Instance ID changed: {machine_id} → {inst.machine_id}")
+        render.warning(f"Instance ID changed: {machine_id} \u2192 {inst.machine_id}")
 
     if state.json_output:
         render.print_json(inst)
@@ -295,7 +298,6 @@ def instance_resume(
     render.instance_detail(inst, client.account.currency())
 
 
-@app.command("destroy", rich_help_panel=_MACHINE_PANEL)
 def instance_destroy(
     machine_id: int = typer.Argument(..., help="Instance ID to destroy."),
     yes: cli_options.YesOption = False,
@@ -323,7 +325,6 @@ def instance_destroy(
     render.success(f"Instance {machine_id} destroyed.")
 
 
-@app.command("ssh", rich_help_panel=_ACCESS_PANEL)
 def instance_ssh(
     machine_id: int = typer.Argument(..., help="Instance ID."),
     print_command: bool = typer.Option(False, "--print-command", "-p", help="Print SSH command instead of connecting."),
@@ -362,17 +363,12 @@ def instance_ssh(
     raise SystemExit(subprocess.call(parts))
 
 
-@app.command(
-    "exec",
-    rich_help_panel=_ACCESS_PANEL,
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
-)
 def instance_exec(
     ctx: typer.Context,
     machine_id: int = typer.Argument(..., help="Instance ID."),
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Execute a command on a running instance."""
+    """Run a command on a running instance via SSH."""
     cli_options.apply_command_options(json_output=json_output)
     if not ctx.args:
         render.die(f"No command specified. Use -- to separate: jl exec {machine_id} -- <command>")
@@ -411,7 +407,6 @@ def instance_exec(
     raise SystemExit(exit_code)
 
 
-@app.command("upload", rich_help_panel=_ACCESS_PANEL)
 def instance_upload(
     machine_id: int = typer.Argument(..., help="Instance ID."),
     source: Path = typer.Argument(
@@ -466,7 +461,6 @@ def instance_upload(
     raise SystemExit(subprocess.call(parts))
 
 
-@app.command("download", rich_help_panel=_ACCESS_PANEL)
 def instance_download(
     machine_id: int = typer.Argument(..., help="Instance ID."),
     source: str = typer.Argument(..., help="Remote file or directory to download."),
@@ -512,3 +506,40 @@ def instance_download(
 
     render.info(f"Downloading from {machine_id}: {source} -> {local_dest}")
     raise SystemExit(subprocess.call(parts))
+
+
+# ── Registration ────────────────────────────────────────────────────────────
+
+_EXEC_CTX = {"allow_extra_args": True, "ignore_unknown_options": True}
+
+# Canonical: jl instance <verb>
+instance_app.command("list")(instance_list)
+instance_app.command("get")(instance_get)
+instance_app.command("create")(instance_create)
+instance_app.command("rename")(instance_rename)
+instance_app.command("pause")(instance_pause)
+instance_app.command("resume")(instance_resume)
+instance_app.command("destroy")(instance_destroy)
+instance_app.command("ssh")(instance_ssh)
+instance_app.command("exec", context_settings=_EXEC_CTX)(instance_exec)
+instance_app.command("upload")(instance_upload)
+instance_app.command("download")(instance_download)
+
+app.add_typer(instance_app, rich_help_panel="Machine Management")
+
+# Hidden top-level aliases — all instance commands available at root
+for _alias_name, _alias_fn in [
+    ("create", instance_create),
+    ("list", instance_list),
+    ("get", instance_get),
+    ("rename", instance_rename),
+    ("pause", instance_pause),
+    ("resume", instance_resume),
+    ("destroy", instance_destroy),
+    ("ssh", instance_ssh),
+    ("upload", instance_upload),
+    ("download", instance_download),
+]:
+    app.command(_alias_name, hidden=True)(_alias_fn)
+
+app.command("exec", hidden=True, context_settings=_EXEC_CTX)(instance_exec)

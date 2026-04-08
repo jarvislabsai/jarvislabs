@@ -2,10 +2,30 @@
 
 from __future__ import annotations
 
+import click
 import typer
+from typer.core import TyperGroup
+
+
+class DisambiguatingGroup(TyperGroup):
+    """Suggest noun-first form when a user types 'jl <verb> <resource>'."""
+
+    def resolve_command(self, ctx, args):  # type: ignore[override]
+        cmd_name, cmd, remaining = super().resolve_command(ctx, args)
+        # If the next arg is itself a registered subgroup, the user probably
+        # meant "jl <resource> <verb>" (noun-first) instead of "jl <verb> <resource>".
+        if cmd_name and remaining and remaining[0] in self.commands:
+            maybe_resource = remaining[0]
+            resource_cmd = self.commands.get(maybe_resource)
+            if resource_cmd is not None and isinstance(resource_cmd, click.Group):
+                click.echo(f"Did you mean: jl {maybe_resource} {cmd_name}", err=True)
+                ctx.exit(2)
+        return cmd_name, cmd, remaining
+
 
 app = typer.Typer(
     name="jl",
+    cls=DisambiguatingGroup,
     help=(
         "[bold cyan]⚡ JarvisLabs[/bold cyan] GPU Cloud CLI\n\n"
         "[dim]Two types of instances:[/dim]\n"
@@ -21,8 +41,9 @@ app = typer.Typer(
         "  [bold]jl gpus[/bold]                                    [rgb(100,100,100)]GPU availability and pricing[/rgb(100,100,100)]\n"
         "  [bold]jl pause <id>[/bold]                              [rgb(100,100,100)]stop billing, keep data[/rgb(100,100,100)]\n"
         "  [bold]jl destroy <id>[/bold]                            [rgb(100,100,100)]delete permanently[/rgb(100,100,100)]\n\n"
+        "[dim]Instance commands are also available under[/dim] [bold]jl instance <verb>[/bold]\n"
         "[dim]Every command supports[/dim] [bold]--help[/bold] [dim]for details:[/dim]\n"
-        "  [dim]jl create --help    jl run --help    jl ssh-key --help[/dim]"
+        "  [dim]jl create --help    jl run --help    jl instance --help[/dim]"
     ),
     rich_markup_mode="rich",
     pretty_exceptions_enable=False,

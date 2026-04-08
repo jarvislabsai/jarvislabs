@@ -13,7 +13,7 @@ Use `--help` on any command to discover flags (e.g., `jl run --help`, `jl create
 
 ## Mental Model
 
-- Machine commands (`jl create/list/get/pause/resume/destroy/rename/ssh/exec/upload/download`) = GPU instance lifecycle and access.
+- Machine commands (`jl create/list/get/pause/resume/destroy/rename/ssh/exec/upload/download`) = GPU instance lifecycle and access. These are shortcuts for `jl instance <verb>`. Run `jl instance --help` for the full list.
 - `jl run` = managed job on an instance. Uploads code, sets up a Python environment, runs your script in the background with log tracking.
 - `jl exec` = run any command on an instance. Use for system checks (nvidia-smi, ps, df), debugging failed runs, inspecting files, or any raw shell access. No environment setup, no tracking. This is your escape hatch when `jl run` doesn't cover your use case.
 
@@ -348,6 +348,25 @@ Agent rule:
 - Do not trust `jl run list` without `--refresh` — state shows as `"saved"` (stale). Use `--refresh` or `--status` for live state.
 - Do not assume `machine_id` is stable after `jl resume` — it may return a new ID. Always use the returned ID.
 - Do not forget to pause/destroy instances after experiments — they cost money.
+
+## Workflow Skills
+
+If the user asks to run a specific workflow (ComfyUI, Koya, Flux, audio generation, video generation, image generation, etc.), check if the corresponding skill exists:
+
+```bash
+ls ~/.claude/skills/comfyui/SKILL.md 2>/dev/null && echo "INSTALLED" || echo "NOT_INSTALLED"
+```
+
+If NOT_INSTALLED, tell the user:
+
+> This workflow requires the JarvisLabs skills pack. Install with:
+> ```
+> git clone https://github.com/jarvislabsai/jl-skills.git
+> cd jl-skills && ./setup
+> ```
+> Then start a new Claude Code session and re-run your request.
+
+If INSTALLED, tell the user to invoke the skill (e.g., "Use the /comfyui skill for this request").
 
 ## Command Discovery
 
