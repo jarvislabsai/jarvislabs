@@ -93,6 +93,8 @@ def instance_list(
         return
 
     render.instances_table(instances, currency)
+    if any(inst.region == "india-01" for inst in instances):
+        render.in1_migration_hint()
 
 
 @app.command("get", rich_help_panel=_MACHINE_PANEL)
@@ -112,6 +114,8 @@ def instance_get(
         return
 
     render.instance_detail(inst, currency)
+    if inst.region == "india-01":
+        render.in1_migration_hint()
 
 
 @app.command("create", rich_help_panel=_MACHINE_PANEL)
@@ -122,7 +126,9 @@ def instance_create(
     storage: int = typer.Option(40, "--storage", "-s", help="Storage in GB."),
     name: str = typer.Option("Name me", "--name", "-n", help="Instance name."),
     num_gpus: int = typer.Option(1, "--num-gpus", help="Number of GPUs."),
-    region: str | None = typer.Option(None, "--region", help="Optional region pin (e.g. IN1, IN2, EU1)."),
+    region: str | None = typer.Option(
+        None, "--region", help="Optional region pin (IN2, EU1). IN1 no longer accepts new instances."
+    ),
     http_ports: str = typer.Option("", "--http-ports", help="Comma-separated HTTP ports to expose (e.g. 7860,8080)."),
     script_id: str | None = typer.Option(None, "--script-id", help="Startup script ID to run on launch."),
     script_args: str = typer.Option("", "--script-args", help="Arguments passed to startup script."),
@@ -130,7 +136,12 @@ def instance_create(
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Create a new GPU instance (container or VM)."""
+    """Create a new GPU instance (container or VM).
+
+    Note: IN1 is winding down and no longer accepts new instances. Existing IN1
+    instances can still be resumed and managed. Migration guide:
+    https://docs.jarvislabs.ai/in1-migration
+    """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
 
     # Handle --vm flag
@@ -198,6 +209,7 @@ def instance_rename(
 
     client = get_client()
     with render.spinner("Renaming instance..."):
+        inst = client.instances.get(machine_id)
         client.instances.rename(machine_id, name)
 
     if state.json_output:
@@ -205,6 +217,8 @@ def instance_rename(
         return
 
     render.success(f"Instance {machine_id} renamed to {name!r}.")
+    if inst.region == "india-01":
+        render.in1_migration_hint()
 
 
 @app.command("pause", rich_help_panel=_MACHINE_PANEL)
@@ -217,7 +231,7 @@ def instance_pause(
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     client = get_client()
     with render.spinner("Checking instance..."):
-        client.instances.get(machine_id)
+        inst = client.instances.get(machine_id)
 
     if not render.confirm(f"Pause instance {machine_id}?", skip=state.yes):
         raise typer.Exit()
@@ -230,6 +244,8 @@ def instance_pause(
         return
 
     render.success(f"Instance {machine_id} paused.")
+    if inst.region == "india-01":
+        render.in1_migration_hint()
 
 
 @app.command("resume", rich_help_panel=_MACHINE_PANEL)
@@ -292,6 +308,8 @@ def instance_resume(
         return
 
     render.success(f"Instance {inst.machine_id} is Running.")
+    if inst.region == "india-01":
+        render.in1_migration_hint()
     render.instance_detail(inst, client.account.currency())
 
 

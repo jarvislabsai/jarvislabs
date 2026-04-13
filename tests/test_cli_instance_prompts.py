@@ -444,3 +444,97 @@ def test_create_vm_sets_template_and_bumps_storage(monkeypatch):
     assert captured["msg"].startswith("Create VM")
     assert "template=vm" in captured["msg"]
     assert "storage=100GB" in captured["msg"]
+
+
+# ── IN1 migration nudge tests ────────────────────────────────────────────────
+#
+# No IN1 instance exists on staging to exercise these paths live, so we mock
+# the client response with region="india-01" and assert `in1_migration_hint`
+# fires for get/rename/pause/resume. A parallel assertion verifies the nudge
+# is suppressed for IN2 to catch regressions that make it always-on.
+
+
+def _stub_render(monkeypatch, *, nudge_calls: list):
+    monkeypatch.setattr(instance.render, "confirm", lambda *args, **kwargs: True)
+    monkeypatch.setattr(instance.render, "spinner", lambda *args, **kwargs: nullcontext())
+    monkeypatch.setattr(instance.render, "success", lambda *args, **kwargs: None)
+    monkeypatch.setattr(instance.render, "warning", lambda *args, **kwargs: None)
+    monkeypatch.setattr(instance.render, "instance_detail", lambda *args, **kwargs: None)
+    monkeypatch.setattr(instance.render, "in1_migration_hint", lambda: nudge_calls.append(1))
+
+
+@pytest.mark.parametrize(
+    ("region", "nudged"),
+    [("india-01", True), ("india-noida-01", False)],
+)
+def test_instance_get_nudges_on_in1(monkeypatch, region, nudged):
+    nudge_calls: list = []
+    mock_client = MagicMock()
+    mock_client.instances.get.return_value = MagicMock(region=region)
+    mock_client.account.currency.return_value = "USD"
+    monkeypatch.setattr(instance, "get_client", lambda: mock_client)
+    _stub_render(monkeypatch, nudge_calls=nudge_calls)
+
+    instance.instance_get(machine_id=10, json_output=False)
+
+    assert bool(nudge_calls) is nudged
+
+
+@pytest.mark.parametrize(
+    ("region", "nudged"),
+    [("india-01", True), ("india-noida-01", False)],
+)
+def test_instance_rename_nudges_on_in1(monkeypatch, region, nudged):
+    nudge_calls: list = []
+    mock_client = MagicMock()
+    mock_client.instances.get.return_value = MagicMock(region=region)
+    monkeypatch.setattr(instance, "get_client", lambda: mock_client)
+    _stub_render(monkeypatch, nudge_calls=nudge_calls)
+
+    instance.instance_rename(machine_id=10, name="new-name", yes=True, json_output=False)
+
+    assert bool(nudge_calls) is nudged
+
+
+@pytest.mark.parametrize(
+    ("region", "nudged"),
+    [("india-01", True), ("india-noida-01", False)],
+)
+def test_instance_pause_nudges_on_in1(monkeypatch, region, nudged):
+    nudge_calls: list = []
+    mock_client = MagicMock()
+    mock_client.instances.get.return_value = MagicMock(region=region)
+    monkeypatch.setattr(instance, "get_client", lambda: mock_client)
+    _stub_render(monkeypatch, nudge_calls=nudge_calls)
+
+    instance.instance_pause(machine_id=10, yes=True, json_output=False)
+
+    assert bool(nudge_calls) is nudged
+
+
+@pytest.mark.parametrize(
+    ("region", "nudged"),
+    [("india-01", True), ("india-noida-01", False)],
+)
+def test_instance_resume_nudges_on_in1(monkeypatch, region, nudged):
+    nudge_calls: list = []
+    mock_client = MagicMock()
+    mock_client.instances.resume.return_value = MagicMock(machine_id=10, region=region)
+    monkeypatch.setattr(instance, "get_client", lambda: mock_client)
+    _stub_render(monkeypatch, nudge_calls=nudge_calls)
+
+    instance.instance_resume(
+        machine_id=10,
+        gpu=None,
+        num_gpus=None,
+        storage=None,
+        name=None,
+        http_ports="",
+        script_id=None,
+        script_args=None,
+        fs_id=None,
+        yes=True,
+        json_output=False,
+    )
+
+    assert bool(nudge_calls) is nudged
