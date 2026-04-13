@@ -9,6 +9,10 @@ only this file needs updating.
 DEFAULT_REGION = "india-01"
 INDIA_NOIDA_REGION = "india-noida-01"
 EUROPE_REGION = "europe-01"
+DEPRECATED_REGIONS: frozenset[str] = frozenset({DEFAULT_REGION})
+
+# Where to send users for IN1 wind-down guidance.
+IN1_MIGRATION_URL = "https://docs.jarvislabs.ai/in1-migration"
 
 REGION_URLS: dict[str, str] = {
     "india-01": "https://backendprod.jarvislabs.net/",
@@ -26,17 +30,14 @@ REGION_CODE_TO_REGION: dict[str, str] = {code.lower(): region for region, code i
 
 # ── Region routing ──────────────────────────────────────────────────────────
 
-# Preferred order for auto-routing when user doesn't specify --region
-REGION_PRIORITY: list[str] = [INDIA_NOIDA_REGION, DEFAULT_REGION, EUROPE_REGION]
+# Preferred order for auto-routing when user doesn't specify --region.
+# Deprecated regions are filtered out in create flows before this priority applies.
+REGION_PRIORITY: list[str] = [INDIA_NOIDA_REGION, EUROPE_REGION]
 
 # Hardcoded fallback when server_meta API is unreachable.
 # GPUs not in this map default to INDIA_NOIDA_REGION (first in priority).
 REGION_GPU_FALLBACK: dict[str, str] = {
     "H200": "europe-01",  # EU-exclusive
-    "RTX5000": "india-01",  # IN1-exclusive
-    "A5000Pro": "india-01",
-    "A6000": "india-01",
-    "RTX6000Ada": "india-01",
 }
 
 # ── Europe region constraints ────────────────────────────────────────────────
@@ -46,7 +47,7 @@ EUROPE_GPU_COUNTS: frozenset[int] = frozenset({1, 8})
 EUROPE_MIN_STORAGE_GB = 100
 VM_MIN_STORAGE_GB = 100
 VM_SUPPORTED_REGIONS: frozenset[str] = frozenset({EUROPE_REGION, INDIA_NOIDA_REGION})
-FILESYSTEM_REGIONS: frozenset[str] = frozenset({DEFAULT_REGION, INDIA_NOIDA_REGION})
+FILESYSTEM_REGIONS: frozenset[str] = frozenset({INDIA_NOIDA_REGION})
 
 # ── Timeouts & Polling ───────────────────────────────────────────────────────
 

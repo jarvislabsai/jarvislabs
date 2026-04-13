@@ -351,6 +351,20 @@ def warning(msg: str) -> None:
     console.print(f"[yellow]![/yellow] {msg}")
 
 
+def in1_migration_hint() -> None:
+    """One-line nudge shown when the user has or touches an IN1 resource."""
+    from jarvislabs.cli import state
+    from jarvislabs.constants import IN1_MIGRATION_URL
+
+    if state.json_output:
+        return
+    console.print(
+        f"[yellow]![/yellow] [yellow]IN1 is winding down — new resources can't be created there.[/yellow] "
+        f"[dim]Resume/manage still works. We strongly recommend migrating to another region (IN2 or EU1). "
+        f"Migration guide: {IN1_MIGRATION_URL}[/dim]"
+    )
+
+
 # ── Confirmation ─────────────────────────────────────────────────────────────
 
 

@@ -46,7 +46,11 @@ SSH, exec, upload, and download only work on **Running** instances.
 
 ### Regions & GPUs
 
-Valid region codes: `IN1`, `IN2`, `EU1`. If `--region` is omitted, the CLI picks a region based on GPU availability.
+Valid region codes for new instances: `IN2`, `EU1`.
+
+> **IN1 is winding down.** New instances and filesystems can no longer be created in `IN1`. Existing `IN1` instances can still be resumed, paused, destroyed, and renamed; existing `IN1` filesystems can still be listed, resized, and removed. Guide users with `IN1` resources to the migration doc: <https://docs.jarvislabs.ai/in1-migration>.
+
+If `--region` is omitted, the CLI picks a region based on GPU availability.
 
 | Constraint | Detail |
 |---|---|

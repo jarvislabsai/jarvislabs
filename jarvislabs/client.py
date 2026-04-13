@@ -16,12 +16,14 @@ from jarvislabs.config import resolve_token
 from jarvislabs.constants import (
     DEFAULT_POLL_TIMEOUT_S,
     DEFAULT_REGION,
+    DEPRECATED_REGIONS,
     EUROPE_GPU_COUNTS,
     EUROPE_GPU_TYPES,
     EUROPE_MIN_STORAGE_GB,
     EUROPE_REGION,
     FETCH_RETRY_INTERVAL_S,
     FILESYSTEM_REGIONS,
+    IN1_MIGRATION_URL,
     INDIA_NOIDA_REGION,
     POLL_INTERVAL_S,
     REGION_CODE_TO_REGION,
@@ -100,10 +102,10 @@ class Account:
         return [Template(**t) for t in resp.get("frameworks", [])]
 
     def gpu_availability(self) -> list[ServerMetaGPU]:
-        """GPU types, pricing, and current availability."""
+        """GPU types, pricing, and current availability for new creates."""
         resp = self._t.request("GET", "misc/server_meta")
         meta = ServerMetaResponse(**resp)
-        return meta.server_meta
+        return [gpu for gpu in meta.server_meta if gpu.region not in DEPRECATED_REGIONS]
 
     def currency(self) -> str:
         """Return 'INR' or 'USD' based on user's payment location."""
@@ -552,7 +554,7 @@ def _normalize_success(data: dict) -> bool:
 
 
 def _resolve_region(transport: Transport, *, gpu_type: str | None, num_gpus: int, template: str = "pytorch") -> str:
-    """Auto-route to the best region via server_meta, preferring IN2 > IN1 > EU1."""
+    """Auto-route to the best region via server_meta, excluding deprecated regions."""
     fallback = REGION_GPU_FALLBACK.get(gpu_type, INDIA_NOIDA_REGION)
     if template == "vm" and fallback not in VM_SUPPORTED_REGIONS:
         fallback = INDIA_NOIDA_REGION
@@ -564,13 +566,22 @@ def _resolve_region(transport: Transport, *, gpu_type: str | None, num_gpus: int
         return fallback
 
     all_for_gpu = [s for s in meta.server_meta if s.gpu_type == gpu_type and s.region]
+    creatable_for_gpu = [s for s in all_for_gpu if s.region not in DEPRECATED_REGIONS]
     if template == "vm":
-        candidates = [s for s in all_for_gpu if s.region in VM_SUPPORTED_REGIONS and s.workload_type in ("vm", None)]
+        candidates = [
+            s for s in creatable_for_gpu if s.region in VM_SUPPORTED_REGIONS and s.workload_type in ("vm", None)
+        ]
     else:
-        candidates = [s for s in all_for_gpu if s.workload_type in ("container", None)]
+        candidates = [s for s in creatable_for_gpu if s.workload_type in ("container", None)]
     if not candidates:
+        deprecated_only = sorted({_region_label(s.region) for s in all_for_gpu if s.region in DEPRECATED_REGIONS})
+        if deprecated_only and not creatable_for_gpu and gpu_type:
+            raise ValidationError(
+                f"{gpu_type} is only offered in {', '.join(deprecated_only)}, which no longer accepts new instances. "
+                f"Try a different GPU — run `jl gpus` to see what's available. Migration guide: {IN1_MIGRATION_URL}"
+            )
         # GPU exists but not for this workload type — fail early
-        if all_for_gpu:
+        if creatable_for_gpu:
             kind = "VM" if template == "vm" else "container"
             raise ValidationError(f"{gpu_type} is not available for {kind} instances right now.")
         return fallback
@@ -676,6 +687,11 @@ def _validate_create_region(
     gpu_type: str,
     num_gpus: int,
 ) -> None:
+    if region in DEPRECATED_REGIONS:
+        raise ValidationError(
+            f"{_region_label(region)} is no longer accepting new instances. "
+            f"Existing instances there can still be resumed and managed. Migration guide: {IN1_MIGRATION_URL}"
+        )
     if template == "vm" and region not in VM_SUPPORTED_REGIONS:
         valid_codes = ", ".join(sorted(_region_label(r) for r in VM_SUPPORTED_REGIONS))
         raise ValidationError(f"VM instances are only available in: {valid_codes}")
@@ -694,6 +710,11 @@ def _normalize_region_input(region: str | None, *, allowed: frozenset[str] | Non
     if upper in REGION_DISPLAY_CODES.values():
         internal = REGION_CODE_TO_REGION[upper.lower()]
         if allowed is not None and internal not in allowed:
+            if internal in DEPRECATED_REGIONS:
+                raise ValidationError(
+                    f"{upper} is no longer accepting new resources. "
+                    f"Existing {upper} resources can still be managed. Migration guide: {IN1_MIGRATION_URL}"
+                )
             valid = ", ".join(sorted(_region_label(r) for r in allowed))
             raise ValidationError(f"Region {upper} is not available for this resource. Allowed: {valid}")
         return internal

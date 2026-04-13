@@ -937,7 +937,9 @@ def run_start(
     on: int | None = typer.Option(None, "--on", help="Run on an existing instance."),
     gpu: str | None = typer.Option(None, "--gpu", "-g", help="Create a fresh instance with this GPU."),
     region: str | None = typer.Option(
-        None, "--region", help="Optional region pin for fresh instances (e.g. IN1, IN2, EU1)."
+        None,
+        "--region",
+        help="Optional region pin for fresh instances (IN2, EU1). IN1 no longer accepts new instances.",
     ),
     script: str | None = typer.Option(
         None,
@@ -963,7 +965,12 @@ def run_start(
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Start a managed run."""
+    """Start a managed run.
+
+    Note: IN1 is winding down and no longer accepts new instances. Existing IN1
+    instances can still be used via --on. Migration guide:
+    https://docs.jarvislabs.ai/in1-migration
+    """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     target, extra_args = _parse_run_inputs(list(ctx.args))
     requirements_path = _resolve_local_input(requirements, label="Requirements file")

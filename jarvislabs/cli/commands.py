@@ -263,17 +263,26 @@ def filesystem_list(
         return
 
     render.filesystems_table(filesystems)
+    if any(fs.region == "india-01" for fs in filesystems):
+        render.in1_migration_hint()
 
 
 @filesystem_app.command("create")
 def filesystem_create(
     name: str = typer.Option(..., "--name", "-n", help="Filesystem name."),
     storage: int = typer.Option(..., "--storage", "-s", help="Storage in GB (50-2048)."),
-    region: str | None = typer.Option(None, "--region", help="Region (e.g. IN1, IN2). Defaults to IN2."),
+    region: str | None = typer.Option(
+        None, "--region", help="Region (IN2 only). IN1 no longer accepts new filesystems. Defaults to IN2."
+    ),
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Create a filesystem."""
+    """Create a filesystem.
+
+    Note: IN1 is winding down and no longer accepts new filesystems. Existing IN1
+    filesystems can still be listed, resized, and removed. Migration guide:
+    https://docs.jarvislabs.ai/in1-migration
+    """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     region_display = f", region={region}" if region else ""
     if not render.confirm(f"Create filesystem (name={name!r}, storage={storage}GB{region_display})?", skip=state.yes):
@@ -306,6 +315,7 @@ def filesystem_edit(
 
     client = get_client()
     with render.spinner("Updating filesystem..."):
+        target = next((fs for fs in client.filesystems.list() if fs.fs_id == fs_id), None)
         new_fs_id = client.filesystems.edit(fs_id=fs_id, storage=storage)
 
     if state.json_output:
@@ -313,6 +323,8 @@ def filesystem_edit(
         return
 
     render.success(f"Filesystem updated. New filesystem ID: {new_fs_id}.")
+    if target and target.region == "india-01":
+        render.in1_migration_hint()
 
 
 @filesystem_app.command("remove")
