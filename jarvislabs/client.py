@@ -105,7 +105,7 @@ class Account:
         """GPU types, pricing, and current availability for new creates."""
         resp = self._t.request("GET", "misc/server_meta")
         meta = ServerMetaResponse(**resp)
-        return [gpu for gpu in meta.server_meta if gpu.region not in DEPRECATED_REGIONS]
+        return [_listing_gpu_view(gpu) for gpu in meta.server_meta if gpu.region not in DEPRECATED_REGIONS]
 
     def currency(self) -> str:
         """Return 'INR' or 'USD' based on user's payment location."""
@@ -640,6 +640,12 @@ def _validate_europe(gpu_type: str, num_gpus: int, storage_gb: int) -> None:
         raise ValidationError(f"{label} supports {sorted(EUROPE_GPU_COUNTS)} GPUs per instance, got {num_gpus}")
     if storage_gb < EUROPE_MIN_STORAGE_GB:
         raise ValidationError(f"{label} requires at least {EUROPE_MIN_STORAGE_GB}GB storage")
+
+
+def _listing_gpu_view(gpu: ServerMetaGPU) -> ServerMetaGPU:
+    if gpu.region != EUROPE_REGION or gpu.gpu_type not in EUROPE_GPU_TYPES or gpu.num_free_devices <= 0:
+        return gpu
+    return gpu.model_copy(update={"num_free_devices": 1})
 
 
 def _check_gpu_in_region(

@@ -79,7 +79,7 @@ _DUMMY_KEY = SSHKey(ssh_key="ssh-ed25519 AAA", key_name="test", key_id="k1")
 
 
 class TestAccount:
-    def test_gpu_availability_filters_deprecated_regions(self, mock_transport):
+    def test_gpu_availability_filters_deprecated_regions_and_caps_eu_listing(self, mock_transport):
         mock_transport.request.return_value = {
             "server_meta": [
                 {"gpu_type": "A6000", "region": "india-01", "num_free_devices": 4, "workload_type": "container"},
@@ -94,6 +94,7 @@ class TestAccount:
             ("L4", "india-noida-01"),
             ("H100", "europe-01"),
         ]
+        assert [gpu.num_free_devices for gpu in availability] == [8, 1]
 
 
 # ── _normalize_success ───────────────────────────────────────────────────────

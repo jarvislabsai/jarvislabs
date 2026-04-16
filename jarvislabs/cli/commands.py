@@ -7,6 +7,7 @@ import typer
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
 from jarvislabs.config import load_config, save_config
+from jarvislabs.constants import EUROPE_GPU_TYPES, EUROPE_REGION
 
 
 @app.command(rich_help_panel="Account")
@@ -76,6 +77,8 @@ def gpus(
         return
 
     render.gpu_table(availability, currency)
+    if any(gpu.region == EUROPE_REGION and gpu.gpu_type in EUROPE_GPU_TYPES for gpu in availability):
+        render.info("EU1 H100/H200 availability is currently limited to single-GPU launches.")
 
 
 @app.command(rich_help_panel="Resources")
