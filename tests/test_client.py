@@ -146,13 +146,14 @@ def test_normalize_success(data, expected):
         ("in2", "india-noida-01"),
         ("eu1", "europe-01"),
         ("Eu1", "europe-01"),
+        ("india-noida-01", "india-noida-01"),
     ],
 )
 def test_normalize_region_input(region, expected):
     assert _normalize_region_input(region) == expected
 
 
-@pytest.mark.parametrize("region", ["XX9", "india-noida-01"])
+@pytest.mark.parametrize("region", ["XX9", "moon-01"])
 def test_normalize_region_input_rejects_unknown(region):
     with pytest.raises(ValidationError, match="Unknown region"):
         _normalize_region_input(region)
@@ -330,6 +331,37 @@ class TestResolveRegion:
             ]
         }
         assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == "europe-01"
+
+    def test_on_demand_routing_uses_effective_capacity(self, mock_transport):
+        """On-demand can use GPUs currently occupied by preemptible spot instances."""
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "H100", "region": "europe-01", "num_free_devices": 1},
+                {
+                    "gpu_type": "H100",
+                    "region": "india-noida-01",
+                    "num_free_devices": 0,
+                    "effective_num_free_devices": 1,
+                },
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == "india-noida-01"
+
+    def test_spot_routing_uses_normal_free_capacity(self, mock_transport):
+        """Spot can only use GPUs that are actually free right now."""
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {
+                    "gpu_type": "L4",
+                    "region": "india-noida-01",
+                    "num_free_devices": 0,
+                    "effective_num_free_devices": 8,
+                    "spot_price": 0.29,
+                },
+                {"gpu_type": "L4", "region": "europe-01", "num_free_devices": 1, "spot_price": 0.35},
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="L4", num_gpus=1, is_spot=True) == "europe-01"
 
     def test_single_region_candidate(self, mock_transport):
         """H200 only in EU — returns EU."""
@@ -790,7 +822,8 @@ class TestCreatePayload:
         payload = mock_transport.request.call_args.kwargs["json"]
         assert payload["gpu_type"] == "RTX5000"
         assert payload["hdd"] == 50
-        assert payload["is_reserved"] is True
+        assert payload["is_spot"] is False
+        assert "is_reserved" not in payload
         assert payload["disk_type"] == "ssd"
         assert payload["http_ports"] == "8080,9090"
         assert payload["script_id"] == "s1"
@@ -812,6 +845,64 @@ class TestCreatePayload:
         mock_check_region.assert_called_once_with(mock_transport, "RTX5000", 1, "india-noida-01", template="pytorch")
         assert mock_transport.request.call_args.kwargs["json"]["region"] == "india-noida-01"
         assert mock_transport.request.call_args.kwargs["base_url"] == REGION_URLS["india-noida-01"]
+
+    @patch("jarvislabs.client._get_instance")
+    @patch("jarvislabs.client._poll_until_running")
+    def test_create_spot_sends_is_spot(self, _poll, mock_get, mock_transport):
+        mock_transport.request.side_effect = [
+            {
+                "server_meta": [
+                    {
+                        "gpu_type": "L4",
+                        "region": "india-noida-01",
+                        "num_free_devices": 8,
+                        "spot_price": 0.29,
+                        "workload_type": "container",
+                    }
+                ]
+            },
+            {"machine_id": 1},
+        ]
+        mock_get.return_value = MagicMock(machine_id=1)
+
+        _make_instances(mock_transport).create(gpu_type="L4", region="IN2", is_spot=True)
+
+        payload = mock_transport.request.call_args.kwargs["json"]
+        assert payload["is_spot"] is True
+        assert "is_reserved" not in payload
+
+    @patch("jarvislabs.client._get_instance")
+    @patch("jarvislabs.client._poll_until_running")
+    def test_cpu_vm_create_uses_cpu_endpoint_and_backend_plans(self, _poll, mock_get, mock_transport):
+        mock_transport.request.side_effect = [
+            [_DUMMY_KEY.model_dump()],
+            {
+                "server_meta": [],
+                "cpu_meta": {
+                    "combinations": [
+                        {
+                            "vcpus": 4,
+                            "ram_gb": 16,
+                            "price": 0.12,
+                            "available": True,
+                            "regions": {"india-noida-01": True},
+                        }
+                    ]
+                },
+            },
+            {"machine_id": 1},
+        ]
+        mock_get.return_value = MagicMock(machine_id=1)
+
+        _make_instances(mock_transport).create(template="vm", cpu=True, storage=100)
+
+        assert mock_transport.request.call_args.args == ("POST", "templates/vm/cpu/create")
+        payload = mock_transport.request.call_args.kwargs["json"]
+        assert payload["num_cpus"] == 1
+        assert payload["vcpus"] == 4
+        assert payload["ram_gb"] == 16
+        assert payload["hdd"] == 100
+        assert payload["region"] == "india-noida-01"
 
     def test_vm_region_must_be_supported(self, mock_transport):
         with pytest.raises(ValidationError, match="no longer accepting new instances"):
@@ -851,6 +942,49 @@ class TestCreatePayload:
                 template="pytorch",
                 gpu_type="RTX5000",
                 num_gpus=1,
+            )
+
+    def test_on_demand_region_validation_uses_effective_capacity(self, mock_transport):
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {
+                    "gpu_type": "H100",
+                    "region": "india-noida-01",
+                    "num_free_devices": 0,
+                    "effective_num_free_devices": 1,
+                },
+            ]
+        }
+
+        _validate_create_region(
+            mock_transport,
+            region="india-noida-01",
+            template="pytorch",
+            gpu_type="H100",
+            num_gpus=1,
+        )
+
+    def test_spot_region_validation_uses_normal_free_capacity(self, mock_transport):
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {
+                    "gpu_type": "L4",
+                    "region": "india-noida-01",
+                    "num_free_devices": 0,
+                    "effective_num_free_devices": 8,
+                    "spot_price": 0.29,
+                },
+            ]
+        }
+
+        with pytest.raises(ValidationError, match="No free L4 GPUs in IN2"):
+            _validate_create_region(
+                mock_transport,
+                region="india-noida-01",
+                template="pytorch",
+                gpu_type="L4",
+                num_gpus=1,
+                is_spot=True,
             )
 
     def test_resume_region_unavailable_message_mentions_paused_instances(self, mock_transport):
@@ -952,7 +1086,18 @@ class TestResumePayload:
         assert payload["num_gpus"] == 1
         assert payload["hdd"] == 40
         assert payload["name"] == "old-name"
-        assert payload["is_reserved"] is True
+        assert payload["is_spot"] is False
+        assert "is_reserved" not in payload
+
+    @patch("jarvislabs.client._check_gpu_in_region")
+    def test_resume_spot_sends_is_spot(self, mock_check, mock_transport):
+        instances = self._setup_resume(mock_transport)
+        instances.resume(10, is_spot=True)
+
+        payload = mock_transport.request.call_args.kwargs["json"]
+        assert payload["is_spot"] is True
+        assert "is_reserved" not in payload
+        mock_check.assert_called_once()
 
     def test_script_args_defaults_to_empty(self, mock_transport):
         instances = self._setup_resume(mock_transport)
@@ -1043,6 +1188,28 @@ class TestResumePayload:
         assert mock_transport.request.call_args.kwargs["base_url"] == REGION_URLS["india-01"]
         assert mock_transport.request.call_args.args == ("POST", "templates/pytorch/resume")
 
+    def test_cpu_vm_resume_uses_cpu_endpoint(self, mock_transport):
+        existing = _mock_existing_instance()
+        existing.template = "vm"
+        existing.gpu_type = "CPU"
+        existing.region = "india-noida-01"
+        existing.storage_gb = 100
+        mock_transport.request.side_effect = [
+            [_DUMMY_KEY.model_dump()],
+            {"machine_id": 11},
+        ]
+
+        with (
+            patch("jarvislabs.client._get_instance", side_effect=[existing, MagicMock(machine_id=11)]),
+            patch("jarvislabs.client._poll_until_running"),
+        ):
+            _make_instances(mock_transport).resume(10)
+
+        assert mock_transport.request.call_args.args == ("POST", "templates/vm/cpu/resume")
+        payload = mock_transport.request.call_args.kwargs["json"]
+        assert payload["machine_id"] == 10
+        assert payload["num_cpus"] == 1
+
 
 class TestLifecycleRouting:
     def test_pause_vm_uses_vm_endpoint(self, mock_transport):
@@ -1058,6 +1225,19 @@ class TestLifecycleRouting:
             base_url=REGION_URLS["india-01"],
         )
 
+    def test_pause_cpu_vm_uses_cpu_endpoint(self, mock_transport):
+        instance = MagicMock(template="vm", gpu_type="CPU", region="india-noida-01")
+        with patch("jarvislabs.client._get_instance", return_value=instance):
+            mock_transport.request.return_value = {"success": True}
+            _make_instances(mock_transport).pause(10)
+
+        mock_transport.request.assert_called_once_with(
+            "POST",
+            "templates/vm/cpu/pause",
+            params={"machine_id": 10},
+            base_url=REGION_URLS["india-noida-01"],
+        )
+
     def test_destroy_vm_uses_vm_endpoint(self, mock_transport):
         instance = MagicMock(template="vm", region="india-noida-01")
         with patch("jarvislabs.client._get_instance", return_value=instance):
@@ -1067,6 +1247,19 @@ class TestLifecycleRouting:
         mock_transport.request.assert_called_once_with(
             "POST",
             "templates/vm/destroy",
+            params={"machine_id": 10},
+            base_url=REGION_URLS["india-noida-01"],
+        )
+
+    def test_destroy_cpu_vm_uses_cpu_endpoint(self, mock_transport):
+        instance = MagicMock(template="vm", gpu_type="CPU", region="india-noida-01")
+        with patch("jarvislabs.client._get_instance", return_value=instance):
+            mock_transport.request.return_value = {"success": True}
+            _make_instances(mock_transport).destroy(10)
+
+        mock_transport.request.assert_called_once_with(
+            "POST",
+            "templates/vm/cpu/destroy",
             params={"machine_id": 10},
             base_url=REGION_URLS["india-noida-01"],
         )
@@ -1137,7 +1330,7 @@ class TestModelSerialization:
         # attribute access still returns raw ID
         assert gpu.region == "india-noida-01"
 
-    def test_server_meta_gpu_drops_extra_fields(self):
+    def test_server_meta_gpu_preserves_spot_fields_and_drops_unneeded_extras(self):
         from jarvislabs.models import ServerMetaGPU
 
         gpu = ServerMetaGPU(
@@ -1150,7 +1343,7 @@ class TestModelSerialization:
         )
         dumped = gpu.model_dump()
         assert "p_num_free_devices" not in dumped
-        assert "spot_price" not in dumped
+        assert dumped["spot_price"] == 0.5
         assert "num_gpus" not in dumped
 
     def test_instance_region_is_display_code(self):

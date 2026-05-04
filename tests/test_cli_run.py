@@ -167,11 +167,46 @@ def test_run_start_passes_region_to_client(monkeypatch):
     assert mock_client.instances.create.call_args.kwargs["http_ports"] == "7860,8080"
 
 
+def test_run_start_passes_spot_to_client(monkeypatch):
+    mock_client = MagicMock()
+    mock_client.instances.create.return_value = MagicMock(machine_id=321)
+    monkeypatch.setattr(run, "get_client", lambda: mock_client)
+    monkeypatch.setattr(run.render, "confirm", lambda *args, **kwargs: True)
+    monkeypatch.setattr(run.render, "spinner", lambda *args, **kwargs: nullcontext())
+    monkeypatch.setattr(run.render, "success", lambda *args, **kwargs: None)
+    monkeypatch.setattr(run.render, "warning", lambda *args, **kwargs: None)
+    monkeypatch.setattr(run.render, "info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(run, "_start_managed_run", lambda *args, **kwargs: ("r_test", None))
+
+    run.run_start(
+        SimpleNamespace(args=["train.py"]),
+        on=None,
+        gpu="L4",
+        region=None,
+        script=None,
+        vm=False,
+        template="pytorch",
+        storage=40,
+        name="jl-run",
+        num_gpus=1,
+        spot=True,
+        http_ports="",
+        setup=None,
+        requirements=None,
+        pause=False,
+        destroy=False,
+        keep=True,
+        follow=False,
+    )
+
+    assert mock_client.instances.create.call_args.kwargs["is_spot"] is True
+
+
 def test_region_label_uses_ui_consistent_codes():
-    assert render._region_label("india-01") == "IN1"
-    assert render._region_label("india-noida-01") == "IN2"
-    assert render._region_label("europe-01") == "EU1"
-    assert render._region_label("future-01") == "future-01"
+    assert render.region_label("india-01") == "IN1"
+    assert render.region_label("india-noida-01") == "IN2"
+    assert render.region_label("europe-01") == "EU1"
+    assert render.region_label("future-01") == "future-01"
 
 
 def test_run_start_rejects_region_with_on(monkeypatch):

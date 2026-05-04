@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+from typing import Any
 
 from pydantic import BaseModel
 from rich import box
@@ -35,13 +36,19 @@ stdout_console = Console(theme=theme)
 # ── JSON output ──────────────────────────────────────────────────────────────
 
 
-def print_json(data: list[BaseModel] | BaseModel | dict) -> None:
+def jsonable(data: Any) -> Any:
+    """Convert Pydantic models inside lists or dicts before JSON printing."""
+    if isinstance(data, BaseModel):
+        return data.model_dump()
     if isinstance(data, list):
-        raw = [item.model_dump() if isinstance(item, BaseModel) else item for item in data]
-    elif isinstance(data, BaseModel):
-        raw = data.model_dump()
-    else:
-        raw = data
+        return [jsonable(item) for item in data]
+    if isinstance(data, dict):
+        return {key: jsonable(value) for key, value in data.items()}
+    return data
+
+
+def print_json(data: list[BaseModel] | BaseModel | dict) -> None:
+    raw = jsonable(data)
     stdout_console.print_json(json.dumps(raw, default=str))
 
 
@@ -103,8 +110,8 @@ def instances_table(instances: list, currency: str = "USD") -> None:
     table.add_column("ID", style="cyan", no_wrap=True)
     table.add_column("Name", style="bold")
     table.add_column("Status", no_wrap=True)
-    table.add_column("GPU", style="bold", no_wrap=True)
-    table.add_column("GPUs", justify="right")
+    table.add_column("Resource", style="bold", no_wrap=True)
+    table.add_column("Type", no_wrap=True)
     table.add_column("Storage", justify="right")
     table.add_column("Region", no_wrap=True)
     table.add_column("Cost", justify="right")
@@ -116,10 +123,10 @@ def instances_table(instances: list, currency: str = "USD") -> None:
             str(inst.machine_id),
             inst.name or "—",
             f"[{status_style}]{inst.status}[/{status_style}]",
-            inst.gpu_type or "—",
-            str(inst.num_gpus or "—"),
+            resource_label(inst),
+            instance_type(inst),
             f"{inst.storage_gb}GB" if inst.storage_gb else "—",
-            _region_label(inst.region),
+            region_label(inst.region),
             _cost_cell(inst, sym),
             inst.template,
         )
@@ -169,10 +176,11 @@ def instance_detail(inst, currency: str = "USD") -> None:
         ("ID", f"[cyan]{inst.machine_id}[/cyan]"),
         ("Name", f"[bold]{inst.name or '—'}[/bold]"),
         ("Status", f"[{status_style}]{inst.status}[/{status_style}]"),
-        ("GPU", f"[bold]{inst.num_gpus or 1}x {inst.gpu_type or '—'}[/bold]"),
+        ("Resource", f"[bold]{resource_label(inst)}[/bold]"),
+        ("Type", instance_type(inst)),
         ("Template", inst.template),
         ("Storage", f"{inst.storage_gb}GB" if inst.storage_gb else "—"),
-        ("Region", _region_label(inst.region)),
+        ("Region", region_label(inst.region)),
         (cost_label, f"[green]{sym}{inst.cost:.2f}[/green]"),
         ("SSH", f"[cyan]{inst.ssh_command}[/cyan]" if inst.ssh_command else "—"),
     ]
@@ -255,12 +263,36 @@ def filesystems_table(filesystems: list) -> None:
 
     for filesystem in filesystems:
         storage = f"{filesystem.storage}GB" if filesystem.storage is not None else "—"
-        table.add_row(str(filesystem.fs_id), filesystem.fs_name or "—", storage, _region_label(filesystem.region))
+        table.add_row(str(filesystem.fs_id), filesystem.fs_name or "—", storage, region_label(filesystem.region))
 
     stdout_console.print(table)
 
 
-def gpu_table(gpus: list, currency: str = "USD") -> None:
+def resource_label(inst) -> str:
+    """Return the compact resource text shown in list/detail views."""
+    if is_cpu_vm(inst):
+        cores = inst.cores or "—"
+        ram = f"{inst.ram}GB" if inst.ram is not None else "—"
+        return f"{cores} vCPU / {ram} RAM"
+    return f"{inst.num_gpus or 1}x {inst.gpu_type or '—'}"
+
+
+def is_cpu_vm(inst) -> bool:
+    """Return True when an instance should be displayed as a CPU VM."""
+    return getattr(inst, "template", None) == "vm" and getattr(inst, "gpu_type", None) == "CPU"
+
+
+def instance_type(inst) -> str:
+    """Display-only billing type. Reserved wins because backend can return both signals."""
+    if getattr(inst, "committed_resource_id", None) or getattr(inst, "reservation_info", None):
+        return "reserved"
+    if getattr(inst, "is_spot", False):
+        return "spot"
+    return "on-demand"
+
+
+def gpu_table(gpus: list, currency: str = "USD", *, show_legend: bool = True) -> None:
+    """Render GPU container and GPU VM availability tables."""
     if not gpus:
         info("No GPU data available.")
         return
@@ -270,12 +302,14 @@ def gpu_table(gpus: list, currency: str = "USD") -> None:
     vm_gpus = [g for g in gpus if g.workload_type in ("vm", None)]
 
     if container_gpus:
-        _gpu_subtable(container_gpus, sym, title="Containers", caption=not vm_gpus)
+        _gpu_subtable(container_gpus, sym, title="GPU Containers", show_spot=True)
     if vm_gpus:
-        _gpu_subtable(vm_gpus, sym, title="VMs", caption=True)
+        _gpu_subtable(vm_gpus, sym, title="GPU VMs", show_spot=False)
+    if show_legend:
+        availability_legend()
 
 
-def _gpu_subtable(gpus: list, sym: str, title: str, *, caption: bool = False) -> None:
+def _gpu_subtable(gpus: list, sym: str, title: str, *, show_spot: bool) -> None:
     available = [g for g in gpus if g.num_free_devices > 0]
     unavailable = [g for g in gpus if g.num_free_devices <= 0]
 
@@ -287,33 +321,105 @@ def _gpu_subtable(gpus: list, sym: str, title: str, *, caption: bool = False) ->
     table.add_column("RAM", justify="right")
     table.add_column("CPUs", justify="right")
     table.add_column(f"{sym}/hr", justify="right")
+    if show_spot:
+        table.add_column("Spot", justify="right")
 
     for gpu in available:
-        table.add_row(
+        spot_price = display_spot_price(gpu)
+        row = [
             "[green]●[/green]",
             f"[bold]{gpu.gpu_type}[/bold]",
-            _region_label(gpu.region),
+            region_label(gpu.region),
             f"{gpu.vram}GB" if gpu.vram else "—",
             f"{gpu.ram_per_gpu}GB" if gpu.ram_per_gpu else "—",
             str(gpu.cpus_per_gpu) if gpu.cpus_per_gpu else "—",
             f"[green]{sym}{gpu.price_per_hour:.2f}[/green]" if gpu.price_per_hour else "—",
-        )
+        ]
+        if show_spot:
+            row.append(f"[green]{sym}{spot_price:.2f}[/green]" if spot_price else "—")
+        table.add_row(*row)
 
     for gpu in unavailable:
-        table.add_row(
+        spot_price = display_spot_price(gpu)
+        row = [
             "[dim]○[/dim]",
             f"[dim]{gpu.gpu_type}[/dim]",
-            f"[dim]{_region_label(gpu.region)}[/dim]",
+            f"[dim]{region_label(gpu.region)}[/dim]",
             f"[dim]{gpu.vram}GB[/dim]" if gpu.vram else "[dim]—[/dim]",
             f"[dim]{gpu.ram_per_gpu}GB[/dim]" if gpu.ram_per_gpu else "[dim]—[/dim]",
             f"[dim]{gpu.cpus_per_gpu}[/dim]" if gpu.cpus_per_gpu else "[dim]—[/dim]",
             f"[dim]{sym}{gpu.price_per_hour:.2f}[/dim]" if gpu.price_per_hour else "[dim]—[/dim]",
-        )
+        ]
+        if show_spot:
+            row.append(f"[dim]{sym}{spot_price:.2f}[/dim]" if spot_price else "[dim]—[/dim]")
+        table.add_row(*row)
 
-    if caption:
-        table.caption = "[green]●[/green] available  [dim]○ unavailable[/dim]"
-        table.caption_justify = "center"
     stdout_console.print(table)
+
+
+def display_spot_price(gpu) -> float | None:
+    """Return a spot price only for GPU container rows."""
+    if getattr(gpu, "workload_type", None) == "vm":
+        return None
+    return getattr(gpu, "spot_price", None)
+
+
+def availability_legend() -> None:
+    """Print the shared available/unavailable marker legend."""
+    stdout_console.print("[green]●[/green] available  [dim]○ unavailable[/dim]")
+
+
+def cpu_vm_table(cpu_meta: dict, currency: str = "USD", *, show_legend: bool = True) -> None:
+    """Render CPU VM sizes from backend cpu_meta combinations."""
+    combinations = cpu_meta.get("combinations") or []
+    if not combinations:
+        info("No CPU VM data available.")
+        return
+
+    sym = "₹" if currency == "INR" else "$"
+    rows = []
+    for combo in combinations:
+        regions = combo.get("regions") or {}
+        for region, available in regions.items():
+            rows.append(
+                (
+                    int(combo.get("vcpus") or 0),
+                    int(combo.get("ram_gb") or 0),
+                    region,
+                    bool(available),
+                    combo.get("price_per_hour", combo.get("price")),
+                )
+            )
+
+    if not rows:
+        info("No CPU VM data available.")
+        return
+
+    rows.sort(key=lambda row: (row[0], row[1], region_label(row[2])))
+    table = _table(title="CPU VMs")
+    table.add_column("", no_wrap=True)
+    table.add_column("vCPUs", justify="right")
+    table.add_column("RAM", justify="right")
+    table.add_column("Region", no_wrap=True)
+    table.add_column(f"{sym}/hr", justify="right")
+
+    for vcpus, ram_gb, region, available, price in rows:
+        marker = "[green]●[/green]" if available else "[dim]○[/dim]"
+        price_cell = f"{sym}{float(price):.2f}" if price is not None else "—"
+        if available:
+            table.add_row(marker, str(vcpus), f"{ram_gb}GB", region_label(region), f"[green]{price_cell}[/green]")
+        else:
+            table.add_row(
+                marker,
+                f"[dim]{vcpus}[/dim]",
+                f"[dim]{ram_gb}GB[/dim]",
+                f"[dim]{region_label(region)}[/dim]",
+                f"[dim]{price_cell}[/dim]",
+            )
+
+    stdout_console.print(table)
+    if show_legend:
+        availability_legend()
 
 
 # ── Messages ─────────────────────────────────────────────────────────────────
@@ -404,7 +510,8 @@ def _cost_cell(inst, sym: str) -> str:
     return f"[green]{sym}{inst.cost:.2f}[/green]"
 
 
-def _region_label(region: str | None) -> str:
+def region_label(region: str | None) -> str:
+    """Convert backend region IDs to short CLI labels like IN2 and EU1."""
     if not region:
         return "—"
     return REGION_DISPLAY_CODES.get(region, region)

@@ -183,6 +183,42 @@ def test_instance_create_passes_region_to_client(monkeypatch):
     assert mock_client.instances.create.call_args.kwargs["http_ports"] == "7860,8080"
 
 
+def test_cpu_vm_create_prompt_resolves_default_plan_before_confirm(monkeypatch):
+    captured: dict[str, str] = {}
+    mock_client = MagicMock()
+    mock_client.instances.resolve_cpu_vm_plan.return_value = (4, 16, "india-noida-01")
+    monkeypatch.setattr(instance, "get_client", lambda: mock_client)
+    monkeypatch.setattr(instance.render, "spinner", lambda *args, **kwargs: nullcontext())
+
+    def fake_confirm(msg: str, *, skip: bool = False) -> bool:
+        captured["msg"] = msg
+        return False
+
+    monkeypatch.setattr(instance.render, "confirm", fake_confirm)
+
+    with pytest.raises(typer.Exit):
+        instance.instance_create(
+            vm=True,
+            cpu=True,
+            gpu=None,
+            vcpus=None,
+            ram=None,
+            template="pytorch",
+            storage=40,
+            name="cpu-test",
+            num_gpus=1,
+            region=None,
+            http_ports="",
+            script_id=None,
+            script_args="",
+            fs_id=None,
+            spot=False,
+        )
+
+    assert captured["msg"] == "Create CPU VM (cpu=4 vCPU / 16GB RAM, storage=100GB, name='cpu-test', region=IN2)?"
+    mock_client.instances.resolve_cpu_vm_plan.assert_called_once_with(vcpus=None, ram=None, region=None)
+
+
 def test_instance_resume_prompt_defaults_to_current_configuration(monkeypatch):
     captured: dict[str, str] = {}
 

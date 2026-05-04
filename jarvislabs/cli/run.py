@@ -19,7 +19,7 @@ from typer.core import TyperGroup
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
-from jarvislabs.cli.instance import _default_upload_dest, _remote_home
+from jarvislabs.cli.instance import _default_upload_dest, _remote_home, value_or_default
 from jarvislabs.exceptions import JarvislabsError, SSHError
 from jarvislabs.ssh import build_rsync_upload_command, build_scp_command, harden_ssh_parts, split_ssh_command
 
@@ -951,6 +951,7 @@ def run_start(
     storage: int = typer.Option(40, "--storage", "-s", help="Storage in GB for fresh instances."),
     name: str = typer.Option("jl-run", "--name", "-n", help="Instance name for fresh runs."),
     num_gpus: int = typer.Option(1, "--num-gpus", help="Number of GPUs for fresh runs."),
+    spot: bool = typer.Option(False, "--spot", help="Create a spot GPU container for this run."),
     http_ports: str = typer.Option("", "--http-ports", help="Comma-separated HTTP ports to expose on fresh instances."),
     setup: str | None = typer.Option(None, "--setup", help="Shell command to run before the main command."),
     requirements: str | None = typer.Option(
@@ -972,6 +973,7 @@ def run_start(
     https://docs.jarvislabs.ai/in1-migration
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
+    spot = value_or_default(spot, False)
     target, extra_args = _parse_run_inputs(list(ctx.args))
     requirements_path = _resolve_local_input(requirements, label="Requirements file")
 
@@ -986,6 +988,8 @@ def run_start(
             render.die("--http-ports is not supported with --vm. VMs are SSH-only.")
     if template.strip().lower() == "vm" and not vm:
         render.die("Use --vm instead of --template vm.")
+    if spot and vm:
+        render.die("--spot is only supported for GPU container runs.")
 
     lifecycle = _pick_lifecycle_policy(pause=pause, destroy=destroy, keep=keep)
 
@@ -993,6 +997,8 @@ def run_start(
         render.die("Use either --on <instance_id> or --gpu <type>, not both.")
 
     if on is not None:
+        if spot:
+            render.die("--spot is only supported when creating a fresh instance.")
         if vm:
             render.die("--vm is only supported with --gpu for fresh instances.")
         if region is not None:
@@ -1038,6 +1044,8 @@ def run_start(
         render.die("--no-follow is only supported with --keep for fresh runs right now.")
 
     detail_parts = [f"template={template}", f"storage={storage}GB", f"name={name!r}"]
+    if spot:
+        detail_parts.append("spot=true")
     if isinstance(region, str) and region:
         detail_parts.append(f"region={region.upper()}")
     if http_ports:
@@ -1056,6 +1064,7 @@ def run_start(
             name=name,
             region=region,
             http_ports=http_ports,
+            is_spot=spot,
         )
 
     render.success(f"Fresh instance {inst.machine_id} is ready.")
