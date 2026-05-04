@@ -103,9 +103,16 @@ class Account:
 
     def gpu_availability(self) -> list[ServerMetaGPU]:
         """GPU types, pricing, and current availability for new creates."""
-        resp = self._t.request("GET", "misc/server_meta")
-        meta = ServerMetaResponse(**resp)
+        return self.gpu_availability_from(self.resources())
+
+    def gpu_availability_from(self, meta: ServerMetaResponse) -> list[ServerMetaGPU]:
+        """Build GPU availability rows from a server_meta response already in memory."""
         return [_listing_gpu_view(gpu) for gpu in meta.server_meta if gpu.region not in DEPRECATED_REGIONS]
+
+    def resources(self) -> ServerMetaResponse:
+        """Fetch the backend resource catalog used by jl resources."""
+        resp = self._t.request("GET", "misc/server_meta")
+        return ServerMetaResponse(**resp)
 
     def currency(self) -> str:
         """Return 'INR' or 'USD' based on user's payment location."""
@@ -252,12 +259,30 @@ class Instances:
     def get(self, machine_id: int) -> Instance:
         return _get_instance(self._t, machine_id)
 
+    def resolve_cpu_vm_plan(
+        self,
+        *,
+        vcpus: int | None = None,
+        ram: int | None = None,
+        region: str | None = None,
+    ) -> tuple[int, int, str]:
+        """Resolve the CPU VM size and region from backend cpu_meta before prompting."""
+        return choose_cpu_vm_plan(
+            self._t,
+            vcpus=vcpus,
+            ram=ram,
+            region=_normalize_region_input(region),
+        )
+
     def create(
         self,
         *,
         gpu_type: str | None = None,
         num_gpus: int = 1,
         template: str = "pytorch",
+        cpu: bool = False,
+        vcpus: int | None = None,
+        ram: int | None = None,
         storage: int = 40,
         name: str = "Name me",
         disk_type: str = "ssd",
@@ -267,17 +292,60 @@ class Instances:
         fs_id: int | None = None,
         arguments: str = "",
         region: str | None = None,
+        is_spot: bool = False,
     ) -> Instance:
+        """Create a GPU instance by default, or a CPU VM when cpu=True.
+
+        The CLI and SDK both use this as their main create entrypoint. CPU VMs
+        use a different backend endpoint, so cpu=True explicitly routes into
+        the CPU VM flow after rejecting options that only apply to GPU creates.
+        """
+        if cpu:
+            if template != "vm":
+                raise ValidationError("CPU instances must be created as VMs. Use: jl create --vm --cpu")
+            if gpu_type:
+                raise ValidationError("--cpu cannot be used with --gpu.")
+            if num_gpus != 1:
+                raise ValidationError("--num-gpus is not supported with CPU VMs.")
+            if disk_type != "ssd":
+                raise ValidationError("--disk-type is not supported with CPU VMs.")
+            if http_ports:
+                raise ValidationError("--http-ports is not supported with CPU VMs.")
+            if script_id is not None or script_args:
+                raise ValidationError("Startup scripts are not supported with CPU VMs.")
+            if fs_id is not None:
+                raise ValidationError("--fs-id is not supported with CPU VMs.")
+            if arguments:
+                raise ValidationError("--arguments is not supported with CPU VMs.")
+            if is_spot:
+                raise ValidationError("Spot instances are not available for CPU VMs.")
+            return self.create_cpu_vm(
+                vcpus=vcpus,
+                ram=ram,
+                storage=storage,
+                name=name,
+                region=region,
+            )
+
         if not gpu_type:
             raise ValidationError("gpu_type is required (e.g. 'A100', 'H100', 'L4')")
+        if is_spot and template == "vm":
+            raise ValidationError("Spot instances are only supported for GPU containers.")
         if name:
             _validate_instance_name(name)
 
         region = _normalize_region_input(region)
         if region is None:
-            region = _resolve_region(self._t, gpu_type=gpu_type, num_gpus=num_gpus, template=template)
+            region = _resolve_region(self._t, gpu_type=gpu_type, num_gpus=num_gpus, template=template, is_spot=is_spot)
         else:
-            _validate_create_region(self._t, region=region, template=template, gpu_type=gpu_type, num_gpus=num_gpus)
+            _validate_create_region(
+                self._t,
+                region=region,
+                template=template,
+                gpu_type=gpu_type,
+                num_gpus=num_gpus,
+                is_spot=is_spot,
+            )
 
         storage = _apply_storage_constraints(
             template=template,
@@ -300,7 +368,7 @@ class Instances:
             "hdd": storage,
             "region": region,
             "name": name,
-            "is_reserved": True,
+            "is_spot": is_spot,
             "duration": "hour",
             "disk_type": disk_type,
             "http_ports": http_ports,
@@ -326,11 +394,71 @@ class Instances:
         _poll_until_running(self._t, machine_id, region)
         return _get_instance(self._t, machine_id, retries=3)
 
+    def create_cpu_vm(
+        self,
+        *,
+        vcpus: int | None,
+        ram: int | None,
+        storage: int,
+        name: str,
+        region: str | None,
+    ) -> Instance:
+        """Create a CPU VM through the dedicated backend endpoint.
+
+        CPU VM plans are resolved from backend cpu_meta so the CLI does not
+        duplicate the backend's allowed vCPU/RAM combinations.
+        """
+        if (vcpus is None) != (ram is None):
+            raise ValidationError("CPU VM sizing requires both --vcpus and --ram.")
+        if storage < VM_MIN_STORAGE_GB:
+            raise ValidationError(f"CPU VMs require at least {VM_MIN_STORAGE_GB}GB storage.")
+        if name:
+            _validate_instance_name(name)
+        if not self._ssh_keys.list():
+            raise ValidationError(
+                "VM instances require at least one SSH key. Add one with: jl ssh-key add <pubkey-file> --name 'my-key'"
+            )
+
+        normalized_region = _normalize_region_input(region)
+        selected_vcpus, selected_ram, selected_region = choose_cpu_vm_plan(
+            self._t,
+            vcpus=vcpus,
+            ram=ram,
+            region=normalized_region,
+        )
+
+        payload: dict = {
+            "num_cpus": 1,
+            "vcpus": selected_vcpus,
+            "ram_gb": selected_ram,
+            "hdd": storage,
+            "region": selected_region,
+            "name": name,
+            "duration": "hour",
+            "disk_type": "ssd",
+        }
+
+        resp = self._t.request(
+            "POST",
+            "templates/vm/cpu/create",
+            json=payload,
+            base_url=_region_url(selected_region),
+        )
+
+        machine_id = resp.get("machine_id")
+        if not machine_id:
+            raise APIError(0, f"CPU VM creation failed: {_backend_msg(resp)}")
+
+        _poll_until_running(self._t, machine_id, selected_region)
+        return _get_instance(self._t, machine_id, retries=3)
+
     def pause(self, machine_id: int) -> bool:
         instance = _get_instance(self._t, machine_id)
         base_url = _region_url(instance.region or DEFAULT_REGION)
 
-        if instance.template == "vm":
+        if is_cpu_vm(instance):
+            endpoint = "templates/vm/cpu/pause"
+        elif instance.template == "vm":
             endpoint = "templates/vm/pause"
         else:
             endpoint = "misc/pause"
@@ -357,6 +485,9 @@ class Instances:
         script_id: str | None = None,
         script_args: str | None = None,
         fs_id: int | None = None,
+        vcpus: int | None = None,
+        ram: int | None = None,
+        is_spot: bool = False,
     ) -> Instance:
         instance = _get_instance(self._t, machine_id)
         if instance.status != "Paused":
@@ -368,6 +499,32 @@ class Instances:
         base_url = _region_url(region)
         is_vm = instance.template == "vm"
 
+        if is_cpu_vm(instance):
+            if gpu_type is not None:
+                raise ValidationError("--gpu is not supported when resuming CPU VMs.")
+            if num_gpus is not None:
+                raise ValidationError("--num-gpus is not supported when resuming CPU VMs.")
+            if http_ports:
+                raise ValidationError("--http-ports is not supported when resuming CPU VMs.")
+            if script_id is not None or script_args is not None:
+                raise ValidationError("Startup scripts are not supported when resuming CPU VMs.")
+            if fs_id is not None:
+                raise ValidationError("--fs-id is not supported when resuming CPU VMs.")
+            if is_spot:
+                raise ValidationError("Spot instances are not available for CPU VMs.")
+            return self.resume_cpu_vm(
+                instance,
+                machine_id=machine_id,
+                storage=storage,
+                name=name,
+                vcpus=vcpus,
+                ram=ram,
+            )
+
+        if vcpus is not None or ram is not None:
+            raise ValidationError("--vcpus and --ram are only supported for CPU VMs.")
+        if is_spot and is_vm:
+            raise ValidationError("Spot instances are only supported for GPU containers.")
         if fs_id is not None:
             _ensure_filesystem_exists(self._t, fs_id, region=region)
 
@@ -380,6 +537,19 @@ class Instances:
                 region,
                 resume_only=True,
                 template=instance.template,
+            )
+        if is_spot:
+            effective_spot_gpu = gpu_type or instance.gpu_type
+            if not effective_spot_gpu:
+                raise ValidationError("Cannot resume as spot because the instance GPU type is unknown.")
+            _check_gpu_in_region(
+                self._t,
+                effective_spot_gpu,
+                num_gpus or instance.num_gpus or 1,
+                region,
+                resume_only=True,
+                template=instance.template,
+                require_spot=True,
             )
         if is_vm and not self._ssh_keys.list():
             raise ValidationError(
@@ -405,7 +575,7 @@ class Instances:
             "machine_id": machine_id,
             "gpu_type": gpu_type or instance.gpu_type,
             "num_gpus": num_gpus or instance.num_gpus,
-            "is_reserved": True,
+            "is_spot": is_spot,
             "hdd": storage or instance.storage_gb,
             "name": name or instance.name,
             "duration": "hour",
@@ -430,11 +600,60 @@ class Instances:
         _poll_until_running(self._t, mid, region)
         return _get_instance(self._t, mid, retries=3)
 
+    def resume_cpu_vm(
+        self,
+        instance: Instance,
+        *,
+        machine_id: int,
+        storage: int | None,
+        name: str | None,
+        vcpus: int | None,
+        ram: int | None,
+    ) -> Instance:
+        """Resume a paused CPU VM through the CPU VM backend endpoint."""
+        if (vcpus is None) != (ram is None):
+            raise ValidationError("CPU VM sizing requires both --vcpus and --ram.")
+        if storage is not None and storage < VM_MIN_STORAGE_GB:
+            raise ValidationError(f"CPU VMs require at least {VM_MIN_STORAGE_GB}GB storage.")
+        if vcpus is not None and ram is not None:
+            choose_cpu_vm_plan(self._t, vcpus=vcpus, ram=ram, region=instance.region)
+        if not self._ssh_keys.list():
+            raise ValidationError(
+                "VM instances require at least one SSH key. Add one with: jl ssh-key add <pubkey-file> --name 'my-key'"
+            )
+
+        payload: dict = {
+            "machine_id": machine_id,
+            "num_cpus": 1,
+            "hdd": storage or instance.storage_gb,
+            "name": name or instance.name,
+        }
+        if vcpus is not None and ram is not None:
+            payload["vcpus"] = vcpus
+            payload["ram_gb"] = ram
+
+        region = instance.region or DEFAULT_REGION
+        resp = self._t.request(
+            "POST",
+            "templates/vm/cpu/resume",
+            json=payload,
+            base_url=_region_url(region),
+        )
+
+        mid = resp.get("machine_id")
+        if not mid:
+            raise APIError(0, f"Failed to resume CPU VM: {_backend_msg(resp)}")
+
+        _poll_until_running(self._t, mid, region)
+        return _get_instance(self._t, mid, retries=3)
+
     def destroy(self, machine_id: int) -> bool:
         instance = _get_instance(self._t, machine_id)
         base_url = _region_url(instance.region or DEFAULT_REGION)
 
-        if instance.template == "vm":
+        if is_cpu_vm(instance):
+            endpoint = "templates/vm/cpu/destroy"
+        elif instance.template == "vm":
             endpoint = "templates/vm/destroy"
         else:
             endpoint = "misc/destroy"
@@ -553,7 +772,14 @@ def _normalize_success(data: dict) -> bool:
     return bool(val)
 
 
-def _resolve_region(transport: Transport, *, gpu_type: str | None, num_gpus: int, template: str = "pytorch") -> str:
+def _resolve_region(
+    transport: Transport,
+    *,
+    gpu_type: str | None,
+    num_gpus: int,
+    template: str = "pytorch",
+    is_spot: bool = False,
+) -> str:
     """Auto-route to the best region via server_meta, excluding deprecated regions."""
     fallback = REGION_GPU_FALLBACK.get(gpu_type, INDIA_NOIDA_REGION)
     if template == "vm" and fallback not in VM_SUPPORTED_REGIONS:
@@ -573,6 +799,8 @@ def _resolve_region(transport: Transport, *, gpu_type: str | None, num_gpus: int
         ]
     else:
         candidates = [s for s in creatable_for_gpu if s.workload_type in ("container", None)]
+    if is_spot:
+        candidates = [s for s in candidates if s.spot_price is not None]
     if not candidates:
         deprecated_only = sorted({_region_label(s.region) for s in all_for_gpu if s.region in DEPRECATED_REGIONS})
         if deprecated_only and not creatable_for_gpu and gpu_type:
@@ -583,6 +811,8 @@ def _resolve_region(transport: Transport, *, gpu_type: str | None, num_gpus: int
         # GPU exists but not for this workload type — fail early
         if creatable_for_gpu:
             kind = "VM" if template == "vm" else "container"
+            if is_spot:
+                raise ValidationError(f"Spot is not available for {gpu_type} right now.")
             raise ValidationError(f"{gpu_type} is not available for {kind} instances right now.")
         return fallback
 
@@ -590,7 +820,7 @@ def _resolve_region(transport: Transport, *, gpu_type: str | None, num_gpus: int
     candidates.sort(key=lambda s: _priority.get(s.region, len(REGION_PRIORITY)))
 
     for server in candidates:
-        if server.num_free_devices >= num_gpus:
+        if _available_devices(server, is_spot=is_spot) >= num_gpus:
             return server.region
 
     return candidates[0].region or fallback
@@ -648,6 +878,13 @@ def _listing_gpu_view(gpu: ServerMetaGPU) -> ServerMetaGPU:
     return gpu.model_copy(update={"num_free_devices": 1})
 
 
+def _available_devices(gpu: ServerMetaGPU, *, is_spot: bool) -> int:
+    """Return the capacity count that matches the requested billing type."""
+    if is_spot:
+        return gpu.num_free_devices
+    return gpu.effective_num_free_devices if gpu.effective_num_free_devices is not None else gpu.num_free_devices
+
+
 def _check_gpu_in_region(
     transport: Transport,
     gpu_type: str,
@@ -656,6 +893,7 @@ def _check_gpu_in_region(
     *,
     resume_only: bool = False,
     template: str = "pytorch",
+    require_spot: bool = False,
 ) -> None:
     """Raise early if the requested GPU isn't available in the target region."""
     try:
@@ -680,7 +918,10 @@ def _check_gpu_in_region(
             )
         raise ValidationError(f"{gpu_type} is not available in {label}.")
 
-    free = any(s.num_free_devices >= num_gpus for s in in_region)
+    if require_spot and not any(s.spot_price is not None for s in in_region):
+        raise ValidationError(f"Spot is not available for {gpu_type} in {label} right now.")
+
+    free = any(_available_devices(s, is_spot=require_spot) >= num_gpus for s in in_region)
     if not free:
         raise ValidationError(f"No free {gpu_type} GPUs in {label} right now. Try again later.")
 
@@ -692,6 +933,7 @@ def _validate_create_region(
     template: str,
     gpu_type: str,
     num_gpus: int,
+    is_spot: bool = False,
 ) -> None:
     if region in DEPRECATED_REGIONS:
         raise ValidationError(
@@ -701,7 +943,81 @@ def _validate_create_region(
     if template == "vm" and region not in VM_SUPPORTED_REGIONS:
         valid_codes = ", ".join(sorted(_region_label(r) for r in VM_SUPPORTED_REGIONS))
         raise ValidationError(f"VM instances are only available in: {valid_codes}")
-    _check_gpu_in_region(transport, gpu_type, num_gpus, region, template=template)
+    if is_spot:
+        _check_gpu_in_region(transport, gpu_type, num_gpus, region, template=template, require_spot=True)
+    else:
+        _check_gpu_in_region(transport, gpu_type, num_gpus, region, template=template)
+
+
+def is_cpu_vm(instance: Instance) -> bool:
+    """Return True when an instance row represents a CPU VM."""
+    return instance.template == "vm" and instance.gpu_type == "CPU"
+
+
+def choose_cpu_vm_plan(
+    transport: Transport,
+    *,
+    vcpus: int | None,
+    ram: int | None,
+    region: str | None,
+) -> tuple[int, int, str]:
+    """Return the requested CPU VM plan, or the smallest available plan.
+
+    The backend owns the plan list in cpu_meta.combinations. The CLI only picks
+    from that list and validates region availability.
+    """
+    try:
+        meta = ServerMetaResponse(**transport.request("GET", "misc/server_meta"))
+    except Exception as exc:
+        raise ValidationError("Could not fetch CPU VM plans. Run jl resources to check availability.") from exc
+
+    combinations = meta.cpu_meta.get("combinations") or []
+    if vcpus is None and ram is None:
+        available = [combo for combo in combinations if cpu_combo_available(combo)]
+        if not available:
+            raise ValidationError("No CPU VM plans available right now. Run jl resources to check availability.")
+        available.sort(key=lambda combo: (int(combo.get("vcpus") or 0), int(combo.get("ram_gb") or 0)))
+        combo = available[0]
+    else:
+        combo = next(
+            (
+                item
+                for item in combinations
+                if int(item.get("vcpus") or 0) == vcpus and int(item.get("ram_gb") or 0) == ram
+            ),
+            None,
+        )
+        if combo is None:
+            raise ValidationError(f"Invalid CPU VM size: {vcpus} vCPU / {ram}GB RAM.")
+        if not cpu_combo_available(combo):
+            raise ValidationError(f"CPU VM size {vcpus} vCPU / {ram}GB RAM is not available right now.")
+
+    selected_region = select_cpu_region(combo, region=region)
+    return int(combo["vcpus"]), int(combo["ram_gb"]), selected_region
+
+
+def cpu_combo_available(combo: dict) -> bool:
+    """Return True when a CPU size is available in at least one region."""
+    return bool(combo.get("available")) and any((combo.get("regions") or {}).values())
+
+
+def select_cpu_region(combo: dict, *, region: str | None) -> str:
+    """Pick the requested CPU VM region, or the first available preferred region."""
+    regions = combo.get("regions") or {}
+    if region is not None:
+        if regions.get(region) is True:
+            return region
+        raise ValidationError(
+            f"CPU VM size {combo.get('vcpus')} vCPU / {combo.get('ram_gb')}GB RAM is not available in {_region_label(region)}."
+        )
+
+    for candidate in REGION_PRIORITY:
+        if regions.get(candidate) is True:
+            return candidate
+    for candidate, available in regions.items():
+        if available:
+            return candidate
+    raise ValidationError("No CPU VM plans available right now. Run jl resources to check availability.")
 
 
 def _normalize_region_input(region: str | None, *, allowed: frozenset[str] | None = None) -> str | None:
@@ -711,6 +1027,14 @@ def _normalize_region_input(region: str | None, *, allowed: frozenset[str] | Non
     normalized = region.strip()
     if not normalized:
         return None
+
+    if normalized in REGION_DISPLAY_CODES:
+        if allowed is not None and normalized not in allowed:
+            valid = ", ".join(sorted(_region_label(r) for r in allowed))
+            raise ValidationError(
+                f"Region {_region_label(normalized)} is not available for this resource. Allowed: {valid}"
+            )
+        return normalized
 
     upper = normalized.upper()
     if upper in REGION_DISPLAY_CODES.values():
@@ -823,7 +1147,7 @@ def _wait_until_instance_missing(
     transport: Transport,
     machine_id: int,
     *,
-    retries: int = 3,
+    retries: int = 20,
     poll_interval_s: float = 1.0,
 ) -> bool:
     """Return True when the instance is no longer fetchable."""

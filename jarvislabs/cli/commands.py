@@ -82,6 +82,29 @@ def gpus(
 
 
 @app.command(rich_help_panel="Resources")
+def resources(
+    json_output: cli_options.JsonOption = False,
+) -> None:
+    """Show GPU and CPU VM availability and pricing."""
+    cli_options.apply_command_options(json_output=json_output)
+    client = get_client()
+    with render.spinner("Fetching resources..."):
+        meta = client.account.resources()
+        gpus = client.account.gpu_availability_from(meta)
+        currency = client.account.currency()
+
+    if state.json_output:
+        render.print_json({"gpus": gpus, "cpu_meta": meta.cpu_meta})
+        return
+
+    render.gpu_table(gpus, currency, show_legend=False)
+    render.cpu_vm_table(meta.cpu_meta, currency, show_legend=False)
+    render.availability_legend()
+    if any(gpu.region == EUROPE_REGION and gpu.gpu_type in EUROPE_GPU_TYPES for gpu in gpus):
+        render.info("EU1 H100/H200 availability is currently limited to single-GPU launches.")
+
+
+@app.command(rich_help_panel="Resources")
 def templates(
     json_output: cli_options.JsonOption = False,
 ) -> None:

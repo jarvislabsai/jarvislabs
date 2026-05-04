@@ -99,7 +99,9 @@ class ServerMetaGPU(BaseModel):
     gpu_type: str
     region: str
     num_free_devices: int = 0
+    effective_num_free_devices: int | None = None
     price_per_hour: float | None = None
+    spot_price: float | None = None
     vram: str | None = None
     arc: str | None = None
     cpus_per_gpu: int | None = None
@@ -110,7 +112,7 @@ class ServerMetaGPU(BaseModel):
     def _display_region(self, v: str) -> str:
         return REGION_DISPLAY_CODES.get(v, v)
 
-    @field_validator("num_free_devices", mode="before")
+    @field_validator("num_free_devices", "effective_num_free_devices", mode="before")
     @classmethod
     def _coerce(cls, v: Any) -> int:
         if v is None or (isinstance(v, str) and not v.strip()):
@@ -120,6 +122,7 @@ class ServerMetaGPU(BaseModel):
 
 class ServerMetaResponse(BaseModel):
     server_meta: list[ServerMetaGPU] = Field(default_factory=list)
+    cpu_meta: dict[str, Any] = Field(default_factory=dict)
 
 
 # ── Instance ─────────────────────────────────────────────────────────────────
@@ -147,6 +150,9 @@ class Instance(BaseModel):
     endpoints: list[str] | None = None
     name: str | None = Field(default=None, validation_alias=AliasChoices("name", "instance_name"))
     is_reserved: bool | None = None
+    is_spot: bool | None = None
+    committed_resource_id: int | None = None
+    reservation_info: dict[str, Any] | None = None
     billing_frequency: str | None = Field(default=None, validation_alias=AliasChoices("billing_frequency", "frequency"))
     vs_url: str | None = None
     deployment_id: str | None = None

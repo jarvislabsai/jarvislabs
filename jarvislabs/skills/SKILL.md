@@ -23,9 +23,11 @@ Use `--help` on any command to discover flags (e.g., `jl run --help`, `jl create
 
 ```bash
 jl create --gpu L4 --storage 40 --yes --json
+jl create --gpu L4 --spot --yes --json
+jl create --vm --cpu --yes --json
 ```
 
-`--gpu` is required. Run `jl create --help` for all available flags.
+`--gpu` is required for GPU instances. Use `--spot` only for GPU containers, not GPU VMs or CPU VMs. CPU VMs are created with `--vm --cpu`; omit `--vcpus/--ram` to use the smallest available CPU plan from the backend. Run `jl create --help` for all available flags.
 
 ### Lifecycle
 
@@ -40,6 +42,8 @@ jl destroy <id> --yes --json    # permanently delete
 Resume caveats:
 - Resume is **region-locked** — an instance always resumes in its original region. GPU swaps are only possible within that region.
 - Resume may return a **new machine_id**. Always use the returned ID for subsequent operations.
+- Spot resume is explicit: pass `--spot` when you want a paused GPU container to resume as spot. Without `--spot`, resume is on-demand.
+- CPU VM resume uses the CPU VM backend path. Pass both `--vcpus` and `--ram` if you want to change CPU size on resume.
 - Run `jl resume --help` for all available flags (GPU swap, storage expansion, rename, etc.).
 
 SSH, exec, upload, and download only work on **Running** instances.
@@ -57,7 +61,18 @@ If `--region` is omitted, the CLI picks a region based on GPU availability.
 | EU1 | H100 and H200 only, single-GPU launches only right now, 100 GB minimum storage (auto-bumped) |
 | VM template | IN2 and EU1 only, requires at least one SSH key, 100 GB minimum storage |
 
-Run `jl gpus` to check current availability and pricing. Output shows two tables — **Containers** and **VMs** — with separate availability for each. The `--json` output includes a `workload_type` field (`"container"`, `"vm"`, or `null` for regions that support both).
+Run `jl gpus` to check GPU availability and pricing. Output shows **GPU Containers** and **GPU VMs** tables with separate availability for each. Spot prices are shown only for GPU containers.
+
+Run `jl resources` when you also need CPU VM availability and pricing. It shows GPU containers, GPU VMs, and CPU VMs, with one shared available/unavailable legend at the end.
+
+How to read `jl gpus --json` availability:
+- `num_free_devices`: free GPUs on that server. These can be used for normal creates, and also for spot creates when `spot_price` is present.
+- `effective_num_free_devices`: GPUs available for on-demand creates on that server, including GPUs currently used by spot instances that can be preempted.
+- These counts are per server. They are not the complete regional GPU capacity.
+- `workload_type` tells which launch type the row belongs to:
+  - `"container"` means use it for normal GPU container creates.
+  - `"vm"` means use it for GPU VM creates.
+  - `null` means the same row applies to both containers and VMs.
 
 ### Ports & Services
 
@@ -149,9 +164,10 @@ Lifecycle flags (`--keep`, `--pause`, `--destroy`) are not allowed with `--on` �
 
 ```bash
 jl run . --script train.py --gpu L4 --keep --json --yes
+jl run . --script train.py --gpu L4 --spot --keep --json --yes
 ```
 
-Creates a new instance, uploads code, runs the script. Additional flags: `--vm` (VM instead of container, auto-bumps storage to 100GB, disallows `--template` and `--http-ports`), `--template` (default: pytorch; run `jl templates --json` to list available), `--storage` (default: 40GB), `--num-gpus` (default: 1), `--region`, `--http-ports`.
+Creates a new instance, uploads code, runs the script. Additional flags: `--spot` (fresh GPU containers only), `--vm` (VM instead of container, auto-bumps storage to 100GB, disallows `--template` and `--http-ports`), `--template` (default: pytorch; run `jl templates --json` to list available), `--storage` (default: 40GB), `--num-gpus` (default: 1), `--region`, `--http-ports`.
 
 **Lifecycle rules for fresh instances:**
 

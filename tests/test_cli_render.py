@@ -152,32 +152,34 @@ def test_gpu_table_splits_container_and_vm():
         _make_gpu(workload_type="vm", num_free_devices=2),
     ]
     output = _capture_gpu_table(gpus)
-    assert "Containers" in output
-    assert "VMs" in output
+    assert "GPU Containers" in output
+    assert "GPU VMs" in output
+    assert output.count("● available") == 1
 
 
 def test_gpu_table_container_only():
     gpus = [_make_gpu(workload_type="container")]
     output = _capture_gpu_table(gpus)
-    assert "Containers" in output
-    assert "VMs" not in output
+    assert "GPU Containers" in output
+    assert "GPU VMs" not in output
 
 
 def test_gpu_table_vm_only():
     gpus = [_make_gpu(workload_type="vm")]
     output = _capture_gpu_table(gpus)
-    assert "VMs" in output
-    assert "Containers" not in output
+    assert "GPU VMs" in output
+    assert "GPU Containers" not in output
+    assert "Spot" not in output
 
 
 def test_gpu_table_null_appears_in_both():
     gpus = [_make_gpu(workload_type=None)]
     output = _capture_gpu_table(gpus)
-    assert "Containers" in output
-    assert "VMs" in output
+    assert "GPU Containers" in output
+    assert "GPU VMs" in output
 
 
 def test_gpu_table_empty(capsys):
     render.gpu_table([], "USD")
     assert "No GPU data available" in capsys.readouterr().err
-    assert "Containers" not in capsys.readouterr().out
+    assert "GPU Containers" not in capsys.readouterr().out

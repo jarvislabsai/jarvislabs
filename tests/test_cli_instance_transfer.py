@@ -194,20 +194,17 @@ def test_instance_download_defaults_local_dest(monkeypatch):
     inst = SimpleNamespace(status="Running", ssh_command="ssh -p 2222 root@example.com")
     recorded: dict[str, list[str]] = {}
 
-    def fake_call(parts: list[str]) -> int:
+    def fake_run(parts: list[str], **kwargs):
         recorded["parts"] = parts
-        return 0
+        return SimpleNamespace(returncode=0)
 
     _patch_common(monkeypatch, inst)
-    monkeypatch.setattr(instance.subprocess, "call", fake_call)
+    monkeypatch.setattr(instance.subprocess, "run", fake_run)
     monkeypatch.setattr(state, "json_output", False)
 
-    with pytest.raises(SystemExit) as exc:
-        instance.instance_download(
-            machine_id=123, source="/root/output/model.pt", dest=None, recursive=False, json_output=True
-        )
-
-    assert exc.value.code == 0
+    instance.instance_download(
+        machine_id=123, source="/root/output/model.pt", dest=None, recursive=False, json_output=True
+    )
     assert recorded["parts"] == [
         "scp",
         "-P",

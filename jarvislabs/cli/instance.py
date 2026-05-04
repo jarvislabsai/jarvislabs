@@ -5,12 +5,14 @@ from __future__ import annotations
 import shlex
 import subprocess
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+import click
 import typer
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
+from jarvislabs.constants import VM_MIN_STORAGE_GB
 from jarvislabs.exceptions import SSHError, ValidationError
 from jarvislabs.ssh import (
     build_remote_shell_command,
@@ -25,6 +27,19 @@ if TYPE_CHECKING:
 
 _MACHINE_PANEL = "Machine Management"
 _ACCESS_PANEL = "Remote Access"
+
+
+def option_was_explicit(name: str) -> bool:
+    """Tell validation apart from Typer defaults for options with meaningful defaults."""
+    ctx = click.get_current_context(silent=True)
+    if ctx is None:
+        return False
+    return ctx.get_parameter_source(name) == click.core.ParameterSource.COMMANDLINE
+
+
+def value_or_default(value: Any, default: Any) -> Any:
+    """Use normal Python defaults when tests call Typer commands directly."""
+    return default if isinstance(value, typer.models.OptionInfo) else value
 
 
 def _resolve_ssh(machine_id: int) -> tuple[Instance, list[str]]:
@@ -120,8 +135,11 @@ def instance_get(
 
 @app.command("create", rich_help_panel=_MACHINE_PANEL)
 def instance_create(
-    gpu: str = typer.Option(..., "--gpu", "-g", help="GPU type (e.g. H100, A100, L4)."),
+    gpu: str | None = typer.Option(None, "--gpu", "-g", help="GPU type (e.g. H100, A100, L4)."),
     vm: bool = typer.Option(False, "--vm", help="Create a VM instance (SSH-only, no container)."),
+    cpu: bool = typer.Option(False, "--cpu", help="Create a CPU VM. Requires --vm."),
+    vcpus: int | None = typer.Option(None, "--vcpus", help="CPU VM vCPU count."),
+    ram: int | None = typer.Option(None, "--ram", help="CPU VM RAM in GB."),
     template: str = typer.Option("pytorch", "--template", "-t", help="Framework template for container instances."),
     storage: int = typer.Option(40, "--storage", "-s", help="Storage in GB."),
     name: str = typer.Option("Name me", "--name", "-n", help="Instance name."),
@@ -133,6 +151,7 @@ def instance_create(
     script_id: str | None = typer.Option(None, "--script-id", help="Startup script ID to run on launch."),
     script_args: str = typer.Option("", "--script-args", help="Arguments passed to startup script."),
     fs_id: int | None = typer.Option(None, "--fs-id", help="Filesystem ID to attach."),
+    spot: bool = typer.Option(False, "--spot", help="Create a spot GPU container instance."),
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -143,6 +162,33 @@ def instance_create(
     https://docs.jarvislabs.ai/in1-migration
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
+    gpu = value_or_default(gpu, None)
+    cpu = value_or_default(cpu, False)
+    vcpus = value_or_default(vcpus, None)
+    ram = value_or_default(ram, None)
+    spot = value_or_default(spot, False)
+
+    if cpu:
+        if not vm:
+            render.die("--cpu requires --vm.")
+        if gpu is not None:
+            render.die("--cpu cannot be used with --gpu.")
+        if (vcpus is None) != (ram is None):
+            render.die("CPU VM sizing requires both --vcpus and --ram.")
+        if option_was_explicit("template"):
+            render.die("--template is not supported with CPU VMs.")
+        if option_was_explicit("num_gpus"):
+            render.die("--num-gpus is not supported with CPU VMs.")
+        if option_was_explicit("storage") and storage < VM_MIN_STORAGE_GB:
+            render.die(f"CPU VMs require at least {VM_MIN_STORAGE_GB}GB storage.")
+        if http_ports:
+            render.die("--http-ports is not supported with CPU VMs.")
+        if script_id is not None or script_args:
+            render.die("Startup scripts are not supported with CPU VMs.")
+        if fs_id is not None:
+            render.die("--fs-id is not supported with CPU VMs.")
+        if spot:
+            render.die("--spot is not supported with CPU VMs.")
 
     # Handle --vm flag
     if vm:
@@ -150,14 +196,39 @@ def instance_create(
             render.die("--vm and --template cannot be used together.")
         template = "vm"
         if storage == 40:
-            storage = 100
+            storage = VM_MIN_STORAGE_GB
         if http_ports:
             render.die("--http-ports is not supported with --vm. VMs are SSH-only.")
     if template.strip().lower() == "vm" and not vm:
         render.die("Use --vm instead of --template vm.")
+    if not cpu and gpu is None:
+        render.die("GPU type is required. Use --gpu <type>, or use --vm --cpu for a CPU VM.")
+    if spot and vm:
+        render.die("--spot is only supported for GPU container instances.")
 
-    details = [f"gpu={num_gpus}x {gpu}", f"template={template}", f"storage={storage}GB", f"name={name!r}"]
-    if region:
+    client = get_client() if cpu else None
+    resolved_cpu_region: str | None = None
+    if cpu:
+        with render.spinner("Resolving CPU VM plan..."):
+            vcpus, ram, resolved_cpu_region = client.instances.resolve_cpu_vm_plan(
+                vcpus=vcpus,
+                ram=ram,
+                region=region,
+            )
+        region = resolved_cpu_region
+
+    if cpu:
+        details = [
+            f"cpu={vcpus} vCPU / {ram}GB RAM",
+            f"storage={storage}GB",
+            f"name={name!r}",
+            f"region={render.region_label(resolved_cpu_region)}",
+        ]
+    else:
+        details = [f"gpu={num_gpus}x {gpu}", f"template={template}", f"storage={storage}GB", f"name={name!r}"]
+        if spot:
+            details.append("spot=true")
+    if region and not cpu:
         details.append(f"region={region.upper()}")
     if http_ports:
         details.append(f"http_ports={http_ports!r}")
@@ -167,17 +238,21 @@ def instance_create(
         details.append(f"script_args={script_args!r}")
     if fs_id is not None:
         details.append(f"fs_id={fs_id}")
-    noun = "VM" if template == "vm" else "instance"
+    noun = "CPU VM" if cpu else ("VM" if template == "vm" else "instance")
     prompt = f"Create {noun} ({', '.join(details)})?"
     if not render.confirm(prompt, skip=state.yes):
         raise typer.Exit()
 
-    client = get_client()
+    if client is None:
+        client = get_client()
     with render.spinner(f"Creating {noun} — this may take a few seconds..."):
         inst = client.instances.create(
             gpu_type=gpu,
             num_gpus=num_gpus,
             template=template,
+            cpu=cpu,
+            vcpus=vcpus,
+            ram=ram,
             storage=storage,
             name=name,
             region=region,
@@ -185,6 +260,7 @@ def instance_create(
             script_id=script_id,
             script_args=script_args,
             fs_id=fs_id,
+            is_spot=spot,
         )
 
     if state.json_output:
@@ -253,22 +329,32 @@ def instance_resume(
     machine_id: int = typer.Argument(..., help="Instance ID to resume."),
     gpu: str | None = typer.Option(None, "--gpu", "-g", help="Resume with a different GPU type."),
     num_gpus: int | None = typer.Option(None, "--num-gpus", help="Change number of GPUs."),
+    vcpus: int | None = typer.Option(None, "--vcpus", help="CPU VM vCPU count."),
+    ram: int | None = typer.Option(None, "--ram", help="CPU VM RAM in GB."),
     storage: int | None = typer.Option(None, "--storage", "-s", help="Expand storage (GB). Can only increase."),
     name: str | None = typer.Option(None, "--name", "-n", help="Rename instance."),
     http_ports: str = typer.Option("", "--http-ports", help="Comma-separated HTTP ports to expose (e.g. 7860,8080)."),
     script_id: str | None = typer.Option(None, "--script-id", help="Startup script ID to use on resume."),
     script_args: str | None = typer.Option(None, "--script-args", help="Arguments passed to startup script."),
     fs_id: int | None = typer.Option(None, "--fs-id", help="Filesystem ID to attach."),
+    spot: bool = typer.Option(False, "--spot", help="Resume as a spot GPU container instance."),
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Resume a paused instance. Optionally swap GPU, expand storage, or rename."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
+    vcpus = value_or_default(vcpus, None)
+    ram = value_or_default(ram, None)
+    spot = value_or_default(spot, False)
     changes: list[str] = []
     if gpu:
         changes.append(f"gpu={gpu}")
     if num_gpus is not None:
         changes.append(f"num_gpus={num_gpus}")
+    if (vcpus is None) != (ram is None):
+        render.die("CPU VM sizing requires both --vcpus and --ram.")
+    if vcpus is not None and ram is not None:
+        changes.append(f"cpu={vcpus} vCPU / {ram}GB RAM")
     if storage is not None:
         changes.append(f"storage={storage}GB")
     if name is not None:
@@ -281,6 +367,8 @@ def instance_resume(
         changes.append(f"script_args={script_args!r}")
     if fs_id is not None:
         changes.append(f"fs_id={fs_id}")
+    if spot:
+        changes.append("spot=true")
 
     details = ", ".join(changes) if changes else "current configuration"
     if not render.confirm(f"Resume instance {machine_id} with {details}?", skip=state.yes):
@@ -292,12 +380,15 @@ def instance_resume(
             machine_id,
             gpu_type=gpu,
             num_gpus=num_gpus,
+            vcpus=vcpus,
+            ram=ram,
             storage=storage,
             name=name,
             http_ports=http_ports,
             script_id=script_id,
             script_args=script_args,
             fs_id=fs_id,
+            is_spot=spot,
         )
 
     if inst.machine_id != machine_id:
