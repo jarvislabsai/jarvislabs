@@ -164,6 +164,43 @@ def test_gpu_table_container_only():
     assert "GPU VMs" not in output
 
 
+def test_gpu_table_uses_effective_free_devices_for_on_demand_availability():
+    gpus = [
+        _make_gpu(
+            gpu_type="H100",
+            workload_type="container",
+            num_free_devices=0,
+            effective_num_free_devices=7,
+            spot_price=1.19,
+        ),
+        _make_gpu(gpu_type="A100-80GB", workload_type="container", num_free_devices=0, effective_num_free_devices=0),
+    ]
+
+    output = _capture_gpu_table(gpus)
+
+    h100_row = next(line for line in output.splitlines() if "H100" in line)
+    a100_row = next(line for line in output.splitlines() if "A100-80GB" in line)
+    assert "●" in h100_row
+    assert "○" in a100_row
+
+
+def test_gpu_table_dims_spot_price_when_spot_capacity_is_not_free():
+    gpus = [
+        _make_gpu(
+            gpu_type="H100",
+            workload_type="container",
+            num_free_devices=0,
+            effective_num_free_devices=7,
+            spot_price=1.19,
+        ),
+    ]
+
+    output = _capture_gpu_table(gpus)
+
+    assert "$1.19" in output
+    assert "dim Spot price" in output
+
+
 def test_gpu_table_vm_only():
     gpus = [_make_gpu(workload_type="vm")]
     output = _capture_gpu_table(gpus)

@@ -10,6 +10,7 @@ import time
 import httpx
 
 from jarvislabs.constants import (
+    DEFAULT_REGION,
     HTTP_TIMEOUT_CONNECT_S,
     HTTP_TIMEOUT_READ_S,
     MAX_RETRIES,
@@ -29,7 +30,7 @@ class Transport:
 
     def __init__(self, token: str, base_url: str | None = None) -> None:
         self._token = token
-        self._base_url = base_url or REGION_URLS["india-01"]
+        self._base_url = base_url or REGION_URLS[DEFAULT_REGION]
         self._client = httpx.Client(
             timeout=httpx.Timeout(
                 connect=HTTP_TIMEOUT_CONNECT_S,

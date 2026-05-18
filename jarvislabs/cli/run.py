@@ -20,6 +20,7 @@ from typer.core import TyperGroup
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
 from jarvislabs.cli.instance import _default_upload_dest, _remote_home, value_or_default
+from jarvislabs.constants import DEFAULT_NUM_GPUS, DEFAULT_STORAGE_GB, DEFAULT_TEMPLATE
 from jarvislabs.exceptions import JarvislabsError, SSHError
 from jarvislabs.ssh import build_rsync_upload_command, build_scp_command, harden_ssh_parts, split_ssh_command
 
@@ -939,7 +940,7 @@ def run_start(
     region: str | None = typer.Option(
         None,
         "--region",
-        help="Optional region pin for fresh instances (IN2, EU1). IN1 no longer accepts new instances.",
+        help="Optional region pin for fresh instances (IN1, IN2, EU1).",
     ),
     script: str | None = typer.Option(
         None,
@@ -947,10 +948,10 @@ def run_start(
         help="Python script path inside a directory target. Example: jl run . --script train.py --gpu L4",
     ),
     vm: bool = typer.Option(False, "--vm", help="Create a VM instance instead of a container."),
-    template: str = typer.Option("pytorch", "--template", "-t", help="Framework template for fresh instances."),
-    storage: int = typer.Option(40, "--storage", "-s", help="Storage in GB for fresh instances."),
+    template: str = typer.Option(DEFAULT_TEMPLATE, "--template", "-t", help="Framework template for fresh instances."),
+    storage: int = typer.Option(DEFAULT_STORAGE_GB, "--storage", "-s", help="Storage in GB for fresh instances."),
     name: str = typer.Option("jl-run", "--name", "-n", help="Instance name for fresh runs."),
-    num_gpus: int = typer.Option(1, "--num-gpus", help="Number of GPUs for fresh runs."),
+    num_gpus: int = typer.Option(DEFAULT_NUM_GPUS, "--num-gpus", help="Number of GPUs for fresh runs."),
     spot: bool = typer.Option(False, "--spot", help="Create a spot GPU container for this run."),
     http_ports: str = typer.Option("", "--http-ports", help="Comma-separated HTTP ports to expose on fresh instances."),
     setup: str | None = typer.Option(None, "--setup", help="Shell command to run before the main command."),
@@ -966,12 +967,7 @@ def run_start(
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Start a managed run.
-
-    Note: IN1 is winding down and no longer accepts new instances. Existing IN1
-    instances can still be used via --on. Migration guide:
-    https://docs.jarvislabs.ai/in1-migration
-    """
+    """Start a managed run."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     spot = value_or_default(spot, False)
     target, extra_args = _parse_run_inputs(list(ctx.args))
@@ -979,11 +975,9 @@ def run_start(
 
     # Handle --vm flag
     if vm:
-        if template != "pytorch":
+        if template != DEFAULT_TEMPLATE:
             render.die("--vm and --template cannot be used together.")
         template = "vm"
-        if storage == 40:
-            storage = 100
         if http_ports:
             render.die("--http-ports is not supported with --vm. VMs are SSH-only.")
     if template.strip().lower() == "vm" and not vm:
@@ -1047,7 +1041,7 @@ def run_start(
     if spot:
         detail_parts.append("spot=true")
     if isinstance(region, str) and region:
-        detail_parts.append(f"region={region.upper()}")
+        detail_parts.append(f"region={render.region_input_label(region)}")
     if http_ports:
         detail_parts.append(f"http_ports={http_ports!r}")
     details = f"Create {num_gpus}x {gpu} instance for jl run ({', '.join(detail_parts)})?"
