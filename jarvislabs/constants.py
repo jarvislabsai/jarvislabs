@@ -1,4 +1,4 @@
-"""Static configuration — region URLs, GPU types, Europe isolation, defaults.
+"""Static configuration — region URLs, GPU types, region policy, defaults.
 
 Single source of truth. When a region is added/removed or GPU types change,
 only this file needs updating.
@@ -6,24 +6,21 @@ only this file needs updating.
 
 # ── Regions ──────────────────────────────────────────────────────────────────
 
-DEFAULT_REGION = "india-01"
+CHENNAI_REGION = "india-chennai-01"
 INDIA_NOIDA_REGION = "india-noida-01"
 EUROPE_REGION = "europe-01"
-DEPRECATED_REGIONS: frozenset[str] = frozenset({DEFAULT_REGION})
-
-# Where to send users for IN1 wind-down guidance.
-IN1_MIGRATION_URL = "https://docs.jarvislabs.ai/in1-migration"
+DEFAULT_REGION = INDIA_NOIDA_REGION
 
 REGION_URLS: dict[str, str] = {
-    "india-01": "https://backendprod.jarvislabs.net/",
-    "india-noida-01": "https://backendn.jarvislabs.net/",
-    "europe-01": "https://backendeu.jarvislabs.net/",
+    CHENNAI_REGION: "https://backendc.jarvislabs.net/",
+    INDIA_NOIDA_REGION: "https://backendn.jarvislabs.net/",
+    EUROPE_REGION: "https://backendeu.jarvislabs.net/",
 }
 
 REGION_DISPLAY_CODES: dict[str, str] = {
-    "india-01": "IN1",
-    "india-noida-01": "IN2",
-    "europe-01": "EU1",
+    CHENNAI_REGION: "IN1",
+    INDIA_NOIDA_REGION: "IN2",
+    EUROPE_REGION: "EU1",
 }
 
 REGION_CODE_TO_REGION: dict[str, str] = {code.lower(): region for region, code in REGION_DISPLAY_CODES.items()}
@@ -31,23 +28,22 @@ REGION_CODE_TO_REGION: dict[str, str] = {code.lower(): region for region, code i
 # ── Region routing ──────────────────────────────────────────────────────────
 
 # Preferred order for auto-routing when user doesn't specify --region.
-# Deprecated regions are filtered out in create flows before this priority applies.
-REGION_PRIORITY: list[str] = [INDIA_NOIDA_REGION, EUROPE_REGION]
+# Shared GPUs prefer Noida, then Chennai, then Europe.
+REGION_PRIORITY: list[str] = [INDIA_NOIDA_REGION, CHENNAI_REGION, EUROPE_REGION]
 
 # Hardcoded fallback when server_meta API is unreachable.
 # GPUs not in this map default to INDIA_NOIDA_REGION (first in priority).
 REGION_GPU_FALLBACK: dict[str, str] = {
-    "H200": "europe-01",  # EU-exclusive
+    "H200": EUROPE_REGION,  # EU-exclusive
+    "RTX-PRO6000": CHENNAI_REGION,  # Chennai-exclusive at launch
 }
 
-# ── Europe region constraints ────────────────────────────────────────────────
+# ── Region constraints ────────────────────────────────────────────────────────
 
 EUROPE_GPU_TYPES: frozenset[str] = frozenset({"H100", "H200"})
 EUROPE_GPU_COUNTS: frozenset[int] = frozenset({1, 8})
-EUROPE_MIN_STORAGE_GB = 100
-VM_MIN_STORAGE_GB = 100
-VM_SUPPORTED_REGIONS: frozenset[str] = frozenset({EUROPE_REGION, INDIA_NOIDA_REGION})
-FILESYSTEM_REGIONS: frozenset[str] = frozenset({INDIA_NOIDA_REGION})
+VM_SUPPORTED_REGIONS: frozenset[str] = frozenset({CHENNAI_REGION, EUROPE_REGION, INDIA_NOIDA_REGION})
+FILESYSTEM_REGIONS: frozenset[str] = frozenset({CHENNAI_REGION, INDIA_NOIDA_REGION})
 
 # ── Timeouts & Polling ───────────────────────────────────────────────────────
 
@@ -62,24 +58,7 @@ RETRY_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 # ── CLI Defaults ─────────────────────────────────────────────────────────────
 
 DEFAULT_TEMPLATE = "pytorch"
-DEFAULT_GPU_TYPE = "L4"
 DEFAULT_NUM_GPUS = 1
-DEFAULT_STORAGE_GB = 40  # auto-bumped to EUROPE_MIN_STORAGE_GB for europe
+DEFAULT_STORAGE_GB = 100
 DEFAULT_INSTANCE_NAME = "Name me"
-
-# ── GPU types (for validation / help text) ───────────────────────────────────
-
-GPU_TYPES: frozenset[str] = frozenset(
-    {
-        "RTX5000",
-        "A5000",
-        "A5000Pro",
-        "A6000",
-        "A100",
-        "A100-80GB",
-        "RTX6000Ada",
-        "H100",
-        "H200",
-        "L4",
-    }
-)
+CHENNAI_ALLOWED_CONTAINER_TEMPLATES: frozenset[str] = frozenset({DEFAULT_TEMPLATE})

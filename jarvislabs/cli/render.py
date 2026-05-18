@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.theme import Theme
 
-from jarvislabs.constants import REGION_DISPLAY_CODES
+from jarvislabs.constants import REGION_CODE_TO_REGION, REGION_DISPLAY_CODES
 
 TABLE_BOX = box.ROUNDED
 HEADER_STYLE = "bold"
@@ -306,12 +306,12 @@ def gpu_table(gpus: list, currency: str = "USD", *, show_legend: bool = True) ->
     if vm_gpus:
         _gpu_subtable(vm_gpus, sym, title="GPU VMs", show_spot=False)
     if show_legend:
-        availability_legend()
+        availability_legend(show_spot_note=bool(container_gpus))
 
 
 def _gpu_subtable(gpus: list, sym: str, title: str, *, show_spot: bool) -> None:
-    available = [g for g in gpus if g.num_free_devices > 0]
-    unavailable = [g for g in gpus if g.num_free_devices <= 0]
+    available = [g for g in gpus if _on_demand_available(g)]
+    unavailable = [g for g in gpus if not _on_demand_available(g)]
 
     table = _table(title=title)
     table.add_column("", no_wrap=True)
@@ -326,6 +326,7 @@ def _gpu_subtable(gpus: list, sym: str, title: str, *, show_spot: bool) -> None:
 
     for gpu in available:
         spot_price = display_spot_price(gpu)
+        spot_available = getattr(gpu, "num_free_devices", 0) > 0
         row = [
             "[green]●[/green]",
             f"[bold]{gpu.gpu_type}[/bold]",
@@ -336,7 +337,12 @@ def _gpu_subtable(gpus: list, sym: str, title: str, *, show_spot: bool) -> None:
             f"[green]{sym}{gpu.price_per_hour:.2f}[/green]" if gpu.price_per_hour else "—",
         ]
         if show_spot:
-            row.append(f"[green]{sym}{spot_price:.2f}[/green]" if spot_price else "—")
+            if spot_price is not None and spot_available:
+                row.append(f"[green]{sym}{spot_price:.2f}[/green]")
+            elif spot_price is not None:
+                row.append(f"[dim]{sym}{spot_price:.2f}[/dim]")
+            else:
+                row.append("—")
         table.add_row(*row)
 
     for gpu in unavailable:
@@ -351,10 +357,17 @@ def _gpu_subtable(gpus: list, sym: str, title: str, *, show_spot: bool) -> None:
             f"[dim]{sym}{gpu.price_per_hour:.2f}[/dim]" if gpu.price_per_hour else "[dim]—[/dim]",
         ]
         if show_spot:
-            row.append(f"[dim]{sym}{spot_price:.2f}[/dim]" if spot_price else "[dim]—[/dim]")
+            row.append(f"[dim]{sym}{spot_price:.2f}[/dim]" if spot_price is not None else "[dim]—[/dim]")
         table.add_row(*row)
 
     stdout_console.print(table)
+
+
+def _on_demand_available(gpu) -> bool:
+    free = getattr(gpu, "effective_num_free_devices", None)
+    if free is None:
+        free = getattr(gpu, "num_free_devices", 0)
+    return free > 0
 
 
 def display_spot_price(gpu) -> float | None:
@@ -364,9 +377,11 @@ def display_spot_price(gpu) -> float | None:
     return getattr(gpu, "spot_price", None)
 
 
-def availability_legend() -> None:
+def availability_legend(*, show_spot_note: bool = False) -> None:
     """Print the shared available/unavailable marker legend."""
     stdout_console.print("[green]●[/green] available  [dim]○ unavailable[/dim]")
+    if show_spot_note:
+        stdout_console.print("[dim]dim Spot price = spot price exists, but no spot capacity is free right now[/dim]")
 
 
 def cpu_vm_table(cpu_meta: dict, currency: str = "USD", *, show_legend: bool = True) -> None:
@@ -457,20 +472,6 @@ def warning(msg: str) -> None:
     console.print(f"[yellow]![/yellow] {msg}")
 
 
-def in1_migration_hint() -> None:
-    """One-line nudge shown when the user has or touches an IN1 resource."""
-    from jarvislabs.cli import state
-    from jarvislabs.constants import IN1_MIGRATION_URL
-
-    if state.json_output:
-        return
-    console.print(
-        f"[yellow]![/yellow] [yellow]IN1 is winding down — new resources can't be created there.[/yellow] "
-        f"[dim]Resume/manage still works. We strongly recommend migrating to another region (IN2 or EU1). "
-        f"Migration guide: {IN1_MIGRATION_URL}[/dim]"
-    )
-
-
 # ── Confirmation ─────────────────────────────────────────────────────────────
 
 
@@ -515,6 +516,15 @@ def region_label(region: str | None) -> str:
     if not region:
         return "—"
     return REGION_DISPLAY_CODES.get(region, region)
+
+
+def region_input_label(region: str | None, *, default: str | None = None) -> str:
+    """Convert user region input or backend region IDs to short CLI labels."""
+    if not region:
+        return region_label(default)
+    normalized = region.strip()
+    internal = REGION_CODE_TO_REGION.get(normalized.lower(), normalized)
+    return region_label(internal)
 
 
 def _status_style(status: str) -> str:

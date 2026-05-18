@@ -12,7 +12,7 @@ import typer
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
-from jarvislabs.constants import VM_MIN_STORAGE_GB
+from jarvislabs.constants import DEFAULT_INSTANCE_NAME, DEFAULT_NUM_GPUS, DEFAULT_STORAGE_GB, DEFAULT_TEMPLATE
 from jarvislabs.exceptions import SSHError, ValidationError
 from jarvislabs.ssh import (
     build_remote_shell_command,
@@ -108,8 +108,6 @@ def instance_list(
         return
 
     render.instances_table(instances, currency)
-    if any(inst.region == "india-01" for inst in instances):
-        render.in1_migration_hint()
 
 
 @app.command("get", rich_help_panel=_MACHINE_PANEL)
@@ -129,8 +127,6 @@ def instance_get(
         return
 
     render.instance_detail(inst, currency)
-    if inst.region == "india-01":
-        render.in1_migration_hint()
 
 
 @app.command("create", rich_help_panel=_MACHINE_PANEL)
@@ -140,13 +136,13 @@ def instance_create(
     cpu: bool = typer.Option(False, "--cpu", help="Create a CPU VM. Requires --vm."),
     vcpus: int | None = typer.Option(None, "--vcpus", help="CPU VM vCPU count."),
     ram: int | None = typer.Option(None, "--ram", help="CPU VM RAM in GB."),
-    template: str = typer.Option("pytorch", "--template", "-t", help="Framework template for container instances."),
-    storage: int = typer.Option(40, "--storage", "-s", help="Storage in GB."),
-    name: str = typer.Option("Name me", "--name", "-n", help="Instance name."),
-    num_gpus: int = typer.Option(1, "--num-gpus", help="Number of GPUs."),
-    region: str | None = typer.Option(
-        None, "--region", help="Optional region pin (IN2, EU1). IN1 no longer accepts new instances."
+    template: str = typer.Option(
+        DEFAULT_TEMPLATE, "--template", "-t", help="Framework template for container instances."
     ),
+    storage: int = typer.Option(DEFAULT_STORAGE_GB, "--storage", "-s", help="Storage in GB."),
+    name: str = typer.Option(DEFAULT_INSTANCE_NAME, "--name", "-n", help="Instance name."),
+    num_gpus: int = typer.Option(DEFAULT_NUM_GPUS, "--num-gpus", help="Number of GPUs."),
+    region: str | None = typer.Option(None, "--region", help="Optional region pin (IN1, IN2, EU1)."),
     http_ports: str = typer.Option("", "--http-ports", help="Comma-separated HTTP ports to expose (e.g. 7860,8080)."),
     script_id: str | None = typer.Option(None, "--script-id", help="Startup script ID to run on launch."),
     script_args: str = typer.Option("", "--script-args", help="Arguments passed to startup script."),
@@ -155,12 +151,7 @@ def instance_create(
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Create a new GPU instance (container or VM).
-
-    Note: IN1 is winding down and no longer accepts new instances. Existing IN1
-    instances can still be resumed and managed. Migration guide:
-    https://docs.jarvislabs.ai/in1-migration
-    """
+    """Create a new GPU instance (container or VM)."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     gpu = value_or_default(gpu, None)
     cpu = value_or_default(cpu, False)
@@ -179,8 +170,8 @@ def instance_create(
             render.die("--template is not supported with CPU VMs.")
         if option_was_explicit("num_gpus"):
             render.die("--num-gpus is not supported with CPU VMs.")
-        if option_was_explicit("storage") and storage < VM_MIN_STORAGE_GB:
-            render.die(f"CPU VMs require at least {VM_MIN_STORAGE_GB}GB storage.")
+        if option_was_explicit("storage") and storage < DEFAULT_STORAGE_GB:
+            render.die(f"CPU VMs require at least {DEFAULT_STORAGE_GB}GB storage.")
         if http_ports:
             render.die("--http-ports is not supported with CPU VMs.")
         if script_id is not None or script_args:
@@ -192,11 +183,9 @@ def instance_create(
 
     # Handle --vm flag
     if vm:
-        if template != "pytorch":
+        if template != DEFAULT_TEMPLATE:
             render.die("--vm and --template cannot be used together.")
         template = "vm"
-        if storage == 40:
-            storage = VM_MIN_STORAGE_GB
         if http_ports:
             render.die("--http-ports is not supported with --vm. VMs are SSH-only.")
     if template.strip().lower() == "vm" and not vm:
@@ -229,7 +218,7 @@ def instance_create(
         if spot:
             details.append("spot=true")
     if region and not cpu:
-        details.append(f"region={region.upper()}")
+        details.append(f"region={render.region_input_label(region)}")
     if http_ports:
         details.append(f"http_ports={http_ports!r}")
     if script_id:
@@ -285,7 +274,7 @@ def instance_rename(
 
     client = get_client()
     with render.spinner("Renaming instance..."):
-        inst = client.instances.get(machine_id)
+        client.instances.get(machine_id)
         client.instances.rename(machine_id, name)
 
     if state.json_output:
@@ -293,8 +282,6 @@ def instance_rename(
         return
 
     render.success(f"Instance {machine_id} renamed to {name!r}.")
-    if inst.region == "india-01":
-        render.in1_migration_hint()
 
 
 @app.command("pause", rich_help_panel=_MACHINE_PANEL)
@@ -307,7 +294,7 @@ def instance_pause(
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     client = get_client()
     with render.spinner("Checking instance..."):
-        inst = client.instances.get(machine_id)
+        client.instances.get(machine_id)
 
     if not render.confirm(f"Pause instance {machine_id}?", skip=state.yes):
         raise typer.Exit()
@@ -320,8 +307,6 @@ def instance_pause(
         return
 
     render.success(f"Instance {machine_id} paused.")
-    if inst.region == "india-01":
-        render.in1_migration_hint()
 
 
 @app.command("resume", rich_help_panel=_MACHINE_PANEL)
@@ -399,8 +384,6 @@ def instance_resume(
         return
 
     render.success(f"Instance {inst.machine_id} is Running.")
-    if inst.region == "india-01":
-        render.in1_migration_hint()
     render.instance_detail(inst, client.account.currency())
 
 

@@ -14,16 +14,19 @@ import time
 
 from jarvislabs.config import resolve_token
 from jarvislabs.constants import (
+    CHENNAI_ALLOWED_CONTAINER_TEMPLATES,
+    CHENNAI_REGION,
+    DEFAULT_INSTANCE_NAME,
+    DEFAULT_NUM_GPUS,
     DEFAULT_POLL_TIMEOUT_S,
     DEFAULT_REGION,
-    DEPRECATED_REGIONS,
+    DEFAULT_STORAGE_GB,
+    DEFAULT_TEMPLATE,
     EUROPE_GPU_COUNTS,
     EUROPE_GPU_TYPES,
-    EUROPE_MIN_STORAGE_GB,
     EUROPE_REGION,
     FETCH_RETRY_INTERVAL_S,
     FILESYSTEM_REGIONS,
-    IN1_MIGRATION_URL,
     INDIA_NOIDA_REGION,
     POLL_INTERVAL_S,
     REGION_CODE_TO_REGION,
@@ -31,7 +34,6 @@ from jarvislabs.constants import (
     REGION_GPU_FALLBACK,
     REGION_PRIORITY,
     REGION_URLS,
-    VM_MIN_STORAGE_GB,
     VM_SUPPORTED_REGIONS,
 )
 from jarvislabs.exceptions import APIError, AuthError, NotFoundError, ValidationError
@@ -107,7 +109,7 @@ class Account:
 
     def gpu_availability_from(self, meta: ServerMetaResponse) -> list[ServerMetaGPU]:
         """Build GPU availability rows from a server_meta response already in memory."""
-        return [_listing_gpu_view(gpu) for gpu in meta.server_meta if gpu.region not in DEPRECATED_REGIONS]
+        return [_listing_gpu_view(gpu) for gpu in meta.server_meta if gpu.region in REGION_URLS]
 
     def resources(self) -> ServerMetaResponse:
         """Fetch the backend resource catalog used by jl resources."""
@@ -278,13 +280,13 @@ class Instances:
         self,
         *,
         gpu_type: str | None = None,
-        num_gpus: int = 1,
-        template: str = "pytorch",
+        num_gpus: int = DEFAULT_NUM_GPUS,
+        template: str = DEFAULT_TEMPLATE,
         cpu: bool = False,
         vcpus: int | None = None,
         ram: int | None = None,
-        storage: int = 40,
-        name: str = "Name me",
+        storage: int = DEFAULT_STORAGE_GB,
+        name: str = DEFAULT_INSTANCE_NAME,
         disk_type: str = "ssd",
         http_ports: str = "",
         script_id: str | None = None,
@@ -346,14 +348,10 @@ class Instances:
                 num_gpus=num_gpus,
                 is_spot=is_spot,
             )
+        _validate_chennai_template_policy(region=region, template=template)
 
-        storage = _apply_storage_constraints(
-            template=template,
-            gpu_type=gpu_type,
-            num_gpus=num_gpus,
-            storage=storage,
-            region=region,
-        )
+        if region == EUROPE_REGION:
+            _validate_europe(gpu_type, num_gpus)
 
         if template == "vm" and not self._ssh_keys.list():
             raise ValidationError(
@@ -410,8 +408,8 @@ class Instances:
         """
         if (vcpus is None) != (ram is None):
             raise ValidationError("CPU VM sizing requires both --vcpus and --ram.")
-        if storage < VM_MIN_STORAGE_GB:
-            raise ValidationError(f"CPU VMs require at least {VM_MIN_STORAGE_GB}GB storage.")
+        if storage < DEFAULT_STORAGE_GB:
+            raise ValidationError(f"CPU VMs require at least {DEFAULT_STORAGE_GB}GB storage.")
         if name:
             _validate_instance_name(name)
         if not self._ssh_keys.list():
@@ -558,18 +556,8 @@ class Instances:
 
         effective_gpu = gpu_type or instance.gpu_type
         effective_num = num_gpus or instance.num_gpus or 1
-        effective_storage = storage or instance.storage_gb or 40
-        effective_storage = _apply_storage_constraints(
-            template=instance.template,
-            gpu_type=effective_gpu,
-            num_gpus=effective_num,
-            storage=effective_storage,
-            region=region,
-            current_storage=instance.storage_gb,
-            storage_was_requested=storage is not None,
-        )
-        if effective_storage != (storage or instance.storage_gb or 40):
-            storage = effective_storage
+        if region == EUROPE_REGION and effective_gpu:
+            _validate_europe(effective_gpu, effective_num)
 
         payload: dict = {
             "machine_id": machine_id,
@@ -613,8 +601,8 @@ class Instances:
         """Resume a paused CPU VM through the CPU VM backend endpoint."""
         if (vcpus is None) != (ram is None):
             raise ValidationError("CPU VM sizing requires both --vcpus and --ram.")
-        if storage is not None and storage < VM_MIN_STORAGE_GB:
-            raise ValidationError(f"CPU VMs require at least {VM_MIN_STORAGE_GB}GB storage.")
+        if storage is not None and storage < DEFAULT_STORAGE_GB:
+            raise ValidationError(f"CPU VMs require at least {DEFAULT_STORAGE_GB}GB storage.")
         if vcpus is not None and ram is not None:
             choose_cpu_vm_plan(self._t, vcpus=vcpus, ram=ram, region=instance.region)
         if not self._ssh_keys.list():
@@ -666,12 +654,12 @@ class Instances:
                 base_url=base_url,
             )
         except APIError as exc:
-            if _wait_until_instance_missing(self._t, machine_id):
+            if _wait_until_instance_destroying_or_missing(self._t, machine_id):
                 return True
             raise exc
 
         if not _normalize_success(resp):
-            if _wait_until_instance_missing(self._t, machine_id):
+            if _wait_until_instance_destroying_or_missing(self._t, machine_id):
                 return True
             raise APIError(0, f"Failed to destroy instance: {_backend_msg(resp)}")
         return True
@@ -777,10 +765,10 @@ def _resolve_region(
     *,
     gpu_type: str | None,
     num_gpus: int,
-    template: str = "pytorch",
+    template: str = DEFAULT_TEMPLATE,
     is_spot: bool = False,
 ) -> str:
-    """Auto-route to the best region via server_meta, excluding deprecated regions."""
+    """Auto-route to the best region via server_meta."""
     fallback = REGION_GPU_FALLBACK.get(gpu_type, INDIA_NOIDA_REGION)
     if template == "vm" and fallback not in VM_SUPPORTED_REGIONS:
         fallback = INDIA_NOIDA_REGION
@@ -792,24 +780,26 @@ def _resolve_region(
         return fallback
 
     all_for_gpu = [s for s in meta.server_meta if s.gpu_type == gpu_type and s.region]
-    creatable_for_gpu = [s for s in all_for_gpu if s.region not in DEPRECATED_REGIONS]
+    active_for_gpu = [s for s in all_for_gpu if s.region in REGION_URLS]
     if template == "vm":
-        candidates = [
-            s for s in creatable_for_gpu if s.region in VM_SUPPORTED_REGIONS and s.workload_type in ("vm", None)
-        ]
+        candidates = [s for s in active_for_gpu if s.region in VM_SUPPORTED_REGIONS and s.workload_type in ("vm", None)]
     else:
-        candidates = [s for s in creatable_for_gpu if s.workload_type in ("container", None)]
+        candidates = [s for s in active_for_gpu if s.workload_type in ("container", None)]
     if is_spot:
         candidates = [s for s in candidates if s.spot_price is not None]
     if not candidates:
-        deprecated_only = sorted({_region_label(s.region) for s in all_for_gpu if s.region in DEPRECATED_REGIONS})
-        if deprecated_only and not creatable_for_gpu and gpu_type:
-            raise ValidationError(
-                f"{gpu_type} is only offered in {', '.join(deprecated_only)}, which no longer accepts new instances. "
-                f"Try a different GPU — run `jl gpus` to see what's available. Migration guide: {IN1_MIGRATION_URL}"
-            )
         # GPU exists but not for this workload type — fail early
-        if creatable_for_gpu:
+        if all_for_gpu:
+            if template == "vm" and any(s.workload_type == "container" for s in active_for_gpu):
+                regions = ", ".join(
+                    _region_label(region)
+                    for region in dict.fromkeys(s.region for s in active_for_gpu if s.workload_type == "container")
+                )
+                raise ValidationError(
+                    f"{gpu_type} is available for containers in {regions}, but VM support is not available yet."
+                )
+            if not active_for_gpu:
+                raise ValidationError(f"{gpu_type} is not available in any supported region right now.")
             kind = "VM" if template == "vm" else "container"
             if is_spot:
                 raise ValidationError(f"Spot is not available for {gpu_type} right now.")
@@ -823,53 +813,18 @@ def _resolve_region(
         if _available_devices(server, is_spot=is_spot) >= num_gpus:
             return server.region
 
+    if is_spot:
+        raise ValidationError(f"No free spot {gpu_type} GPUs right now. Try again later.")
+
     return candidates[0].region or fallback
 
 
-def _apply_europe_constraints(gpu_type: str | None, num_gpus: int, storage: int, region: str) -> int:
-    """Auto-bump storage and validate Europe constraints. Returns adjusted storage."""
-    if region != EUROPE_REGION:
-        return storage
-    if storage < EUROPE_MIN_STORAGE_GB:
-        storage = EUROPE_MIN_STORAGE_GB
-    if gpu_type:
-        _validate_europe(gpu_type, num_gpus, storage)
-    return storage
-
-
-def _apply_storage_constraints(
-    *,
-    template: str,
-    gpu_type: str | None,
-    num_gpus: int,
-    storage: int,
-    region: str,
-    current_storage: int | None = None,
-    storage_was_requested: bool = False,
-) -> int:
-    """Normalize storage before sending the request to the backend."""
-    storage = _apply_europe_constraints(gpu_type, num_gpus, storage, region)
-
-    if template != "vm" or storage >= VM_MIN_STORAGE_GB:
-        return storage
-
-    if current_storage is None:
-        return VM_MIN_STORAGE_GB
-
-    if storage_was_requested and storage > current_storage:
-        return VM_MIN_STORAGE_GB
-
-    return storage
-
-
-def _validate_europe(gpu_type: str, num_gpus: int, storage_gb: int) -> None:
+def _validate_europe(gpu_type: str, num_gpus: int) -> None:
     label = _region_label(EUROPE_REGION)
     if gpu_type not in EUROPE_GPU_TYPES:
         raise ValidationError(f"{label} supports only {sorted(EUROPE_GPU_TYPES)} GPUs, got {gpu_type}")
     if num_gpus not in EUROPE_GPU_COUNTS:
         raise ValidationError(f"{label} supports {sorted(EUROPE_GPU_COUNTS)} GPUs per instance, got {num_gpus}")
-    if storage_gb < EUROPE_MIN_STORAGE_GB:
-        raise ValidationError(f"{label} requires at least {EUROPE_MIN_STORAGE_GB}GB storage")
 
 
 def _listing_gpu_view(gpu: ServerMetaGPU) -> ServerMetaGPU:
@@ -892,7 +847,7 @@ def _check_gpu_in_region(
     region: str,
     *,
     resume_only: bool = False,
-    template: str = "pytorch",
+    template: str = DEFAULT_TEMPLATE,
     require_spot: bool = False,
 ) -> None:
     """Raise early if the requested GPU isn't available in the target region."""
@@ -912,6 +867,12 @@ def _check_gpu_in_region(
         in_region = [s for s in in_region if s.workload_type in ("container", None)]
     label = _region_label(region)
     if not in_region:
+        if template == "vm" and any(
+            s.gpu_type == gpu_type and s.region == region and s.workload_type == "container" for s in meta.server_meta
+        ):
+            raise ValidationError(
+                f"{gpu_type} is available for containers in {label}, but VM support is not available yet."
+            )
         if resume_only:
             raise ValidationError(
                 f"{gpu_type} is not available in {label}. Paused instances can only resume in their original region."
@@ -935,18 +896,23 @@ def _validate_create_region(
     num_gpus: int,
     is_spot: bool = False,
 ) -> None:
-    if region in DEPRECATED_REGIONS:
-        raise ValidationError(
-            f"{_region_label(region)} is no longer accepting new instances. "
-            f"Existing instances there can still be resumed and managed. Migration guide: {IN1_MIGRATION_URL}"
-        )
     if template == "vm" and region not in VM_SUPPORTED_REGIONS:
-        valid_codes = ", ".join(sorted(_region_label(r) for r in VM_SUPPORTED_REGIONS))
+        valid_codes = _format_region_codes(VM_SUPPORTED_REGIONS)
         raise ValidationError(f"VM instances are only available in: {valid_codes}")
     if is_spot:
         _check_gpu_in_region(transport, gpu_type, num_gpus, region, template=template, require_spot=True)
     else:
         _check_gpu_in_region(transport, gpu_type, num_gpus, region, template=template)
+
+
+def _validate_chennai_template_policy(*, region: str, template: str) -> None:
+    """Keep CLI launches aligned with the current UI surface for Chennai."""
+    if region != CHENNAI_REGION or template == "vm" or template in CHENNAI_ALLOWED_CONTAINER_TEMPLATES:
+        return
+    label = _region_label(CHENNAI_REGION)
+    raise ValidationError(
+        f"Template {template!r} is not yet available in {label}. Use --template pytorch or choose --region IN2."
+    )
 
 
 def is_cpu_vm(instance: Instance) -> bool:
@@ -1030,7 +996,7 @@ def _normalize_region_input(region: str | None, *, allowed: frozenset[str] | Non
 
     if normalized in REGION_DISPLAY_CODES:
         if allowed is not None and normalized not in allowed:
-            valid = ", ".join(sorted(_region_label(r) for r in allowed))
+            valid = _format_region_codes(allowed)
             raise ValidationError(
                 f"Region {_region_label(normalized)} is not available for this resource. Allowed: {valid}"
             )
@@ -1040,19 +1006,14 @@ def _normalize_region_input(region: str | None, *, allowed: frozenset[str] | Non
     if upper in REGION_DISPLAY_CODES.values():
         internal = REGION_CODE_TO_REGION[upper.lower()]
         if allowed is not None and internal not in allowed:
-            if internal in DEPRECATED_REGIONS:
-                raise ValidationError(
-                    f"{upper} is no longer accepting new resources. "
-                    f"Existing {upper} resources can still be managed. Migration guide: {IN1_MIGRATION_URL}"
-                )
-            valid = ", ".join(sorted(_region_label(r) for r in allowed))
+            valid = _format_region_codes(allowed)
             raise ValidationError(f"Region {upper} is not available for this resource. Allowed: {valid}")
         return internal
 
     if allowed is not None:
-        valid_codes = ", ".join(sorted(_region_label(r) for r in allowed))
+        valid_codes = _format_region_codes(allowed)
     else:
-        valid_codes = ", ".join(sorted(REGION_DISPLAY_CODES.values()))
+        valid_codes = _format_region_codes()
     raise ValidationError(f"Unknown region {region!r}. Use one of: {valid_codes}")
 
 
@@ -1061,8 +1022,23 @@ def _region_label(region: str) -> str:
     return REGION_DISPLAY_CODES.get(region, region)
 
 
+def _format_region_codes(regions: frozenset[str] | None = None) -> str:
+    """Render region codes in product order: IN1, IN2, EU1."""
+    if regions is None:
+        ordered_regions = list(REGION_DISPLAY_CODES)
+    else:
+        ordered_regions = [r for r in REGION_DISPLAY_CODES if r in regions]
+        ordered_regions.extend(sorted(r for r in regions if r not in REGION_DISPLAY_CODES))
+    return ", ".join(_region_label(region) for region in ordered_regions)
+
+
 def _region_url(region: str | None) -> str:
-    return REGION_URLS.get(region or DEFAULT_REGION, REGION_URLS[DEFAULT_REGION])
+    if region is None:
+        return REGION_URLS[DEFAULT_REGION]
+    try:
+        return REGION_URLS[region]
+    except KeyError as exc:
+        raise ValidationError(f"Unknown region {region!r}. Use one of: {_format_region_codes()}") from exc
 
 
 def _poll_until_running(transport: Transport, machine_id: int, region: str) -> None:
@@ -1143,18 +1119,20 @@ def _get_instance(transport: Transport, machine_id: int, *, retries: int = 0) ->
             raise NotFoundError(f"Instance {machine_id} not found. Check the ID with: jl list") from err
 
 
-def _wait_until_instance_missing(
+def _wait_until_instance_destroying_or_missing(
     transport: Transport,
     machine_id: int,
     *,
     retries: int = 20,
     poll_interval_s: float = 1.0,
 ) -> bool:
-    """Return True when the instance is no longer fetchable."""
+    """Return True when the instance is gone or destroy has clearly started."""
     for attempt in range(retries + 1):
         try:
-            _get_instance(transport, machine_id)
+            inst = _get_instance(transport, machine_id)
         except NotFoundError:
+            return True
+        if str(getattr(inst, "status", "")).lower() == "destroying":
             return True
 
         if attempt < retries:

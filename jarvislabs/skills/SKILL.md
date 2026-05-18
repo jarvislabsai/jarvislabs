@@ -22,7 +22,7 @@ Use `--help` on any command to discover flags (e.g., `jl run --help`, `jl create
 ### Creating
 
 ```bash
-jl create --gpu L4 --storage 40 --yes --json
+jl create --gpu L4 --storage 100 --yes --json
 jl create --gpu L4 --spot --yes --json
 jl create --vm --cpu --yes --json
 ```
@@ -50,24 +50,23 @@ SSH, exec, upload, and download only work on **Running** instances.
 
 ### Regions & GPUs
 
-Valid region codes for new instances: `IN2`, `EU1`.
+Valid region codes for new instances: `IN1`, `IN2`, `EU1`.
 
-> **IN1 is winding down.** New instances and filesystems can no longer be created in `IN1`. Existing `IN1` instances can still be resumed, paused, destroyed, and renamed; existing `IN1` filesystems can still be listed, resized, and removed. Guide users with `IN1` resources to the migration doc: <https://docs.jarvislabs.ai/in1-migration>.
+`IN1` is Chennai (`india-chennai-01`). `IN2` is Noida (`india-noida-01`).
 
 If `--region` is omitted, the CLI picks a region based on GPU availability.
 
-| Constraint | Detail |
-|---|---|
-| EU1 | H100 and H200 only, single-GPU launches only right now, 100 GB minimum storage (auto-bumped) |
-| VM template | IN2 and EU1 only, requires at least one SSH key, 100 GB minimum storage |
+Use `jl resources --json` as the source of truth for GPU, region, and workload availability. VM instances require at least one SSH key and a matching `workload_type="vm"` row.
+
+Container template availability is not exposed in `jl resources --json`. Current CLI policy allows IN1 container creates only with `--template pytorch`; other IN1 container templates fail before launch until backend/product support is confirmed.
 
 Run `jl gpus` to check GPU availability and pricing. Output shows **GPU Containers** and **GPU VMs** tables with separate availability for each. Spot prices are shown only for GPU containers.
 
 Run `jl resources` when you also need CPU VM availability and pricing. It shows GPU containers, GPU VMs, and CPU VMs, with one shared available/unavailable legend at the end.
 
 How to read `jl gpus --json` availability:
-- `num_free_devices`: free GPUs on that server. These can be used for normal creates, and also for spot creates when `spot_price` is present.
-- `effective_num_free_devices`: GPUs available for on-demand creates on that server, including GPUs currently used by spot instances that can be preempted.
+- `num_free_devices`: GPUs free right now. Spot creates use this count, and require `spot_price` to be present.
+- `effective_num_free_devices`: GPUs available for on-demand creates on that server, including GPUs currently used by spot instances that can be preempted. If missing, fall back to `num_free_devices`.
 - These counts are per server. They are not the complete regional GPU capacity.
 - `workload_type` tells which launch type the row belongs to:
   - `"container"` means use it for normal GPU container creates.
@@ -167,7 +166,7 @@ jl run . --script train.py --gpu L4 --keep --json --yes
 jl run . --script train.py --gpu L4 --spot --keep --json --yes
 ```
 
-Creates a new instance, uploads code, runs the script. Additional flags: `--spot` (fresh GPU containers only), `--vm` (VM instead of container, auto-bumps storage to 100GB, disallows `--template` and `--http-ports`), `--template` (default: pytorch; run `jl templates --json` to list available), `--storage` (default: 40GB), `--num-gpus` (default: 1), `--region`, `--http-ports`.
+Creates a new instance, uploads code, runs the script. Additional flags: `--spot` (fresh GPU containers only), `--vm` (VM instead of container, disallows `--template` and `--http-ports`), `--template` (default: pytorch; run `jl templates --json` to list available), `--storage` (default: 100GB), `--num-gpus` (default: 1), `--region`, `--http-ports`.
 
 **Lifecycle rules for fresh instances:**
 
@@ -309,16 +308,16 @@ jl filesystem create --name x --storage 100 --json  # create filesystem
 ```
 
 **Filesystem caveats:**
-- **Region-bound:** A filesystem created in IN2 is only visible to IN2 instances.
+- **Region-bound:** A filesystem can only attach to instances in the same region.
 - **ID changes on edit:** Expanding a filesystem (`jl filesystem edit`) may return a new `fs_id`. Always use the returned ID.
-- The CLI validates that `fs_id` exists before creating/resuming, but does **not** validate region match. Ensure they match yourself.
+- The CLI validates that `fs_id` exists and belongs to the same region before creating/resuming.
 
 ## Agent Workflow (End-to-End)
 
 ```bash
 # 1. Check GPUs and create instance
 jl gpus --json
-jl create --gpu L4 --storage 50 --yes --json
+jl create --gpu L4 --storage 100 --yes --json
 
 # 2. Start detached run
 jl run . --script train.py --on <machine_id> --requirements requirements.txt --json --yes

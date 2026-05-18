@@ -12,7 +12,6 @@ from jarvislabs.client import (
     Instances,
     Scripts,
     SSHKeys,
-    _apply_storage_constraints,
     _fetch_instances,
     _get_instance,
     _normalize_region_input,
@@ -24,12 +23,11 @@ from jarvislabs.client import (
     _validate_europe,
 )
 from jarvislabs.constants import (
+    CHENNAI_REGION,
     DEFAULT_REGION,
-    EUROPE_MIN_STORAGE_GB,
     EUROPE_REGION,
     INDIA_NOIDA_REGION,
     REGION_URLS,
-    VM_MIN_STORAGE_GB,
 )
 from jarvislabs.exceptions import APIError, NotFoundError, ValidationError
 from jarvislabs.models import SSHKey, StatusResponse
@@ -62,7 +60,7 @@ def _mock_existing_instance():
         is_reserved=True,
         fs_id=None,
         template="pytorch",
-        region="india-01",
+        region="india-noida-01",
         status="Paused",
     )
     # MagicMock.name is a special descriptor — must set via configure_mock
@@ -79,10 +77,16 @@ _DUMMY_KEY = SSHKey(ssh_key="ssh-ed25519 AAA", key_name="test", key_id="k1")
 
 
 class TestAccount:
-    def test_gpu_availability_filters_deprecated_regions_and_caps_eu_listing(self, mock_transport):
+    def test_gpu_availability_keeps_active_regions_and_caps_eu_listing(self, mock_transport):
         mock_transport.request.return_value = {
             "server_meta": [
-                {"gpu_type": "A6000", "region": "india-01", "num_free_devices": 4, "workload_type": "container"},
+                {"gpu_type": "A100", "region": "india-01", "num_free_devices": 8, "workload_type": "container"},
+                {
+                    "gpu_type": "RTX-PRO6000",
+                    "region": CHENNAI_REGION,
+                    "num_free_devices": 4,
+                    "workload_type": "container",
+                },
                 {"gpu_type": "L4", "region": "india-noida-01", "num_free_devices": 8, "workload_type": "container"},
                 {"gpu_type": "H100", "region": "europe-01", "num_free_devices": 2, "workload_type": "vm"},
             ]
@@ -91,10 +95,11 @@ class TestAccount:
         availability = _make_account(mock_transport).gpu_availability()
 
         assert [(gpu.gpu_type, gpu.region) for gpu in availability] == [
+            ("RTX-PRO6000", CHENNAI_REGION),
             ("L4", "india-noida-01"),
             ("H100", "europe-01"),
         ]
-        assert [gpu.num_free_devices for gpu in availability] == [8, 1]
+        assert [gpu.num_free_devices for gpu in availability] == [4, 8, 1]
 
 
 # ── _normalize_success ───────────────────────────────────────────────────────
@@ -139,13 +144,14 @@ def test_normalize_success(data, expected):
     ("region", "expected"),
     [
         (None, None),
-        ("IN1", "india-01"),
+        ("IN1", "india-chennai-01"),
         ("IN2", "india-noida-01"),
         ("EU1", "europe-01"),
-        ("in1", "india-01"),
+        ("in1", "india-chennai-01"),
         ("in2", "india-noida-01"),
         ("eu1", "europe-01"),
         ("Eu1", "europe-01"),
+        ("india-chennai-01", "india-chennai-01"),
         ("india-noida-01", "india-noida-01"),
     ],
 )
@@ -153,7 +159,7 @@ def test_normalize_region_input(region, expected):
     assert _normalize_region_input(region) == expected
 
 
-@pytest.mark.parametrize("region", ["XX9", "moon-01"])
+@pytest.mark.parametrize("region", ["XX9", "moon-01", "india-01"])
 def test_normalize_region_input_rejects_unknown(region):
     with pytest.raises(ValidationError, match="Unknown region"):
         _normalize_region_input(region)
@@ -164,65 +170,22 @@ def test_normalize_region_input_rejects_unknown(region):
 
 class TestValidateEurope:
     def test_valid_h100(self):
-        _validate_europe("H100", 1, 100)
+        _validate_europe("H100", 1)
 
     def test_valid_h200_8gpu(self):
-        _validate_europe("H200", 8, 200)
+        _validate_europe("H200", 8)
 
     def test_invalid_gpu_uses_display_code(self):
         with pytest.raises(ValidationError, match="EU1 supports only"):
-            _validate_europe("RTX5000", 1, 100)
+            _validate_europe("RTX5000", 1)
 
     def test_invalid_count_uses_display_code(self):
         with pytest.raises(ValidationError, match="EU1 supports"):
-            _validate_europe("H100", 2, 100)
+            _validate_europe("H100", 2)
 
     def test_invalid_count_4(self):
         with pytest.raises(ValidationError, match="GPUs per instance"):
-            _validate_europe("H100", 4, 100)
-
-    def test_storage_too_low_uses_display_code(self):
-        with pytest.raises(ValidationError, match="EU1 requires"):
-            _validate_europe("H100", 1, 50)
-
-
-# ── _apply_storage_constraints ───────────────────────────────────────────────
-
-
-class TestApplyStorageConstraints:
-    def test_vm_create_auto_bumps_storage(self):
-        storage = _apply_storage_constraints(
-            template="vm",
-            gpu_type="L4",
-            num_gpus=1,
-            storage=40,
-            region="india-01",
-        )
-        assert storage == VM_MIN_STORAGE_GB
-
-    def test_vm_resume_only_bumps_requested_expansion(self):
-        storage = _apply_storage_constraints(
-            template="vm",
-            gpu_type="A100",
-            num_gpus=1,
-            storage=60,
-            region="india-noida-01",
-            current_storage=40,
-            storage_was_requested=True,
-        )
-        assert storage == VM_MIN_STORAGE_GB
-
-    def test_vm_resume_keeps_legacy_storage_without_resize(self):
-        storage = _apply_storage_constraints(
-            template="vm",
-            gpu_type="A100",
-            num_gpus=1,
-            storage=40,
-            region="india-noida-01",
-            current_storage=40,
-            storage_was_requested=False,
-        )
-        assert storage == 40
+            _validate_europe("H100", 4)
 
 
 # ── _region_url ──────────────────────────────────────────────────────────────
@@ -231,16 +194,20 @@ class TestApplyStorageConstraints:
 @pytest.mark.parametrize(
     ("region", "expected"),
     [
-        ("india-01", REGION_URLS["india-01"]),
+        ("india-chennai-01", REGION_URLS["india-chennai-01"]),
         ("india-noida-01", REGION_URLS["india-noida-01"]),
         ("europe-01", REGION_URLS["europe-01"]),
-        ("unknown-region", REGION_URLS[DEFAULT_REGION]),
         (None, REGION_URLS[DEFAULT_REGION]),
     ],
-    ids=["india", "noida", "europe", "unknown", "none"],
+    ids=["chennai", "noida", "europe", "none"],
 )
 def test_region_url(region, expected):
     assert _region_url(region) == expected
+
+
+def test_region_url_rejects_unknown_region():
+    with pytest.raises(ValidationError, match="Unknown region"):
+        _region_url("unknown-region")
 
 
 # ── _resolve_region ──────────────────────────────────────────────────────────
@@ -258,6 +225,11 @@ class TestResolveRegion:
         """H200 is EU-exclusive — fallback should be EU."""
         mock_transport.request.side_effect = Exception("network error")
         assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1) == EUROPE_REGION
+
+    def test_fallback_rtx_pro6000_goes_to_in1(self, mock_transport):
+        """RTX-PRO6000 is Chennai-exclusive at launch."""
+        mock_transport.request.side_effect = Exception("network error")
+        assert _resolve_region(mock_transport, gpu_type="RTX-PRO6000", num_gpus=1) == CHENNAI_REGION
 
     def test_fallback_rtx5000_goes_to_in2(self, mock_transport):
         """RTX5000 is no longer in the fallback map — defaults to IN2 when server_meta is down."""
@@ -285,8 +257,8 @@ class TestResolveRegion:
         mock_transport.request.side_effect = Exception("network error")
         assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1, template="vm") == EUROPE_REGION
 
-    def test_vm_fallback_rtx5000_clamped_to_in2(self, mock_transport):
-        """RTX5000 maps to IN1, but IN1 is not VM-supported — clamp to IN2."""
+    def test_vm_fallback_rtx5000_goes_to_in2(self, mock_transport):
+        """RTX5000 is not in the fallback map — VM fallback defaults to IN2."""
         mock_transport.request.side_effect = Exception("network error")
         assert _resolve_region(mock_transport, gpu_type="RTX5000", num_gpus=1, template="vm") == INDIA_NOIDA_REGION
 
@@ -299,6 +271,10 @@ class TestResolveRegion:
     def test_empty_candidates_h200(self, mock_transport):
         mock_transport.request.return_value = {"server_meta": []}
         assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1) == EUROPE_REGION
+
+    def test_empty_candidates_rtx_pro6000(self, mock_transport):
+        mock_transport.request.return_value = {"server_meta": []}
+        assert _resolve_region(mock_transport, gpu_type="RTX-PRO6000", num_gpus=1) == CHENNAI_REGION
 
     # ── Priority sorting tests (API works) ──────────────────────────────────
 
@@ -363,6 +339,22 @@ class TestResolveRegion:
         }
         assert _resolve_region(mock_transport, gpu_type="L4", num_gpus=1, is_spot=True) == "europe-01"
 
+    def test_spot_routing_raises_when_only_effective_capacity_exists(self, mock_transport):
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {
+                    "gpu_type": "H100",
+                    "region": "india-noida-01",
+                    "num_free_devices": 0,
+                    "effective_num_free_devices": 7,
+                    "spot_price": 1.19,
+                },
+            ]
+        }
+
+        with pytest.raises(ValidationError, match="No free spot H100 GPUs"):
+            _resolve_region(mock_transport, gpu_type="H100", num_gpus=1, is_spot=True)
+
     def test_single_region_candidate(self, mock_transport):
         """H200 only in EU — returns EU."""
         mock_transport.request.return_value = {
@@ -386,21 +378,21 @@ class TestResolveRegion:
         """A100 in both IN2 and IN1 — should pick IN2."""
         mock_transport.request.return_value = {
             "server_meta": [
-                {"gpu_type": "A100", "region": "india-01", "num_free_devices": 4},
+                {"gpu_type": "A100", "region": "india-chennai-01", "num_free_devices": 4},
                 {"gpu_type": "A100", "region": "india-noida-01", "num_free_devices": 4},
             ]
         }
         assert _resolve_region(mock_transport, gpu_type="A100", num_gpus=1) == "india-noida-01"
 
-    def test_eu_selected_when_other_region_is_deprecated(self, mock_transport):
-        """GPU in both IN1 and EU1 — should pick EU1 because IN1 is deprecated."""
+    def test_in1_preferred_over_eu(self, mock_transport):
+        """GPU in both IN1 and EU1 should pick IN1 after IN2."""
         mock_transport.request.return_value = {
             "server_meta": [
                 {"gpu_type": "A6000", "region": "europe-01", "num_free_devices": 4},
-                {"gpu_type": "A6000", "region": "india-01", "num_free_devices": 4},
+                {"gpu_type": "A6000", "region": "india-chennai-01", "num_free_devices": 4},
             ]
         }
-        assert _resolve_region(mock_transport, gpu_type="A6000", num_gpus=1) == "europe-01"
+        assert _resolve_region(mock_transport, gpu_type="A6000", num_gpus=1) == "india-chennai-01"
 
     def test_unknown_region_sorts_last(self, mock_transport):
         """Unknown region should sort after all known regions."""
@@ -411,6 +403,16 @@ class TestResolveRegion:
             ]
         }
         assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == "india-noida-01"
+
+    def test_unknown_only_region_is_not_routable(self, mock_transport):
+        """Backend rows for regions this CLI cannot route to must not fall through to IN2."""
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {"gpu_type": "A100", "region": "india-01", "num_free_devices": 8},
+            ]
+        }
+        with pytest.raises(ValidationError, match="not available in any supported region"):
+            _resolve_region(mock_transport, gpu_type="A100", num_gpus=1)
 
     def test_gpu_type_none(self, mock_transport):
         mock_transport.request.return_value = {
@@ -425,21 +427,26 @@ class TestResolveRegion:
     def test_vm_filters_out_unsupported_regions(self, mock_transport):
         mock_transport.request.return_value = {
             "server_meta": [
-                {"gpu_type": "L4", "region": "india-01", "num_free_devices": 8},
+                {"gpu_type": "L4", "region": "unknown-region", "num_free_devices": 8},
                 {"gpu_type": "L4", "region": "india-noida-01", "num_free_devices": 2},
             ]
         }
         assert _resolve_region(mock_transport, gpu_type="L4", num_gpus=1, template="vm") == INDIA_NOIDA_REGION
 
-    def test_vm_raises_when_gpu_only_in_unsupported_region(self, mock_transport):
-        """A100 only in IN1 (not VM-supported) — should fail early, not silently fall back."""
+    def test_vm_raises_when_gpu_only_has_container_rows(self, mock_transport):
+        """GPU with only container inventory should fail early, not silently fall back."""
         mock_transport.request.return_value = {
             "server_meta": [
-                {"gpu_type": "A100", "region": "india-01", "num_free_devices": 8},
+                {
+                    "gpu_type": "RTX-PRO6000",
+                    "region": CHENNAI_REGION,
+                    "num_free_devices": 8,
+                    "workload_type": "container",
+                },
             ]
         }
-        with pytest.raises(ValidationError, match="no longer accepts"):
-            _resolve_region(mock_transport, gpu_type="A100", num_gpus=1, template="vm")
+        with pytest.raises(ValidationError, match="VM support is not available"):
+            _resolve_region(mock_transport, gpu_type="RTX-PRO6000", num_gpus=1, template="vm")
 
     # ── workload_type filtering tests ──────────────────────────────────────
 
@@ -477,7 +484,7 @@ class TestResolveRegion:
                 {"gpu_type": "H100", "region": "india-noida-01", "workload_type": "container", "num_free_devices": 8},
             ]
         }
-        with pytest.raises(ValidationError, match="not available for VM"):
+        with pytest.raises(ValidationError, match="VM support is not available"):
             _resolve_region(mock_transport, gpu_type="H100", num_gpus=1, template="vm")
 
     def test_null_workload_type_matches_both(self, mock_transport):
@@ -507,7 +514,7 @@ class TestResolveRegion:
 class TestPollUntilRunning:
     def test_running_immediately(self, mock_transport):
         mock_transport.request.return_value = {"status": "Running", "error": None, "code": None}
-        _poll_until_running(mock_transport, machine_id=1, region="india-01")
+        _poll_until_running(mock_transport, machine_id=1, region="india-noida-01")
         assert mock_transport.request.call_count == 1
 
     def test_status_none_strings_are_coerced(self):
@@ -521,13 +528,13 @@ class TestPollUntilRunning:
             {"status": "Running", "error": None, "code": None},
         ]
         with patch("jarvislabs.client.time.sleep"):
-            _poll_until_running(mock_transport, machine_id=1, region="india-01")
+            _poll_until_running(mock_transport, machine_id=1, region="india-noida-01")
         assert mock_transport.request.call_count == 2
 
     def test_failed_raises(self, mock_transport):
         mock_transport.request.return_value = {"status": "Failed", "error": "out of memory", "code": 500}
         with pytest.raises(APIError, match="creation failed"):
-            _poll_until_running(mock_transport, machine_id=1, region="india-01")
+            _poll_until_running(mock_transport, machine_id=1, region="india-noida-01")
 
     def test_timeout_raises(self, mock_transport):
         mock_transport.request.return_value = {"status": "Creating", "error": None, "code": None}
@@ -536,7 +543,7 @@ class TestPollUntilRunning:
             patch("jarvislabs.client.time.sleep"),
             pytest.raises(APIError, match=r"Timed out.*jl get 1"),
         ):
-            _poll_until_running(mock_transport, machine_id=1, region="india-01")
+            _poll_until_running(mock_transport, machine_id=1, region="india-noida-01")
 
     def test_europe_uses_same_timeout(self, mock_transport):
         mock_transport.request.return_value = {"status": "Creating", "error": None, "code": None}
@@ -554,7 +561,7 @@ class TestPollUntilRunning:
             {"status": "Running", "error": None, "code": None},
         ]
         with patch("jarvislabs.client.time.sleep"):
-            _poll_until_running(mock_transport, machine_id=1, region="india-01")
+            _poll_until_running(mock_transport, machine_id=1, region="india-noida-01")
         assert mock_transport.request.call_count == 3
 
     def test_repeated_transient_errors_raises(self, mock_transport):
@@ -563,12 +570,12 @@ class TestPollUntilRunning:
             patch("jarvislabs.client.time.sleep"),
             pytest.raises(APIError, match="bad gateway"),
         ):
-            _poll_until_running(mock_transport, machine_id=1, region="india-01")
+            _poll_until_running(mock_transport, machine_id=1, region="india-noida-01")
 
     def test_permanent_api_error_raises_immediately(self, mock_transport):
         mock_transport.request.side_effect = APIError(400, "bad request")
         with pytest.raises(APIError, match="bad request"):
-            _poll_until_running(mock_transport, machine_id=1, region="india-01")
+            _poll_until_running(mock_transport, machine_id=1, region="india-noida-01")
         assert mock_transport.request.call_count == 1
 
     def test_notfound_resets_transient_counter(self, mock_transport):
@@ -581,7 +588,7 @@ class TestPollUntilRunning:
             {"status": "Running", "error": None, "code": None},
         ]
         with patch("jarvislabs.client.time.sleep"):
-            _poll_until_running(mock_transport, machine_id=1, region="india-01")
+            _poll_until_running(mock_transport, machine_id=1, region="india-noida-01")
         assert mock_transport.request.call_count == 6
 
 
@@ -711,8 +718,16 @@ class TestFilesystems:
         )
 
     def test_create_with_region(self, mock_transport):
-        with pytest.raises(ValidationError, match="IN1 is no longer accepting new resources"):
-            _make_filesystems(mock_transport).create("data", 120, region="IN1")
+        mock_transport.request.return_value = {"fs_id": 16}
+        fs_id = _make_filesystems(mock_transport).create("data", 120, region="IN1")
+
+        assert fs_id == 16
+        mock_transport.request.assert_called_with(
+            "POST",
+            "filesystem/create",
+            json={"fs_name": "data", "storage": 120, "region": "india-chennai-01"},
+            base_url="https://backendc.jarvislabs.net/",
+        )
 
     def test_create_rejects_eu1(self, mock_transport):
         with pytest.raises(ValidationError, match="Region EU1 is not available"):
@@ -728,7 +743,9 @@ class TestFilesystems:
             _make_filesystems(mock_transport).edit(7, 200)
 
     def test_remove_raises_for_missing_filesystem(self, mock_transport):
-        mock_transport.request.return_value = [{"fs_id": 99, "fs_name": "other", "storage": 50, "region": "india-01"}]
+        mock_transport.request.return_value = [
+            {"fs_id": 99, "fs_name": "other", "storage": 50, "region": "india-chennai-01"}
+        ]
         with pytest.raises(ValidationError, match="not found"):
             _make_filesystems(mock_transport).remove(7)
 
@@ -755,10 +772,9 @@ class TestFilesystems:
             base_url="https://backendn.jarvislabs.net/",
         )
 
-    def test_edit_in1_filesystem_routes_to_in1_backend(self, mock_transport):
-        """Deprecation must not block resizing of an existing IN1 filesystem."""
+    def test_edit_in1_filesystem_routes_to_chennai_backend(self, mock_transport):
         mock_transport.request.side_effect = [
-            [{"fs_id": 7, "fs_name": "data", "storage": 100, "region": "india-01"}],  # list for _fs_region
+            [{"fs_id": 7, "fs_name": "data", "storage": 100, "region": "india-chennai-01"}],  # list for _fs_region
             {"message": "Filesystem updated successfully", "fs_id": 21},  # edit
         ]
         fs_id = _make_filesystems(mock_transport).edit(7, 200)
@@ -768,23 +784,23 @@ class TestFilesystems:
             "POST",
             "filesystem/edit",
             json={"fs_id": 7, "storage": 200},
-            base_url=REGION_URLS["india-01"],
+            base_url=REGION_URLS["india-chennai-01"],
         )
 
     def test_remove_uses_expected_query(self, mock_transport):
         mock_transport.request.side_effect = [
-            [{"fs_id": 9, "fs_name": "data", "storage": 100, "region": "india-01"}],  # list for _fs_region
+            [{"fs_id": 9, "fs_name": "data", "storage": 100, "region": "india-chennai-01"}],  # list for _fs_region
             {"success": True},  # delete
         ]
         ok = _make_filesystems(mock_transport).remove(9)
         assert ok is True
         mock_transport.request.assert_called_with(
-            "POST", "filesystem/delete", params={"fs_id": 9}, base_url="https://backendprod.jarvislabs.net/"
+            "POST", "filesystem/delete", params={"fs_id": 9}, base_url="https://backendc.jarvislabs.net/"
         )
 
     def test_remove_raises_when_backend_reports_failure(self, mock_transport):
         mock_transport.request.side_effect = [
-            [{"fs_id": 9, "fs_name": "data", "storage": 100, "region": "india-01"}],  # list for _fs_region
+            [{"fs_id": 9, "fs_name": "data", "storage": 100, "region": "india-chennai-01"}],  # list for _fs_region
             {"success": False, "error": "busy"},  # delete
         ]
         with pytest.raises(APIError, match="Failed to remove filesystem"):
@@ -904,32 +920,69 @@ class TestCreatePayload:
         assert payload["hdd"] == 100
         assert payload["region"] == "india-noida-01"
 
-    def test_vm_region_must_be_supported(self, mock_transport):
-        with pytest.raises(ValidationError, match="no longer accepting new instances"):
-            _validate_create_region(
-                mock_transport,
-                region="india-01",
-                template="vm",
-                gpu_type="L4",
-                num_gpus=1,
-            )
-
-    def test_explicit_deprecated_region_is_rejected_for_container_create(self, mock_transport):
-        with pytest.raises(ValidationError, match="IN1 is no longer accepting new instances"):
-            _validate_create_region(
-                mock_transport,
-                region="india-01",
-                template="pytorch",
-                gpu_type="RTX5000",
-                num_gpus=1,
-            )
-
-    def test_instances_create_with_in1_region_rejects_end_to_end(self, mock_transport):
-        """Public SDK entry point: Instances.create(region='IN1') must fail client-side."""
-        with pytest.raises(ValidationError, match="IN1 is no longer accepting new instances"):
-            _make_instances(mock_transport).create(gpu_type="RTX5000", region="IN1")
-        # No HTTP request should have fired — we fail before the backend call.
+    def test_old_region_is_unknown(self, mock_transport):
+        with pytest.raises(ValidationError, match="Unknown region"):
+            _make_instances(mock_transport).create(gpu_type="L4", region="india-01")
         mock_transport.request.assert_not_called()
+
+    def test_vm_region_validation_uses_workload_type_for_in1(self, mock_transport):
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {
+                    "gpu_type": "RTX-PRO6000",
+                    "region": CHENNAI_REGION,
+                    "num_free_devices": 6,
+                    "workload_type": "container",
+                },
+            ]
+        }
+
+        with pytest.raises(ValidationError, match="available for containers in IN1"):
+            _validate_create_region(
+                mock_transport,
+                region=CHENNAI_REGION,
+                template="vm",
+                gpu_type="RTX-PRO6000",
+                num_gpus=1,
+            )
+
+    @patch("jarvislabs.client._get_instance")
+    @patch("jarvislabs.client._poll_until_running")
+    def test_instances_create_with_in1_region_routes_to_chennai(self, _poll, mock_get, mock_transport):
+        mock_transport.request.side_effect = [
+            {
+                "server_meta": [
+                    {
+                        "gpu_type": "RTX-PRO6000",
+                        "region": CHENNAI_REGION,
+                        "num_free_devices": 6,
+                        "workload_type": "container",
+                    },
+                ]
+            },
+            {"machine_id": 1},
+        ]
+        mock_get.return_value = MagicMock(machine_id=1)
+
+        _make_instances(mock_transport).create(gpu_type="RTX-PRO6000", region="IN1")
+
+        assert mock_transport.request.call_args.kwargs["json"]["region"] == CHENNAI_REGION
+        assert mock_transport.request.call_args.kwargs["base_url"] == REGION_URLS[CHENNAI_REGION]
+
+    def test_in1_non_pytorch_template_is_rejected(self, mock_transport):
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {
+                    "gpu_type": "RTX-PRO6000",
+                    "region": CHENNAI_REGION,
+                    "num_free_devices": 6,
+                    "workload_type": "container",
+                },
+            ]
+        }
+
+        with pytest.raises(ValidationError, match="Template 'tensorflow' is not yet available in IN1"):
+            _make_instances(mock_transport).create(gpu_type="RTX-PRO6000", region="IN1", template="tensorflow")
 
     @patch("jarvislabs.client._check_gpu_in_region")
     def test_create_region_uses_generic_unavailable_message(self, mock_check, mock_transport):
@@ -990,7 +1043,7 @@ class TestCreatePayload:
     def test_resume_region_unavailable_message_mentions_paused_instances(self, mock_transport):
         mock_transport.request.return_value = {
             "server_meta": [
-                {"gpu_type": "RTX5000", "region": "india-01", "num_free_devices": 8},
+                {"gpu_type": "RTX5000", "region": CHENNAI_REGION, "num_free_devices": 8},
             ]
         }
 
@@ -1003,7 +1056,7 @@ class TestCreatePayload:
             with pytest.raises(ValidationError, match="Paused instances can only resume in their original region"):
                 _make_instances(mock_transport).resume(10, gpu_type="RTX5000")
 
-    @patch("jarvislabs.client._resolve_region", return_value="india-01")
+    @patch("jarvislabs.client._resolve_region", return_value="india-noida-01")
     def test_invalid_fs_id_raises(self, _region, mock_transport):
         mock_transport.request.return_value = [{"fs_id": 7}]
 
@@ -1014,17 +1067,17 @@ class TestCreatePayload:
 
     @patch("jarvislabs.client._get_instance")
     @patch("jarvislabs.client._poll_until_running")
-    def test_europe_auto_bumps_storage(self, _poll, mock_get, mock_transport):
+    def test_europe_keeps_explicit_storage(self, _poll, mock_get, mock_transport):
         mock_transport.request.return_value = {"machine_id": 1}
         mock_get.return_value = MagicMock(machine_id=1)
 
         _make_instances(mock_transport).create(gpu_type="H200", storage=20)
-        assert mock_transport.request.call_args.kwargs["json"]["hdd"] >= EUROPE_MIN_STORAGE_GB
+        assert mock_transport.request.call_args.kwargs["json"]["hdd"] == 20
 
-    @patch("jarvislabs.client._resolve_region", return_value="india-01")
+    @patch("jarvislabs.client._resolve_region", return_value="india-noida-01")
     @patch("jarvislabs.client._get_instance")
     @patch("jarvislabs.client._poll_until_running")
-    def test_vm_create_l4_auto_bumps_storage(self, _poll, mock_get, _region, mock_transport):
+    def test_vm_create_l4_keeps_explicit_storage(self, _poll, mock_get, _region, mock_transport):
         mock_transport.request.side_effect = [
             [_DUMMY_KEY.model_dump()],
             {"machine_id": 1},
@@ -1033,13 +1086,13 @@ class TestCreatePayload:
 
         _make_instances(mock_transport).create(gpu_type="L4", template="vm", storage=40)
         payload = mock_transport.request.call_args.kwargs["json"]
-        assert payload["hdd"] == VM_MIN_STORAGE_GB
+        assert payload["hdd"] == 40
         assert payload["gpu_type"] == "L4"
 
     @patch("jarvislabs.client._resolve_region", return_value="india-noida-01")
     @patch("jarvislabs.client._get_instance")
     @patch("jarvislabs.client._poll_until_running")
-    def test_vm_create_a100_auto_bumps_storage(self, _poll, mock_get, _region, mock_transport):
+    def test_vm_create_a100_keeps_explicit_storage(self, _poll, mock_get, _region, mock_transport):
         mock_transport.request.side_effect = [
             [_DUMMY_KEY.model_dump()],
             {"machine_id": 1},
@@ -1048,7 +1101,7 @@ class TestCreatePayload:
 
         _make_instances(mock_transport).create(gpu_type="A100", template="vm", storage=40)
         payload = mock_transport.request.call_args.kwargs["json"]
-        assert payload["hdd"] == VM_MIN_STORAGE_GB
+        assert payload["hdd"] == 40
         assert payload["gpu_type"] == "A100"
 
 
@@ -1121,7 +1174,7 @@ class TestResumePayload:
     def test_vm_resume_uses_vm_endpoint(self, mock_transport):
         existing = _mock_existing_instance()
         existing.template = "vm"
-        existing.region = "india-01"
+        existing.region = "india-noida-01"
         mock_get = patch("jarvislabs.client._get_instance").start()
         patch("jarvislabs.client._poll_until_running").start()
         mock_get.side_effect = [existing, MagicMock(machine_id=11)]
@@ -1153,14 +1206,14 @@ class TestResumePayload:
     def test_vm_resume_requires_ssh_key(self, mock_transport):
         existing = _mock_existing_instance()
         existing.template = "vm"
-        existing.region = "india-01"
+        existing.region = "india-noida-01"
         mock_get = patch("jarvislabs.client._get_instance").start()
         mock_get.return_value = existing
 
         with pytest.raises(ValidationError, match="SSH key"):
             _make_instances(mock_transport).resume(10)
 
-    def test_vm_resume_a100_resize_is_bumped(self, mock_transport):
+    def test_vm_resume_a100_keeps_explicit_resize_storage(self, mock_transport):
         existing = _mock_existing_instance()
         existing.template = "vm"
         existing.region = "india-noida-01"
@@ -1178,14 +1231,13 @@ class TestResumePayload:
         instances.resume(10, storage=60)
 
         payload = mock_transport.request.call_args.kwargs["json"]
-        assert payload["hdd"] == VM_MIN_STORAGE_GB
+        assert payload["hdd"] == 60
 
-    def test_resume_paused_in1_instance_routes_to_in1_backend(self, mock_transport):
-        """Deprecation must not block resume of an existing paused IN1 instance."""
+    def test_resume_paused_instance_routes_to_original_backend(self, mock_transport):
         instances = self._setup_resume(mock_transport)
         instances.resume(10)
 
-        assert mock_transport.request.call_args.kwargs["base_url"] == REGION_URLS["india-01"]
+        assert mock_transport.request.call_args.kwargs["base_url"] == REGION_URLS["india-noida-01"]
         assert mock_transport.request.call_args.args == ("POST", "templates/pytorch/resume")
 
     def test_cpu_vm_resume_uses_cpu_endpoint(self, mock_transport):
@@ -1213,7 +1265,7 @@ class TestResumePayload:
 
 class TestLifecycleRouting:
     def test_pause_vm_uses_vm_endpoint(self, mock_transport):
-        instance = MagicMock(template="vm", region="india-01")
+        instance = MagicMock(template="vm", region="india-noida-01")
         with patch("jarvislabs.client._get_instance", return_value=instance):
             mock_transport.request.return_value = {"success": True}
             _make_instances(mock_transport).pause(10)
@@ -1222,7 +1274,7 @@ class TestLifecycleRouting:
             "POST",
             "templates/vm/pause",
             params={"machine_id": 10},
-            base_url=REGION_URLS["india-01"],
+            base_url=REGION_URLS["india-noida-01"],
         )
 
     def test_pause_cpu_vm_uses_cpu_endpoint(self, mock_transport):
@@ -1265,7 +1317,7 @@ class TestLifecycleRouting:
         )
 
     def test_destroy_treats_missing_instance_as_success_after_error_payload(self, mock_transport):
-        instance = MagicMock(template="pytorch", region="india-01")
+        instance = MagicMock(template="pytorch", region="india-noida-01")
         with patch("jarvislabs.client._get_instance") as mock_get:
             mock_get.side_effect = [
                 instance,
@@ -1275,8 +1327,20 @@ class TestLifecycleRouting:
 
             assert _make_instances(mock_transport).destroy(10) is True
 
+    def test_destroy_treats_destroying_instance_as_success_after_error_payload(self, mock_transport):
+        instance = MagicMock(template="pytorch", region="india-noida-01")
+        destroying = MagicMock(status="Destroying")
+        with patch("jarvislabs.client._get_instance") as mock_get:
+            mock_get.side_effect = [
+                instance,
+                destroying,
+            ]
+            mock_transport.request.return_value = {"error": "Unknown error"}
+
+            assert _make_instances(mock_transport).destroy(10) is True
+
     def test_destroy_treats_missing_instance_as_success_after_api_error(self, mock_transport):
-        instance = MagicMock(template="pytorch", region="india-01")
+        instance = MagicMock(template="pytorch", region="india-noida-01")
         with patch("jarvislabs.client._get_instance") as mock_get:
             mock_get.side_effect = [
                 instance,
@@ -1287,7 +1351,7 @@ class TestLifecycleRouting:
             assert _make_instances(mock_transport).destroy(10) is True
 
     def test_destroy_raises_when_instance_still_exists_after_error_payload(self, mock_transport):
-        instance = MagicMock(template="pytorch", region="india-01")
+        instance = MagicMock(template="pytorch", region="india-noida-01")
         with (
             patch("jarvislabs.client._get_instance", return_value=instance),
             patch("jarvislabs.client.time.sleep"),
@@ -1335,7 +1399,7 @@ class TestModelSerialization:
 
         gpu = ServerMetaGPU(
             gpu_type="A100",
-            region="india-01",
+            region="india-noida-01",
             num_free_devices=4,
             p_num_free_devices=6,
             spot_price=0.5,

@@ -343,7 +343,7 @@ data = json.loads(os.environ["JL_JSON_PAYLOAD"])
 candidates: dict[str, int] = {}
 for item in data:
     gpu = str(item.get("gpu_type") or "").strip()
-    if not gpu or gpu in {"H100", "H200"} or gpu == exclude:
+    if not gpu or gpu in {"H100", "H200", "RTX-PRO6000"} or gpu == exclude:
         continue
     free_raw = item.get("num_free_devices", 0)
     try:

@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from jarvislabs.cli import render, run, state
 from jarvislabs.cli.app import app
+from jarvislabs.constants import DEFAULT_STORAGE_GB
 
 runner = CliRunner()
 
@@ -42,7 +43,7 @@ def test_run_start_requires_existing_instance_for_now(monkeypatch):
             script=None,
             vm=False,
             template="pytorch",
-            storage=40,
+            storage=DEFAULT_STORAGE_GB,
             name="jl-run",
             num_gpus=1,
             setup=None,
@@ -78,7 +79,7 @@ def test_run_start_prompt_includes_region_when_provided(monkeypatch):
             script=None,
             vm=False,
             template="pytorch",
-            storage=40,
+            storage=DEFAULT_STORAGE_GB,
             name="jl-run",
             num_gpus=1,
             http_ports="",
@@ -92,7 +93,7 @@ def test_run_start_prompt_includes_region_when_provided(monkeypatch):
 
     assert (
         captured["msg"]
-        == "Create 1x L4 instance for jl run (template=pytorch, storage=40GB, name='jl-run', region=IN2)?"
+        == "Create 1x L4 instance for jl run (template=pytorch, storage=100GB, name='jl-run', region=IN2)?"
     )
 
 
@@ -114,7 +115,7 @@ def test_run_start_prompt_includes_http_ports_when_provided(monkeypatch):
             script=None,
             vm=False,
             template="pytorch",
-            storage=40,
+            storage=DEFAULT_STORAGE_GB,
             name="jl-run",
             num_gpus=1,
             http_ports="7860",
@@ -128,7 +129,43 @@ def test_run_start_prompt_includes_http_ports_when_provided(monkeypatch):
 
     assert (
         captured["msg"]
-        == "Create 1x L4 instance for jl run (template=pytorch, storage=40GB, name='jl-run', region=IN1, http_ports='7860')?"
+        == "Create 1x L4 instance for jl run (template=pytorch, storage=100GB, name='jl-run', region=IN1, http_ports='7860')?"
+    )
+
+
+def test_run_start_prompt_normalizes_full_region(monkeypatch):
+    captured: dict[str, str] = {}
+
+    def fake_confirm(msg: str, *, skip: bool = False) -> bool:
+        captured["msg"] = msg
+        return False
+
+    monkeypatch.setattr(run.render, "confirm", fake_confirm)
+
+    with pytest.raises(click.exceptions.Exit):
+        run.run_start(
+            SimpleNamespace(args=["train.py"]),
+            on=None,
+            gpu="RTX-PRO6000",
+            region="india-chennai-01",
+            script=None,
+            vm=False,
+            template="pytorch",
+            storage=DEFAULT_STORAGE_GB,
+            name="jl-run",
+            num_gpus=1,
+            http_ports="",
+            setup=None,
+            requirements=None,
+            pause=False,
+            destroy=False,
+            keep=True,
+            follow=True,
+        )
+
+    assert (
+        captured["msg"]
+        == "Create 1x RTX-PRO6000 instance for jl run (template=pytorch, storage=100GB, name='jl-run', region=IN1)?"
     )
 
 
@@ -203,7 +240,7 @@ def test_run_start_passes_spot_to_client(monkeypatch):
 
 
 def test_region_label_uses_ui_consistent_codes():
-    assert render.region_label("india-01") == "IN1"
+    assert render.region_label("india-chennai-01") == "IN1"
     assert render.region_label("india-noida-01") == "IN2"
     assert render.region_label("europe-01") == "EU1"
     assert render.region_label("future-01") == "future-01"

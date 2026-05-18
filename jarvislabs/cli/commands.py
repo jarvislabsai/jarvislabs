@@ -7,7 +7,9 @@ import typer
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
 from jarvislabs.config import load_config, save_config
-from jarvislabs.constants import EUROPE_GPU_TYPES, EUROPE_REGION
+from jarvislabs.constants import EUROPE_GPU_TYPES, EUROPE_REGION, INDIA_NOIDA_REGION, REGION_DISPLAY_CODES
+
+EUROPE_AVAILABILITY_NOTE = "EU1 H100/H200 launches are currently limited to 1 or 8 GPUs."
 
 
 @app.command(rich_help_panel="Account")
@@ -78,7 +80,7 @@ def gpus(
 
     render.gpu_table(availability, currency)
     if any(gpu.region == EUROPE_REGION and gpu.gpu_type in EUROPE_GPU_TYPES for gpu in availability):
-        render.info("EU1 H100/H200 availability is currently limited to single-GPU launches.")
+        render.info(EUROPE_AVAILABILITY_NOTE)
 
 
 @app.command(rich_help_panel="Resources")
@@ -94,14 +96,14 @@ def resources(
         currency = client.account.currency()
 
     if state.json_output:
-        render.print_json({"gpus": gpus, "cpu_meta": meta.cpu_meta})
+        render.print_json({"gpus": gpus, "cpu_meta": _json_cpu_meta(meta.cpu_meta)})
         return
 
     render.gpu_table(gpus, currency, show_legend=False)
     render.cpu_vm_table(meta.cpu_meta, currency, show_legend=False)
-    render.availability_legend()
+    render.availability_legend(show_spot_note=any(gpu.workload_type in ("container", None) for gpu in gpus))
     if any(gpu.region == EUROPE_REGION and gpu.gpu_type in EUROPE_GPU_TYPES for gpu in gpus):
-        render.info("EU1 H100/H200 availability is currently limited to single-GPU launches.")
+        render.info(EUROPE_AVAILABILITY_NOTE)
 
 
 @app.command(rich_help_panel="Resources")
@@ -119,6 +121,26 @@ def templates(
         return
 
     render.templates_table(tpls)
+
+
+def _json_cpu_meta(cpu_meta: dict) -> dict:
+    """Return CPU metadata with CLI display region codes and no legacy top-level region."""
+    sanitized = dict(cpu_meta)
+    sanitized.pop("region", None)
+    combinations = []
+    for combo in sanitized.get("combinations", []):
+        item = dict(combo)
+        regions = item.get("regions")
+        if isinstance(regions, dict):
+            item["regions"] = {
+                REGION_DISPLAY_CODES[region]: available
+                for region, available in regions.items()
+                if region in REGION_DISPLAY_CODES
+            }
+        combinations.append(item)
+    if combinations:
+        sanitized["combinations"] = combinations
+    return sanitized
 
 
 ssh_key_app = typer.Typer(name="ssh-key", help="Manage SSH keys.")
@@ -289,28 +311,20 @@ def filesystem_list(
         return
 
     render.filesystems_table(filesystems)
-    if any(fs.region == "india-01" for fs in filesystems):
-        render.in1_migration_hint()
 
 
 @filesystem_app.command("create")
 def filesystem_create(
     name: str = typer.Option(..., "--name", "-n", help="Filesystem name."),
     storage: int = typer.Option(..., "--storage", "-s", help="Storage in GB (50-2048)."),
-    region: str | None = typer.Option(
-        None, "--region", help="Region (IN2 only). IN1 no longer accepts new filesystems. Defaults to IN2."
-    ),
+    region: str | None = typer.Option(None, "--region", help="Region (IN1 or IN2). Defaults to IN2."),
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Create a filesystem.
-
-    Note: IN1 is winding down and no longer accepts new filesystems. Existing IN1
-    filesystems can still be listed, resized, and removed. Migration guide:
-    https://docs.jarvislabs.ai/in1-migration
-    """
+    """Create a filesystem."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
-    region_display = f", region={region}" if region else ""
+    output_region = render.region_input_label(region, default=INDIA_NOIDA_REGION)
+    region_display = f", region={output_region}" if region else ""
     if not render.confirm(f"Create filesystem (name={name!r}, storage={storage}GB{region_display})?", skip=state.yes):
         raise typer.Exit()
 
@@ -320,7 +334,7 @@ def filesystem_create(
 
     if state.json_output:
         render.print_json(
-            {"success": True, "fs_id": fs_id, "fs_name": name, "storage": storage, "region": region or "IN2"}
+            {"success": True, "fs_id": fs_id, "fs_name": name, "storage": storage, "region": output_region}
         )
         return
 
@@ -341,7 +355,6 @@ def filesystem_edit(
 
     client = get_client()
     with render.spinner("Updating filesystem..."):
-        target = next((fs for fs in client.filesystems.list() if fs.fs_id == fs_id), None)
         new_fs_id = client.filesystems.edit(fs_id=fs_id, storage=storage)
 
     if state.json_output:
@@ -349,8 +362,6 @@ def filesystem_edit(
         return
 
     render.success(f"Filesystem updated. New filesystem ID: {new_fs_id}.")
-    if target and target.region == "india-01":
-        render.in1_migration_hint()
 
 
 @filesystem_app.command("remove")
