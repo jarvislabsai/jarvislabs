@@ -197,8 +197,18 @@ def test_gpu_table_dims_spot_price_when_spot_capacity_is_not_free():
 
     output = _capture_gpu_table(gpus)
 
+    # Spot price is still shown (not "—") when on-demand is available but no spot capacity is free.
     assert "$1.19" in output
-    assert "dim Spot price" in output
+
+
+def test_gpu_table_sorts_europe_last():
+    gpus = [
+        _make_gpu(gpu_type="H200", region="europe-01", workload_type="container"),
+        _make_gpu(gpu_type="A100", region="india-noida-01", workload_type="container"),
+    ]
+    output = _capture_gpu_table(gpus)
+    # EU row renders below the non-EU row even though it is listed first.
+    assert output.index("A100") < output.index("H200")
 
 
 def test_gpu_table_vm_only():

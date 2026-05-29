@@ -41,7 +41,7 @@ REGION_GPU_FALLBACK: dict[str, str] = {
 # ── Region constraints ────────────────────────────────────────────────────────
 
 EUROPE_GPU_TYPES: frozenset[str] = frozenset({"H100", "H200"})
-EUROPE_GPU_COUNTS: frozenset[int] = frozenset({1, 8})
+EUROPE_GPU_COUNTS: frozenset[int] = frozenset({1})
 VM_SUPPORTED_REGIONS: frozenset[str] = frozenset({CHENNAI_REGION, EUROPE_REGION, INDIA_NOIDA_REGION})
 FILESYSTEM_REGIONS: frozenset[str] = frozenset({CHENNAI_REGION, INDIA_NOIDA_REGION})
 

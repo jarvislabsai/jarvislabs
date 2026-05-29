@@ -824,7 +824,7 @@ def _validate_europe(gpu_type: str, num_gpus: int) -> None:
     if gpu_type not in EUROPE_GPU_TYPES:
         raise ValidationError(f"{label} supports only {sorted(EUROPE_GPU_TYPES)} GPUs, got {gpu_type}")
     if num_gpus not in EUROPE_GPU_COUNTS:
-        raise ValidationError(f"{label} supports {sorted(EUROPE_GPU_COUNTS)} GPUs per instance, got {num_gpus}")
+        raise ValidationError(f"{label} supports only 1 GPU per instance, got {num_gpus}")
 
 
 def _listing_gpu_view(gpu: ServerMetaGPU) -> ServerMetaGPU:
