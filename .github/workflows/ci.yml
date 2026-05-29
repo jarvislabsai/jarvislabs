@@ -1,0 +1,66 @@
+name: CI
+
+# Runs on merges to main and on every pull request. Linux only for now.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to avoid wasted minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Lint + unit tests against the dev environment (uses uv.lock for reproducibility).
+  test:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv (and Python ${{ matrix.python-version }})
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Sync dependencies (locked)
+        run: uv sync --locked
+      - name: Lint and format check (ruff)
+        run: |
+          uv run ruff format --check .
+          uv run ruff check .
+      - name: Run tests
+        run: uv run pytest
+
+  # Fresh install of the built distribution into a clean env, with dependency
+  # resolution straight from PyPI (NO uv.lock). This mirrors what a real user gets
+  # from `pip install jarvislabs` / `uv tool install jarvislabs`, so a missing or
+  # undeclared direct dependency fails here instead of on a customer's machine.
+  fresh-install:
+    name: fresh-install (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Build wheel + sdist
+        run: uv build
+      - name: Install built wheel into a clean env (fresh resolution, no lockfile)
+        run: |
+          uv venv --python ${{ matrix.python-version }} /tmp/jl-env
+          uv pip install --python /tmp/jl-env/bin/python dist/*.whl
+      - name: CLI runs — jl --help
+        run: /tmp/jl-env/bin/jl --help
+      - name: SDK imports — import jarvislabs
+        run: /tmp/jl-env/bin/python -c "import jarvislabs"
