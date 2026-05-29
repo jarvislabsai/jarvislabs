@@ -172,8 +172,8 @@ class TestValidateEurope:
     def test_valid_h100(self):
         _validate_europe("H100", 1)
 
-    def test_valid_h200_8gpu(self):
-        _validate_europe("H200", 8)
+    def test_valid_h200(self):
+        _validate_europe("H200", 1)
 
     def test_invalid_gpu_uses_display_code(self):
         with pytest.raises(ValidationError, match="EU1 supports only"):
@@ -184,8 +184,12 @@ class TestValidateEurope:
             _validate_europe("H100", 2)
 
     def test_invalid_count_4(self):
-        with pytest.raises(ValidationError, match="GPUs per instance"):
+        with pytest.raises(ValidationError, match="per instance"):
             _validate_europe("H100", 4)
+
+    def test_invalid_count_8_now_rejected(self):
+        with pytest.raises(ValidationError, match="supports only 1 GPU per instance, got 8"):
+            _validate_europe("H100", 8)
 
 
 # ── _region_url ──────────────────────────────────────────────────────────────

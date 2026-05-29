@@ -9,7 +9,7 @@ from jarvislabs.cli.app import app, get_client
 from jarvislabs.config import load_config, save_config
 from jarvislabs.constants import EUROPE_GPU_TYPES, EUROPE_REGION, INDIA_NOIDA_REGION, REGION_DISPLAY_CODES
 
-EUROPE_AVAILABILITY_NOTE = "EU1 H100/H200 launches are currently limited to 1 or 8 GPUs."
+EUROPE_AVAILABILITY_NOTE = "EU1 H100/H200 launches are currently limited to 1 GPU."
 
 
 @app.command(rich_help_panel="Account")
@@ -101,7 +101,7 @@ def resources(
 
     render.gpu_table(gpus, currency, show_legend=False)
     render.cpu_vm_table(meta.cpu_meta, currency, show_legend=False)
-    render.availability_legend(show_spot_note=any(gpu.workload_type in ("container", None) for gpu in gpus))
+    render.availability_legend()
     if any(gpu.region == EUROPE_REGION and gpu.gpu_type in EUROPE_GPU_TYPES for gpu in gpus):
         render.info(EUROPE_AVAILABILITY_NOTE)
 

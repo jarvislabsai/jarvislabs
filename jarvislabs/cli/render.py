@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.theme import Theme
 
-from jarvislabs.constants import REGION_CODE_TO_REGION, REGION_DISPLAY_CODES
+from jarvislabs.constants import EUROPE_REGION, REGION_CODE_TO_REGION, REGION_DISPLAY_CODES
 
 TABLE_BOX = box.ROUNDED
 HEADER_STYLE = "bold"
@@ -306,12 +306,15 @@ def gpu_table(gpus: list, currency: str = "USD", *, show_legend: bool = True) ->
     if vm_gpus:
         _gpu_subtable(vm_gpus, sym, title="GPU VMs", show_spot=False)
     if show_legend:
-        availability_legend(show_spot_note=bool(container_gpus))
+        availability_legend()
 
 
 def _gpu_subtable(gpus: list, sym: str, title: str, *, show_spot: bool) -> None:
     available = [g for g in gpus if _on_demand_available(g)]
     unavailable = [g for g in gpus if not _on_demand_available(g)]
+    # EU is being phased out — sink its rows to the bottom of each group (stable otherwise).
+    available.sort(key=lambda g: g.region == EUROPE_REGION)
+    unavailable.sort(key=lambda g: g.region == EUROPE_REGION)
 
     table = _table(title=title)
     table.add_column("", no_wrap=True)
@@ -377,11 +380,9 @@ def display_spot_price(gpu) -> float | None:
     return getattr(gpu, "spot_price", None)
 
 
-def availability_legend(*, show_spot_note: bool = False) -> None:
+def availability_legend() -> None:
     """Print the shared available/unavailable marker legend."""
     stdout_console.print("[green]●[/green] available  [dim]○ unavailable[/dim]")
-    if show_spot_note:
-        stdout_console.print("[dim]dim Spot price = spot price exists, but no spot capacity is free right now[/dim]")
 
 
 def cpu_vm_table(cpu_meta: dict, currency: str = "USD", *, show_legend: bool = True) -> None:
