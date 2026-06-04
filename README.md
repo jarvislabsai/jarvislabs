@@ -120,6 +120,7 @@ jl filesystem create --name "datasets" --storage 200
 jl get <id>                  # Shows Jupyter + exposed port URLs
 ```
 
+Instance commands are also available under `jl instance <verb>` (e.g. `jl instance create`, `jl instance ssh`).
 Every command supports `--help`, `--json` (machine-readable output), and `--yes` (skip confirmations).
 
 ## Python SDK

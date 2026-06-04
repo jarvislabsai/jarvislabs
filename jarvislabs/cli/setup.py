@@ -316,6 +316,8 @@ def _show_getting_started() -> None:
     quick.append("jl run --help", style="bold")
     quick.append("  ", style=_MUTED)
     quick.append("jl ssh-key --help", style="bold")
+    quick.append("  ", style=_MUTED)
+    quick.append("jl instance --help", style="bold")
 
     # ── Wrap everything in one outer panel
     con.print(
