@@ -5,13 +5,13 @@ from __future__ import annotations
 import shlex
 import subprocess
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-import click
 import typer
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
+from jarvislabs.cli.options import option_was_explicit, value_or_default
 from jarvislabs.constants import DEFAULT_INSTANCE_NAME, DEFAULT_NUM_GPUS, DEFAULT_STORAGE_GB, DEFAULT_TEMPLATE
 from jarvislabs.exceptions import SSHError, ValidationError
 from jarvislabs.ssh import (
@@ -27,19 +27,6 @@ if TYPE_CHECKING:
 
 _MACHINE_PANEL = "Machine Management"
 _ACCESS_PANEL = "Remote Access"
-
-
-def option_was_explicit(name: str) -> bool:
-    """Tell validation apart from Typer defaults for options with meaningful defaults."""
-    ctx = click.get_current_context(silent=True)
-    if ctx is None:
-        return False
-    return ctx.get_parameter_source(name) == click.core.ParameterSource.COMMANDLINE
-
-
-def value_or_default(value: Any, default: Any) -> Any:
-    """Use normal Python defaults when tests call Typer commands directly."""
-    return default if isinstance(value, typer.models.OptionInfo) else value
 
 
 def _resolve_ssh(machine_id: int) -> tuple[Instance, list[str]]:

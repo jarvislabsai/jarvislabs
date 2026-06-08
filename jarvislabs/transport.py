@@ -113,6 +113,15 @@ class Transport:
         self._client.close()
 
 
+def _validation_field(loc) -> str | None:
+    """Last loc element that is a non-empty string and not 'body'
+    (skips integer list indices). Returns None if there is no usable field name."""
+    for part in reversed(loc or []):
+        if isinstance(part, str) and part and part != "body":
+            return part
+    return None
+
+
 def _extract_error_message(data: dict | list) -> str:
     """Handle {"message": ...} vs {"detail": ...} vs {"error": ...} response shapes."""
     if not isinstance(data, dict):
@@ -125,12 +134,14 @@ def _extract_error_message(data: dict | list) -> str:
             if not isinstance(item, dict):
                 msgs.append(str(item))
                 continue
-            msg = item.get("msg", "")
-            # Rewrite raw regex validation into user-friendly messages
-            if "does not match regex" in msg:
-                loc = item.get("loc", [])
-                field = loc[-1] if loc else "value"
-                msg = f"Invalid {field}"
-            msgs.append(msg)
+            msg = str(item.get("msg", ""))
+            field = _validation_field(item.get("loc"))
+            is_pattern = item.get("type") == "string_pattern_mismatch" or "does not match regex" in msg
+            if is_pattern and field:
+                msgs.append(f"Invalid {field}")  # hide the raw regex
+            elif field and msg:
+                msgs.append(f"{field}: {msg}")
+            else:
+                msgs.append(msg)
         return "; ".join(msgs)
     return data.get("message") or data.get("error") or detail or "Unknown error"

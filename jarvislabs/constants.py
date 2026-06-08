@@ -62,3 +62,30 @@ DEFAULT_NUM_GPUS = 1
 DEFAULT_STORAGE_GB = 100
 DEFAULT_INSTANCE_NAME = "Name me"
 CHENNAI_ALLOWED_CONTAINER_TEMPLATES: frozenset[str] = frozenset({DEFAULT_TEMPLATE})
+
+# ── Serverless deployments ─────────────────────────────────────────────────────
+
+# Region id -> serverless host URL.
+SERVERLESS_REGION_URLS: dict[str, str] = {
+    INDIA_NOIDA_REGION: "https://serverlessn.jarvislabs.net/",
+    # CHENNAI_REGION: "https://serverlessc.jarvislabs.net/",
+}
+
+# Reads fan out across these; kept in sync with the URL keys.
+SERVERLESS_REGIONS: frozenset[str] = frozenset(SERVERLESS_REGION_URLS)
+
+# Help text bounds; the server enforces the actual range.
+SERVERLESS_STORAGE_MIN_GB = 50
+SERVERLESS_STORAGE_MAX_GB = 1000
+
+DEPLOYMENT_POLL_INTERVAL_S = 3
+DEPLOYMENT_POLL_MAX_TRANSIENT_ERRORS = 5
+
+# Statuses treated as a transient/unreachable region rather than a missing
+# deployment (retryable HTTP statuses plus 0 for connection/timeout).
+DEPLOYMENT_TRANSIENT_STATUS: frozenset[int] = RETRY_STATUS_CODES | frozenset({0})
+
+# Terminal statuses the poller stops on. Any other status means in-progress.
+DEPLOYMENT_TERMINAL_SUCCESS: frozenset[str] = frozenset({"running"})
+DEPLOYMENT_TERMINAL_FAILURE: frozenset[str] = frozenset({"failed", "cleaning"})
+DEPLOYMENT_TERMINAL_OTHER: frozenset[str] = frozenset({"deleting", "deleted"})

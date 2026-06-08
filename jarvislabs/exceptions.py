@@ -25,6 +25,11 @@ class ValidationError(JarvislabsError):
     """Client-side validation failure."""
 
 
+class RegionResolutionError(JarvislabsError):
+    """A deployment id could not be uniquely resolved to one region:
+    a cross-region collision, or zero matches with a region unreachable."""
+
+
 class SSHError(JarvislabsError):
     """Base error for local SSH command parsing/execution failures."""
 

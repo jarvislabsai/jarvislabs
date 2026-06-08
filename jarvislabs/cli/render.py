@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import BaseModel
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from rich.theme import Theme
 
@@ -268,6 +269,162 @@ def filesystems_table(filesystems: list) -> None:
     stdout_console.print(table)
 
 
+# ── Deployments ────────────────────────────────────────────────────────────────
+
+
+def _deployment_status_style(status: str) -> str:
+    """Map a (lowercase) deployment status to a Rich color."""
+    return {
+        "running": "green",
+        "starting": "blue",
+        "filesystem_created": "blue",
+        "downloading_model": "blue",
+        "model_downloaded": "blue",
+        "failed": "red",
+        "cleaning": "red",
+        "deleting": "yellow",
+        "deleted": "dim",
+    }.get(status, "white")
+
+
+def _gpu_label(gpus_to_use: dict | None) -> str:
+    """Render the GPU type from a {'gpus': [type]} payload."""
+    gpus = (gpus_to_use or {}).get("gpus") or []
+    return ", ".join(str(g) for g in gpus) if gpus else "—"
+
+
+def _workers_label(summary) -> str:
+    lo, hi = summary.min_workers, summary.max_workers
+    if lo is None and hi is None:
+        return "—"
+    return f"{lo if lo is not None else '—'}-{hi if hi is not None else '—'}"
+
+
+def _started_label(start_time) -> str:
+    return start_time.strftime("%Y-%m-%d %H:%M") if start_time else "—"
+
+
+def deployments_table(result) -> None:
+    """Render the deployments list, newest first."""
+    for region_error in result.region_errors:
+        warning(f"Could not reach {region_label(region_error.region)}: {region_error.error}")
+
+    if not result.deployments:
+        info("No deployments.")
+        return
+
+    table = _table("Deployments", show_lines=True)
+    for column in ("ID", "Name", "Region", "Status", "Framework", "GPU"):
+        table.add_column(column, no_wrap=True)
+    table.add_column("Workers", justify="right")
+    table.add_column("Concurrent", justify="right")
+    table.add_column("Started", no_wrap=True)
+
+    for dep in result.deployments:
+        style = _deployment_status_style(dep.status)
+        table.add_row(
+            escape(dep.deployment_id),
+            escape(dep.name or "—"),
+            region_label(dep.region),
+            f"[{style}]{escape(dep.status)}[/{style}]",
+            escape(dep.framework or "—"),
+            escape(_gpu_label(dep.gpus_to_use)),
+            _workers_label(dep),
+            str(dep.concurrent_requests) if dep.concurrent_requests is not None else "—",
+            _started_label(dep.start_time),
+        )
+
+    stdout_console.print(table)
+
+
+def deployment_detail(dep, *, base_url: str | None = None) -> None:
+    """Full detail view including worker info (folds the would-be `health` command)."""
+    table = Table(show_header=False, box=None, padding=(0, 2), border_style=BORDER_STYLE)
+    table.add_column("Field", style="dim")
+    table.add_column("Value", overflow="fold")
+
+    style = _deployment_status_style(dep.status)
+    rows = [
+        ("ID", f"[cyan]{escape(dep.deployment_id)}[/cyan]"),
+        ("Name", f"[bold]{escape(dep.name or '—')}[/bold]"),
+        ("Status", f"[{style}]{escape(dep.status)}[/{style}]"),
+        ("Region", region_label(dep.region)),
+        ("Framework", escape(dep.framework or "—")),
+        ("GPU", f"{escape(_gpu_label(dep.gpus_to_use))} ({dep.gpus_per_worker or '—'}/worker)"),
+        ("Workers", f"{_workers_label(dep)} (min-max)"),
+        ("Concurrent", str(dep.concurrent_requests) if dep.concurrent_requests is not None else "—"),
+        ("Idle timeout", f"{dep.idle_timeout}s" if dep.idle_timeout is not None else "—"),
+        ("Wait time", f"{dep.wait_time}s" if dep.wait_time is not None else "—"),
+        ("Storage", f"{dep.storage}GB" if dep.storage is not None else "—"),
+        ("Model", escape(dep.model or "—")),
+    ]
+
+    other_args = {k: v for k, v in (dep.args or {}).items() if k != "model"}
+    if other_args:
+        rows.append(("Args", _kv_label(other_args)))
+
+    if dep.env:
+        rows.append(("Env", _kv_label(dep.env)))
+
+    rows.append(("Queue depth", str(dep.queue_depth) if dep.queue_depth is not None else "—"))
+    rows.append(("Workers (live)", _workers_summary(dep.workers)))
+
+    rows.extend(_worker_rows(dep.workers))
+
+    rows.append(("Created", _started_label(dep.created_at)))
+    rows.append(("Updated", _started_label(dep.updated_at)))
+    if dep.error_message:
+        rows.append(("Error", f"[red]{escape(dep.error_message)}[/red]"))
+    if base_url:
+        rows.append(("Base URL", _link_value(base_url)))
+
+    for field, value in rows:
+        table.add_row(field, value)
+    stdout_console.print(table)
+
+
+def _kv_label(data: dict) -> str:
+    return ", ".join(f"{escape(str(key))}={escape(str(value))}" for key, value in data.items())
+
+
+def _workers_summary(workers) -> str:
+    return f"{workers.total} total · {workers.healthy} healthy · {workers.provisioning} provisioning"
+
+
+def _worker_rows(workers) -> list[tuple[str, str]]:
+    return [
+        (f"  worker {i}", f"{escape(str(w.status))} (last used: {escape(str(w.last_used or '—'))})")
+        for i, w in enumerate(workers.list, start=1)
+    ]
+
+
+def deployment_status_line(status) -> None:
+    """One-line status: `IN2 · <id> · running` (status colored)."""
+    style = _deployment_status_style(status.status)
+    region = region_label(status.region)
+    stdout_console.print(f"{region} · {escape(status.deployment_id)} · [{style}]{escape(status.status)}[/{style}]")
+
+
+def deployment_running_handoff(base_url: str, model: str | None) -> None:
+    """Print the base URL, a paste-ready OpenAI snippet, and a first-request note.
+    Printed markup-safe so brackets/braces are not mangled."""
+    stdout_console.print(f"Base URL: {base_url}", markup=False, soft_wrap=True)
+    snippet = (
+        "from openai import OpenAI\n"
+        f'client = OpenAI(base_url="{base_url}/v1", api_key="<YOUR_JL_API_KEY>")\n'
+        "resp = client.chat.completions.create(\n"
+        f'    model="{model or "<model>"}",\n'
+        '    messages=[{"role": "user", "content": "Hello"}],\n'
+        ")\n"
+        "print(resp.choices[0].message.content)"
+    )
+    stdout_console.print(snippet, markup=False, soft_wrap=True)
+    stdout_console.print(
+        "Note: the first request may be slow while a worker starts up.",
+        markup=False,
+    )
+
+
 def resource_label(inst) -> str:
     """Return the compact resource text shown in list/detail views."""
     if is_cpu_vm(inst):
@@ -480,6 +637,11 @@ def confirm(msg: str, *, skip: bool = False) -> bool:
     """Ask for confirmation. Returns True if confirmed or skip=True (--yes flag)."""
     if skip:
         return True
+    from jarvislabs.cli import state
+
+    if state.json_output:
+        # Never prompt in machine mode — commands enforce --yes explicitly.
+        return False
     try:
         response = console.input(f"[yellow]?[/yellow] {msg} [dim]\\[y/N][/dim] ")
         return response.strip().lower() in ("y", "yes")

@@ -19,7 +19,8 @@ from typer.core import TyperGroup
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
-from jarvislabs.cli.instance import _default_upload_dest, _remote_home, value_or_default
+from jarvislabs.cli.instance import _default_upload_dest, _remote_home
+from jarvislabs.cli.options import value_or_default
 from jarvislabs.constants import DEFAULT_NUM_GPUS, DEFAULT_STORAGE_GB, DEFAULT_TEMPLATE
 from jarvislabs.exceptions import JarvislabsError, SSHError
 from jarvislabs.ssh import build_rsync_upload_command, build_scp_command, harden_ssh_parts, split_ssh_command

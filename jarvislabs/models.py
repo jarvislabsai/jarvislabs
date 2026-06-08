@@ -6,11 +6,14 @@ for outbound data. Validation lives as simple if-checks in the client layer.
 
 from __future__ import annotations
 
+import builtins
 import re
+from datetime import datetime
 from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_serializer, field_validator
 
+from jarvislabs import serverless_regions
 from jarvislabs.constants import REGION_DISPLAY_CODES
 
 # ── Account ──────────────────────────────────────────────────────────────────
@@ -215,3 +218,105 @@ class StatusResponse(BaseModel):
                 return None
             return raw
         return v
+
+
+# ── Deployments ──────────────────────────────────────────────────────────────
+
+
+class WorkerInfo(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    status: str
+    last_used: str | None = None
+
+
+class Workers(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    total: int = 0
+    healthy: int = 0
+    provisioning: int = 0
+    # Named `list` to match the API; use builtins.list for the annotation.
+    list: builtins.list[WorkerInfo] = Field(default_factory=list)
+
+
+class Deployment(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    deployment_id: str
+    name: str | None = None
+    status: str
+    error_message: str | None = None
+    region: str | None = None
+    framework: str | None = None
+    gpus_to_use: dict | None = None
+    gpus_per_worker: int | None = None
+    min_workers: int | None = None
+    max_workers: int | None = None
+    concurrent_requests: int | None = None
+    idle_timeout: int | None = None
+    wait_time: int | None = None
+    storage: int | None = None
+    args: dict | None = None
+    env: dict | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    workers: Workers = Field(default_factory=Workers)
+    queue_depth: int | None = None
+
+    @property
+    def model(self) -> str | None:
+        return (self.args or {}).get("model")
+
+    @field_serializer("region")
+    def _display_region(self, v: str | None) -> str | None:
+        return serverless_regions.region_display(v)
+
+
+class DeploymentSummary(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    deployment_id: str
+    name: str | None = None
+    status: str
+    region: str | None = None
+    start_time: datetime | None = None
+    framework: str | None = None
+    min_workers: int | None = None
+    max_workers: int | None = None
+    gpus_to_use: dict | None = None
+    concurrent_requests: int | None = None
+    gpus_per_worker: int | None = None
+    error_message: str | None = None
+
+    @field_serializer("region")
+    def _display_region(self, v: str | None) -> str | None:
+        return serverless_regions.region_display(v)
+
+
+class DeploymentStatus(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    deployment_id: str
+    region: str | None = None
+    status: str
+
+    @field_serializer("region")
+    def _display_region(self, v: str | None) -> str | None:
+        return serverless_regions.region_display(v)
+
+
+class RegionError(BaseModel):
+    region: str
+    error: str
+
+    @field_serializer("region")
+    def _display_region(self, v: str | None) -> str | None:
+        return serverless_regions.region_display(v)
+
+
+class DeploymentListResult(BaseModel):
+    deployments: list[DeploymentSummary] = Field(default_factory=list)
+    region_errors: list[RegionError] = Field(default_factory=list)
