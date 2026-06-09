@@ -96,10 +96,20 @@ def test_create_thin_cli_passes_arbitrary_gpu_through(mock_transport):
     assert mock_transport.request.call_args.kwargs["json"]["gpus_to_use"] == {"gpus": ["FOO"]}
 
 
-def test_create_rejects_in1_region(mock_transport):
-    with pytest.raises(ValidationError):
-        _deps(mock_transport).create(**_create_kwargs(region="IN1"))
-    mock_transport.request.assert_not_called()
+def test_create_accepts_in1_region(mock_transport):
+    # Serverless is now live in Chennai (IN1) — create routes there instead of rejecting.
+    mock_transport.request.return_value = {"deployment_id": "dep1"}
+    deps = _deps(mock_transport)
+    assert deps.create(**_create_kwargs(region="IN1")) == "dep1"
+    assert deps._region_cache["dep1"] == CHENNAI_REGION
+
+
+def test_wait_until_running_times_out_on_unknown_status(mock_transport):
+    # An unrecognized non-terminal status must not poll forever — the wall-clock
+    # backstop raises with a clear message instead of hanging.
+    mock_transport.request.return_value = {"status": "some_new_status"}
+    with pytest.raises(JarvislabsError, match="did not reach a terminal state"):
+        _deps(mock_transport).wait_until_running("dep1", region="IN2", timeout=0)
 
 
 def test_create_rejects_eu_region(mock_transport):

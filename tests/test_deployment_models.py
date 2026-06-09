@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
+import pytest
+from pydantic import ValidationError
+
 from jarvislabs.constants import INDIA_NOIDA_REGION
-from jarvislabs.models import Deployment, DeploymentSummary
+from jarvislabs.models import Deployment, DeploymentSummary, RegionError, ServerMetaGPU
 
 GET_PAYLOAD = {
     "deployment_id": "dep-abc",
@@ -93,3 +96,17 @@ def test_start_time_parses_naive_and_tz_aware():
     aware = Deployment(deployment_id="d", status="running", start_time="2026-06-08T08:38:45+00:00")
     assert isinstance(aware.start_time, datetime)
     assert aware.start_time.tzinfo is not None
+
+
+def test_required_region_fields_still_reject_none():
+    # ServerMetaGPU.region and RegionError.region are required (str, not str | None);
+    # the shared RegionCode type must keep rejecting None.
+    with pytest.raises(ValidationError):
+        ServerMetaGPU(gpu_type="L4", region=None)
+    with pytest.raises(ValidationError):
+        RegionError(region=None, error="boom")
+
+
+def test_required_region_fields_serialize_to_display_code():
+    assert ServerMetaGPU(gpu_type="L4", region=INDIA_NOIDA_REGION).model_dump()["region"] == "IN2"
+    assert RegionError(region=INDIA_NOIDA_REGION, error="boom").model_dump()["region"] == "IN2"

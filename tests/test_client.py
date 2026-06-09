@@ -225,15 +225,15 @@ class TestResolveRegion:
         mock_transport.request.side_effect = Exception("network error")
         assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == INDIA_NOIDA_REGION
 
-    def test_fallback_h200_goes_to_eu(self, mock_transport):
-        """H200 is EU-exclusive — fallback should be EU."""
+    def test_fallback_h200_goes_to_in2(self, mock_transport):
+        """No hardcoded GPU→region fallback anymore — server_meta down means IN2 for any GPU."""
         mock_transport.request.side_effect = Exception("network error")
-        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1) == EUROPE_REGION
+        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1) == INDIA_NOIDA_REGION
 
-    def test_fallback_rtx_pro6000_goes_to_in1(self, mock_transport):
-        """RTX-PRO6000 is Chennai-exclusive at launch."""
+    def test_fallback_rtx_pro6000_goes_to_in2(self, mock_transport):
+        """No hardcoded GPU→region fallback anymore — server_meta down means IN2 for any GPU."""
         mock_transport.request.side_effect = Exception("network error")
-        assert _resolve_region(mock_transport, gpu_type="RTX-PRO6000", num_gpus=1) == CHENNAI_REGION
+        assert _resolve_region(mock_transport, gpu_type="RTX-PRO6000", num_gpus=1) == INDIA_NOIDA_REGION
 
     def test_fallback_rtx5000_goes_to_in2(self, mock_transport):
         """RTX5000 is no longer in the fallback map — defaults to IN2 when server_meta is down."""
@@ -256,10 +256,10 @@ class TestResolveRegion:
         mock_transport.request.side_effect = Exception("network error")
         assert _resolve_region(mock_transport, gpu_type="L4", num_gpus=1, template="vm") == INDIA_NOIDA_REGION
 
-    def test_vm_fallback_h200_goes_to_eu(self, mock_transport):
-        """H200 VM fallback → EU (EU is in VM_SUPPORTED_REGIONS)."""
+    def test_vm_fallback_h200_goes_to_in2(self, mock_transport):
+        """VM fallback also defaults to IN2 now that the GPU→region map is gone."""
         mock_transport.request.side_effect = Exception("network error")
-        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1, template="vm") == EUROPE_REGION
+        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1, template="vm") == INDIA_NOIDA_REGION
 
     def test_vm_fallback_rtx5000_goes_to_in2(self, mock_transport):
         """RTX5000 is not in the fallback map — VM fallback defaults to IN2."""
@@ -274,11 +274,11 @@ class TestResolveRegion:
 
     def test_empty_candidates_h200(self, mock_transport):
         mock_transport.request.return_value = {"server_meta": []}
-        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1) == EUROPE_REGION
+        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1) == INDIA_NOIDA_REGION
 
     def test_empty_candidates_rtx_pro6000(self, mock_transport):
         mock_transport.request.return_value = {"server_meta": []}
-        assert _resolve_region(mock_transport, gpu_type="RTX-PRO6000", num_gpus=1) == CHENNAI_REGION
+        assert _resolve_region(mock_transport, gpu_type="RTX-PRO6000", num_gpus=1) == INDIA_NOIDA_REGION
 
     # ── Priority sorting tests (API works) ──────────────────────────────────
 
@@ -733,10 +733,6 @@ class TestFilesystems:
             base_url="https://backendc.jarvislabs.net/",
         )
 
-    def test_create_rejects_eu1(self, mock_transport):
-        with pytest.raises(ValidationError, match="Region EU1 is not available"):
-            _make_filesystems(mock_transport).create("data", 100, region="EU1")
-
     def test_create_rejects_unknown_region(self, mock_transport):
         with pytest.raises(ValidationError, match="Unknown region"):
             _make_filesystems(mock_transport).create("data", 100, region="XX9")
@@ -972,21 +968,6 @@ class TestCreatePayload:
 
         assert mock_transport.request.call_args.kwargs["json"]["region"] == CHENNAI_REGION
         assert mock_transport.request.call_args.kwargs["base_url"] == REGION_URLS[CHENNAI_REGION]
-
-    def test_in1_non_pytorch_template_is_rejected(self, mock_transport):
-        mock_transport.request.return_value = {
-            "server_meta": [
-                {
-                    "gpu_type": "RTX-PRO6000",
-                    "region": CHENNAI_REGION,
-                    "num_free_devices": 6,
-                    "workload_type": "container",
-                },
-            ]
-        }
-
-        with pytest.raises(ValidationError, match="Template 'tensorflow' is not yet available in IN1"):
-            _make_instances(mock_transport).create(gpu_type="RTX-PRO6000", region="IN1", template="tensorflow")
 
     @patch("jarvislabs.client._check_gpu_in_region")
     def test_create_region_uses_generic_unavailable_message(self, mock_check, mock_transport):

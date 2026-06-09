@@ -9,12 +9,17 @@ from __future__ import annotations
 import builtins
 import re
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
 from jarvislabs import serverless_regions
-from jarvislabs.constants import REGION_DISPLAY_CODES
+
+# Region fields serialize their internal id to a display code (IN1/IN2/EU1) in
+# model dumps, while the attribute keeps the raw id. Two variants preserve each
+# field's required/optional contract.
+RegionCode = Annotated[str, PlainSerializer(serverless_regions.region_display)]
+OptionalRegionCode = Annotated[str | None, PlainSerializer(serverless_regions.region_display)]
 
 # ── Account ──────────────────────────────────────────────────────────────────
 
@@ -71,13 +76,7 @@ class Filesystem(BaseModel):
     fs_id: int
     fs_name: str | None = None
     storage: int | None = None
-    region: str | None = None
-
-    @field_serializer("region")
-    def _display_region(self, v: str | None) -> str | None:
-        if v is None:
-            return None
-        return REGION_DISPLAY_CODES.get(v, v)
+    region: OptionalRegionCode = None
 
 
 # ── Templates ─────────────────────────────────────────────────────────────────
@@ -100,7 +99,7 @@ class ServerMetaGPU(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     gpu_type: str
-    region: str
+    region: RegionCode
     num_free_devices: int = 0
     effective_num_free_devices: int | None = None
     price_per_hour: float | None = None
@@ -110,10 +109,6 @@ class ServerMetaGPU(BaseModel):
     cpus_per_gpu: int | None = None
     ram_per_gpu: int | None = None
     workload_type: str | None = None
-
-    @field_serializer("region")
-    def _display_region(self, v: str) -> str:
-        return REGION_DISPLAY_CODES.get(v, v)
 
     @field_validator("num_free_devices", "effective_num_free_devices", mode="before")
     @classmethod
@@ -163,13 +158,7 @@ class Instance(BaseModel):
     disk_type: str | None = None
     public_ip: str | None = None
     http_ports: str | None = None
-    region: str | None = None
-
-    @field_serializer("region")
-    def _display_region(self, v: str | None) -> str | None:
-        if v is None:
-            return None
-        return REGION_DISPLAY_CODES.get(v, v)
+    region: OptionalRegionCode = None
 
     @field_validator("ram", "storage_gb", "cores", mode="before")
     @classmethod
@@ -247,7 +236,7 @@ class Deployment(BaseModel):
     name: str | None = None
     status: str
     error_message: str | None = None
-    region: str | None = None
+    region: OptionalRegionCode = None
     framework: str | None = None
     gpus_to_use: dict | None = None
     gpus_per_worker: int | None = None
@@ -270,10 +259,6 @@ class Deployment(BaseModel):
     def model(self) -> str | None:
         return (self.args or {}).get("model")
 
-    @field_serializer("region")
-    def _display_region(self, v: str | None) -> str | None:
-        return serverless_regions.region_display(v)
-
 
 class DeploymentSummary(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -281,7 +266,7 @@ class DeploymentSummary(BaseModel):
     deployment_id: str
     name: str | None = None
     status: str
-    region: str | None = None
+    region: OptionalRegionCode = None
     start_time: datetime | None = None
     framework: str | None = None
     min_workers: int | None = None
@@ -291,30 +276,18 @@ class DeploymentSummary(BaseModel):
     gpus_per_worker: int | None = None
     error_message: str | None = None
 
-    @field_serializer("region")
-    def _display_region(self, v: str | None) -> str | None:
-        return serverless_regions.region_display(v)
-
 
 class DeploymentStatus(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     deployment_id: str
-    region: str | None = None
+    region: OptionalRegionCode = None
     status: str
-
-    @field_serializer("region")
-    def _display_region(self, v: str | None) -> str | None:
-        return serverless_regions.region_display(v)
 
 
 class RegionError(BaseModel):
-    region: str
+    region: RegionCode
     error: str
-
-    @field_serializer("region")
-    def _display_region(self, v: str | None) -> str | None:
-        return serverless_regions.region_display(v)
 
 
 class DeploymentListResult(BaseModel):

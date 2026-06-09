@@ -10,7 +10,6 @@ import typer
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
 from jarvislabs.cli.options import value_or_default
-from jarvislabs.constants import SERVERLESS_STORAGE_MAX_GB, SERVERLESS_STORAGE_MIN_GB
 
 deploy_app = typer.Typer(name="deploy", help="Create and manage serverless model deployments.")
 app.add_typer(deploy_app, rich_help_panel="Workloads")
@@ -34,7 +33,7 @@ def _parse_kv(pairs: list[str] | None, *, flag: str, redact: bool = False) -> di
 @deploy_app.command("create")
 def deploy_create(
     name: str = typer.Option(..., "--name", help="Deployment name."),
-    region: str = typer.Option(..., "--region", help="Region (v1: IN2 only)."),
+    region: str = typer.Option(..., "--region", help="Region (IN1 or IN2)."),
     framework: str = typer.Option(..., "--framework", help="vllm | sglang | ollama."),
     gpu: str = typer.Option(..., "--gpu", help="GPU type (v1: H100 | L4)."),
     gpus_per_worker: int = typer.Option(..., "--gpus-per-worker", help="GPUs per worker."),
@@ -45,7 +44,7 @@ def deploy_create(
     storage: int = typer.Option(
         ...,
         "--storage",
-        help=f"Deployment filesystem size in GB ({SERVERLESS_STORAGE_MIN_GB}-{SERVERLESS_STORAGE_MAX_GB}).",
+        help="Deployment filesystem size in GB.",
     ),
     model: str = typer.Option(..., "--model", help="Model id (e.g. a Hugging Face repo id)."),
     concurrent: int | None = typer.Option(None, "--concurrent", help="Concurrent requests per worker (default 1)."),

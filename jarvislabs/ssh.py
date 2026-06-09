@@ -10,9 +10,24 @@ from typing import TYPE_CHECKING
 from jarvislabs.exceptions import SSHError, ValidationError
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterator, Mapping, Sequence
 
-_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# ssh flags that consume the following token as their argument.
+ARG_FLAGS = frozenset({"-o", "-i", "-F", "-J", "-l", "-p"})
+
+# Safe defaults for non-interactive SSH, added when not already present.
+# Order matters — it's the order they get appended to the command.
+HARDENING_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("BatchMode", "yes"),
+    ("ConnectTimeout", "15"),
+    ("ServerAliveInterval", "15"),
+    ("ServerAliveCountMax", "3"),
+    ("UserKnownHostsFile", "/dev/null"),
+    ("StrictHostKeyChecking", "no"),
+    ("LogLevel", "ERROR"),
+)
 
 
 @dataclass(frozen=True)
@@ -35,132 +50,93 @@ def split_ssh_command(ssh_command: str) -> list[str]:
     return parts
 
 
-def harden_ssh_parts(
-    parts: list[str],
-    *,
-    batch_mode: bool = True,
-    connect_timeout: int = 15,
-    server_alive_interval: int = 15,
-    server_alive_count_max: int = 3,
-) -> list[str]:
-    """Add safe defaults for non-interactive SSH usage when they are missing."""
-    if not parts or parts[0] != "ssh":
-        raise SSHError("Cannot harden a non-ssh command")
+def _iter_args(parts: list[str]) -> Iterator[tuple[str | None, str | None]]:
+    """Walk an ssh command's arguments once, yielding ``(flag, arg)``.
 
-    saw_batch_mode = False
-    saw_connect_timeout = False
-    saw_server_alive_interval = False
-    saw_server_alive_count_max = False
-    saw_user_known_hosts = False
-    saw_strict_host_key_checking = False
-    saw_log_level = False
-
+    ``arg`` is None for flags that take no value (or a flag missing its value);
+    ``flag`` is None for the positional target host.
+    """
     i = 1
     while i < len(parts):
         token = parts[i]
-        if token == "-o" and i + 1 < len(parts):
-            option = parts[i + 1]
-            if option.startswith("BatchMode="):
-                saw_batch_mode = True
-            elif option.startswith("ConnectTimeout="):
-                saw_connect_timeout = True
-            elif option.startswith("ServerAliveInterval="):
-                saw_server_alive_interval = True
-            elif option.startswith("ServerAliveCountMax="):
-                saw_server_alive_count_max = True
-            elif option.startswith("UserKnownHostsFile="):
-                saw_user_known_hosts = True
-            elif option.startswith("StrictHostKeyChecking="):
-                saw_strict_host_key_checking = True
-            elif option.startswith("LogLevel="):
-                saw_log_level = True
-            i += 2
-            continue
-
-        if token in {"-i", "-F", "-J", "-l", "-p"}:
-            i += 2
-            continue
-
-        if token.startswith("-"):
+        if token in ARG_FLAGS:
+            arg = parts[i + 1] if i + 1 < len(parts) else None
+            yield token, arg
+            i += 2 if arg is not None else 1
+        elif token.startswith("-"):
+            yield token, None
             i += 1
-            continue
+        else:
+            yield None, token
+            i += 1
 
-        break
 
+def parse_ssh_command(ssh_command: str) -> SSHInfo:
+    """Extract user/host/port from a backend-provided SSH command string."""
+    user: str | None = None
+    host: str | None = None
+    port = 22
+
+    for flag, arg in _iter_args(split_ssh_command(ssh_command)):
+        if flag is None:
+            host = arg
+        elif flag == "-l":
+            if arg is None:
+                raise SSHError(f"Missing SSH user in command: {ssh_command}")
+            user = arg
+        elif flag == "-p":
+            if arg is None:
+                raise SSHError(f"Missing port in SSH command: {ssh_command}")
+            try:
+                port = int(arg)
+            except ValueError as exc:
+                raise SSHError(f"Invalid SSH port in command: {ssh_command}") from exc
+        elif flag == "-o" and arg is None:
+            raise SSHError(f"Missing SSH option value in command: {ssh_command}")
+
+    if host is None:
+        raise SSHError(f"Missing target in SSH command: {ssh_command}")
+
+    if "@" in host:
+        user, host = host.split("@", 1)
+    return SSHInfo(user=user or "root", host=host, port=port)
+
+
+def _missing_hardening(parts: list[str]) -> list[str]:
+    """`-o KEY=VALUE` pairs for hardening defaults not already present in the command."""
+    present = {arg.split("=", 1)[0] for flag, arg in _iter_args(parts) if flag == "-o" and arg}
     additions: list[str] = []
-    if batch_mode and not saw_batch_mode:
-        additions.extend(["-o", "BatchMode=yes"])
-    if not saw_connect_timeout:
-        additions.extend(["-o", f"ConnectTimeout={connect_timeout}"])
-    if not saw_server_alive_interval:
-        additions.extend(["-o", f"ServerAliveInterval={server_alive_interval}"])
-    if not saw_server_alive_count_max:
-        additions.extend(["-o", f"ServerAliveCountMax={server_alive_count_max}"])
-    if not saw_user_known_hosts:
-        additions.extend(["-o", "UserKnownHostsFile=/dev/null"])
-    if not saw_strict_host_key_checking:
-        additions.extend(["-o", "StrictHostKeyChecking=no"])
-    if not saw_log_level:
-        additions.extend(["-o", "LogLevel=ERROR"])
+    for key, value in HARDENING_OPTIONS:
+        if key not in present:
+            additions.extend(["-o", f"{key}={value}"])
+    return additions
 
+
+def _passthrough_options(parts: list[str], *, port_flag: str) -> list[str]:
+    """Carry an ssh command's connection options into another tool (scp/rsync),
+    translating the port flag and dropping `-l user` and the target host."""
+    out: list[str] = []
+    for flag, arg in _iter_args(parts):
+        if flag == "-p":
+            out.extend([port_flag, arg])
+        elif flag in {"-o", "-i", "-F", "-J"}:
+            out.extend([flag, arg])
+        elif flag is not None and flag != "-l":
+            out.append(flag)  # argless flag (e.g. -C); -l and the target are dropped
+    return out
+
+
+def harden_ssh_parts(parts: list[str]) -> list[str]:
+    """Add safe non-interactive SSH defaults that aren't already set."""
+    if not parts or parts[0] != "ssh":
+        raise SSHError("Cannot harden a non-ssh command")
+
+    additions = _missing_hardening(parts)
     if not additions:
         return parts
 
     insert_at = len(parts) - 1 if len(parts) > 1 else 1
     return [*parts[:insert_at], *additions, *parts[insert_at:]]
-
-
-def parse_ssh_command(ssh_command: str) -> SSHInfo:
-    """Extract user/host/port from a backend-provided SSH command string."""
-    parts = split_ssh_command(ssh_command)
-
-    target: str | None = None
-    user: str | None = None
-    port = 22
-
-    i = 1
-    while i < len(parts):
-        token = parts[i]
-
-        if token == "-l":
-            if i + 1 >= len(parts):
-                raise SSHError(f"Missing SSH user in command: {ssh_command}")
-            user = parts[i + 1]
-            i += 2
-            continue
-
-        if token == "-p":
-            if i + 1 >= len(parts):
-                raise SSHError(f"Missing port in SSH command: {ssh_command}")
-            try:
-                port = int(parts[i + 1])
-            except ValueError as exc:
-                raise SSHError(f"Invalid SSH port in command: {ssh_command}") from exc
-            i += 2
-            continue
-
-        # Backend-provided commands currently use `-o <option>` pairs.
-        if token == "-o":
-            if i + 1 >= len(parts):
-                raise SSHError(f"Missing SSH option value in command: {ssh_command}")
-            i += 2
-            continue
-
-        if token.startswith("-"):
-            i += 1
-            continue
-
-        target = token
-        i += 1
-
-    if not target:
-        raise SSHError(f"Missing target in SSH command: {ssh_command}")
-
-    if "@" in target:
-        user, host = target.split("@", 1)
-        return SSHInfo(user=user or "root", host=host, port=port)
-
-    return SSHInfo(user=user or "root", host=target, port=port)
 
 
 def build_scp_command(
@@ -170,96 +146,20 @@ def build_scp_command(
     dest: str,
     upload: bool,
     recursive: bool = False,
-    connect_timeout: int = 15,
 ) -> list[str]:
-    """Build an scp command that reuses the backend-provided SSH options."""
+    """Build an scp command that reuses the SSH command's connection options."""
     parts = split_ssh_command(ssh_command)
     info = parse_ssh_command(ssh_command)
-    target = f"{info.user}@{info.host}"
 
-    command = ["scp"]
-    saw_batch_mode = False
-    saw_connect_timeout = False
-    saw_server_alive_interval = False
-    saw_server_alive_count_max = False
-    saw_user_known_hosts = False
-    saw_strict_host_key_checking = False
-    saw_log_level = False
-
-    i = 1
-    while i < len(parts):
-        token = parts[i]
-
-        if token == "-p":
-            if i + 1 >= len(parts):
-                raise SSHError(f"Missing port in SSH command: {ssh_command}")
-            command.extend(["-P", parts[i + 1]])
-            i += 2
-            continue
-
-        if token == "-o":
-            if i + 1 >= len(parts):
-                raise SSHError(f"Missing SSH option value in command: {ssh_command}")
-            option = parts[i + 1]
-            if option.startswith("BatchMode="):
-                saw_batch_mode = True
-            elif option.startswith("ConnectTimeout="):
-                saw_connect_timeout = True
-            elif option.startswith("ServerAliveInterval="):
-                saw_server_alive_interval = True
-            elif option.startswith("ServerAliveCountMax="):
-                saw_server_alive_count_max = True
-            elif option.startswith("UserKnownHostsFile="):
-                saw_user_known_hosts = True
-            elif option.startswith("StrictHostKeyChecking="):
-                saw_strict_host_key_checking = True
-            elif option.startswith("LogLevel="):
-                saw_log_level = True
-            command.extend(["-o", option])
-            i += 2
-            continue
-
-        if token in {"-i", "-F", "-J"}:
-            if i + 1 >= len(parts):
-                raise SSHError(f"Missing SSH option value in command: {ssh_command}")
-            command.extend([token, parts[i + 1]])
-            i += 2
-            continue
-
-        if token == "-l":
-            i += 2
-            continue
-
-        if token.startswith("-"):
-            command.append(token)
-            i += 1
-            continue
-
-        i += 1
-
-    if not saw_batch_mode:
-        command.extend(["-o", "BatchMode=yes"])
-    if not saw_connect_timeout:
-        command.extend(["-o", f"ConnectTimeout={connect_timeout}"])
-    if not saw_server_alive_interval:
-        command.extend(["-o", "ServerAliveInterval=15"])
-    if not saw_server_alive_count_max:
-        command.extend(["-o", "ServerAliveCountMax=3"])
-    if not saw_user_known_hosts:
-        command.extend(["-o", "UserKnownHostsFile=/dev/null"])
-    if not saw_strict_host_key_checking:
-        command.extend(["-o", "StrictHostKeyChecking=no"])
-    if not saw_log_level:
-        command.extend(["-o", "LogLevel=ERROR"])
-
+    command = ["scp", *_passthrough_options(parts, port_flag="-P"), *_missing_hardening(parts)]
     if recursive:
         command.append("-r")
 
+    target = f"{info.user}@{info.host}"
     if upload:
         command.extend([source, f"{target}:{dest}"])
     else:
         command.extend([f"{target}:{source}", dest])
-
     return command
 
 
@@ -268,101 +168,17 @@ def build_rsync_upload_command(
     *,
     source: str,
     dest: str,
-    delete: bool = True,
-    connect_timeout: int = 15,
 ) -> list[str]:
-    """Build an rsync command for uploading a directory over the backend SSH transport."""
+    """Build an rsync command that tunnels over the SSH command's transport."""
     parts = split_ssh_command(ssh_command)
     info = parse_ssh_command(ssh_command)
 
-    transport = ["ssh"]
-    saw_batch_mode = False
-    saw_connect_timeout = False
-    saw_server_alive_interval = False
-    saw_server_alive_count_max = False
-    saw_user_known_hosts = False
-    saw_strict_host_key_checking = False
-    saw_log_level = False
-
-    i = 1
-    while i < len(parts):
-        token = parts[i]
-
-        if token == "-p":
-            if i + 1 >= len(parts):
-                raise SSHError(f"Missing port in SSH command: {ssh_command}")
-            transport.extend(["-p", parts[i + 1]])
-            i += 2
-            continue
-
-        if token == "-o":
-            if i + 1 >= len(parts):
-                raise SSHError(f"Missing SSH option value in command: {ssh_command}")
-            option = parts[i + 1]
-            if option.startswith("BatchMode="):
-                saw_batch_mode = True
-            elif option.startswith("ConnectTimeout="):
-                saw_connect_timeout = True
-            elif option.startswith("ServerAliveInterval="):
-                saw_server_alive_interval = True
-            elif option.startswith("ServerAliveCountMax="):
-                saw_server_alive_count_max = True
-            elif option.startswith("UserKnownHostsFile="):
-                saw_user_known_hosts = True
-            elif option.startswith("StrictHostKeyChecking="):
-                saw_strict_host_key_checking = True
-            elif option.startswith("LogLevel="):
-                saw_log_level = True
-            transport.extend(["-o", option])
-            i += 2
-            continue
-
-        if token in {"-i", "-F", "-J"}:
-            if i + 1 >= len(parts):
-                raise SSHError(f"Missing SSH option value in command: {ssh_command}")
-            transport.extend([token, parts[i + 1]])
-            i += 2
-            continue
-
-        if token == "-l":
-            i += 2
-            continue
-
-        if token.startswith("-"):
-            transport.append(token)
-
-        i += 1
-
-    if not saw_batch_mode:
-        transport.extend(["-o", "BatchMode=yes"])
-    if not saw_connect_timeout:
-        transport.extend(["-o", f"ConnectTimeout={connect_timeout}"])
-    if not saw_server_alive_interval:
-        transport.extend(["-o", "ServerAliveInterval=15"])
-    if not saw_server_alive_count_max:
-        transport.extend(["-o", "ServerAliveCountMax=3"])
-    if not saw_user_known_hosts:
-        transport.extend(["-o", "UserKnownHostsFile=/dev/null"])
-    if not saw_strict_host_key_checking:
-        transport.extend(["-o", "StrictHostKeyChecking=no"])
-    if not saw_log_level:
-        transport.extend(["-o", "LogLevel=ERROR"])
+    transport = ["ssh", *_passthrough_options(parts, port_flag="-p"), *_missing_hardening(parts)]
 
     source_path = source.rstrip("/") + "/"
     dest_path = dest.rstrip("/") + "/"
-    command = ["rsync", "-az", "-e", shlex.join(transport)]
-    if delete:
-        command.append("--delete")
-    command.extend(
-        [
-            "--exclude",
-            ".venv/",
-            "--exclude",
-            ".git/",
-            "--exclude",
-            "__pycache__/",
-        ]
-    )
+    command = ["rsync", "-az", "-e", shlex.join(transport), "--delete"]
+    command.extend(["--exclude", ".venv/", "--exclude", ".git/", "--exclude", "__pycache__/"])
     command.extend([source_path, f"{info.user}@{info.host}:{dest_path}"])
     return command
 
@@ -384,7 +200,7 @@ def build_remote_shell_command(
 
     if env:
         for key, value in env.items():
-            if not _ENV_KEY_RE.match(key):
+            if not ENV_KEY_RE.match(key):
                 raise ValidationError(f"Invalid environment variable name: {key}")
             segments.append(f"export {key}={shlex.quote(value)}")
 

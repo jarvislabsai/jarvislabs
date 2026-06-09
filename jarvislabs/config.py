@@ -8,17 +8,13 @@ from __future__ import annotations
 
 import contextlib
 import os
-import sys
 import tempfile
 from pathlib import Path
 
-if sys.version_info >= (3, 11):
+try:
     import tomllib
-else:
-    try:
-        import tomllib
-    except ModuleNotFoundError:
-        import tomli as tomllib  # type: ignore[no-redef]
+except ModuleNotFoundError:  # Python < 3.11
+    import tomli as tomllib  # type: ignore[no-redef]
 
 import tomli_w
 from platformdirs import user_config_dir

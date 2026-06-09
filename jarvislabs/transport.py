@@ -17,19 +17,17 @@ from jarvislabs.constants import (
     REGION_URLS,
     RETRY_STATUS_CODES,
 )
-from jarvislabs.exceptions import (
-    APIError,
-    AuthError,
-    InsufficientBalanceError,
-    NotFoundError,
-)
+from jarvislabs.exceptions import APIError, error_from_response
+
+# Only idempotent methods are safe to retry: replaying a POST/PUT/DELETE after a
+# timeout can trigger a duplicate operation on the backend.
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
 class Transport:
     """Thin httpx wrapper with auth, retries, and error mapping."""
 
     def __init__(self, token: str, base_url: str | None = None) -> None:
-        self._token = token
         self._base_url = base_url or REGION_URLS[DEFAULT_REGION]
         self._client = httpx.Client(
             timeout=httpx.Timeout(
@@ -38,9 +36,7 @@ class Transport:
                 write=HTTP_TIMEOUT_READ_S,
                 pool=HTTP_TIMEOUT_READ_S,
             ),
-            headers={
-                "Authorization": f"Bearer {token}",
-            },
+            headers={"Authorization": f"Bearer {token}"},
         )
 
     def request(
@@ -51,97 +47,38 @@ class Transport:
         json: dict | None = None,
         params: dict | None = None,
         files: dict | None = None,
-        data: dict | None = None,
         base_url: str | None = None,
     ) -> dict | list:
-        """Send an HTTP request with retries on transient failures."""
+        """Send an HTTP request, retrying idempotent calls on transient failures."""
         url = (base_url or self._base_url).rstrip("/") + "/" + path.lstrip("/")
-
-        # POST/PUT/DELETE are not idempotent — retrying after timeout can cause
-        # double operations (e.g. pause already started → retry → "Invalid Machine ID")
-        safe_to_retry = method.upper() in {"GET", "HEAD", "OPTIONS"}
+        can_retry = method.upper() in SAFE_METHODS
 
         for attempt in range(MAX_RETRIES + 1):
+            retriable_attempt = can_retry and attempt < MAX_RETRIES
             try:
-                resp = self._client.request(
-                    method,
-                    url,
-                    json=json,
-                    params=params,
-                    files=files,
-                    data=data,
-                )
+                resp = self._client.request(method, url, json=json, params=params, files=files)
             except httpx.HTTPError as exc:
-                if safe_to_retry and attempt < MAX_RETRIES:
+                if retriable_attempt:
                     time.sleep(2**attempt)
                     continue
                 label = "timed out" if isinstance(exc, httpx.TimeoutException) else "Connection failed"
                 raise APIError(0, f"Request {label}: {method} {path}") from exc
 
-            # Retry on transient HTTP errors (429, 5xx) — only for idempotent methods
-            if resp.status_code in RETRY_STATUS_CODES and safe_to_retry and attempt < MAX_RETRIES:
+            if resp.status_code in RETRY_STATUS_CODES and retriable_attempt:
                 time.sleep(2**attempt)  # 1s, 2s, 4s
                 continue
 
-            self._raise_for_status(resp)
+            if not resp.is_success:
+                try:
+                    payload = resp.json()
+                except ValueError:
+                    payload = {}
+                raise error_from_response(resp.status_code, payload)
             return resp.json()
 
-        # Unreachable — loop always returns or raises — but keeps the type checker happy
+        # The loop always returns or raises on the final attempt; this line only
+        # keeps the type checker happy.
         raise AssertionError("unreachable")
-
-    def _raise_for_status(self, resp: httpx.Response) -> None:
-        """Map HTTP status codes to typed SDK exceptions."""
-        if resp.is_success:
-            return
-
-        try:
-            data = resp.json()
-        except Exception:
-            data = {}
-
-        msg = _extract_error_message(data) or f"HTTP {resp.status_code}"
-
-        if resp.status_code == 401:
-            raise AuthError(msg)
-        if resp.status_code == 403 and "balance" in msg.lower():
-            raise InsufficientBalanceError(msg)
-        if resp.status_code == 404:
-            raise NotFoundError(msg)
-        raise APIError(resp.status_code, msg)
 
     def close(self) -> None:
         self._client.close()
-
-
-def _validation_field(loc) -> str | None:
-    """Last loc element that is a non-empty string and not 'body'
-    (skips integer list indices). Returns None if there is no usable field name."""
-    for part in reversed(loc or []):
-        if isinstance(part, str) and part and part != "body":
-            return part
-    return None
-
-
-def _extract_error_message(data: dict | list) -> str:
-    """Handle {"message": ...} vs {"detail": ...} vs {"error": ...} response shapes."""
-    if not isinstance(data, dict):
-        return str(data) or "Unknown error"
-    detail = data.get("detail")
-    if isinstance(detail, list):
-        # Structured validation errors: [{"loc": [...], "msg": "...", "type": "..."}]
-        msgs = []
-        for item in detail:
-            if not isinstance(item, dict):
-                msgs.append(str(item))
-                continue
-            msg = str(item.get("msg", ""))
-            field = _validation_field(item.get("loc"))
-            is_pattern = item.get("type") == "string_pattern_mismatch" or "does not match regex" in msg
-            if is_pattern and field:
-                msgs.append(f"Invalid {field}")  # hide the raw regex
-            elif field and msg:
-                msgs.append(f"{field}: {msg}")
-            else:
-                msgs.append(msg)
-        return "; ".join(msgs)
-    return data.get("message") or data.get("error") or detail or "Unknown error"

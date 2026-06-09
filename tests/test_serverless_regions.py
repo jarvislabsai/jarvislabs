@@ -27,10 +27,9 @@ def test_normalize_accepts_internal_id():
     assert normalize_serverless_region(INDIA_NOIDA_REGION) == INDIA_NOIDA_REGION
 
 
-def test_normalize_rejects_in1():
-    with pytest.raises(ValidationError) as exc:
-        normalize_serverless_region("IN1")
-    assert "IN2" in str(exc.value)
+def test_normalize_accepts_in1():
+    # Serverless is now live in Chennai (IN1), so it normalizes instead of rejecting.
+    assert normalize_serverless_region("IN1") == CHENNAI_REGION
 
 
 def test_normalize_rejects_eu():

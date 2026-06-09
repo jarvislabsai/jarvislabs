@@ -31,19 +31,10 @@ REGION_CODE_TO_REGION: dict[str, str] = {code.lower(): region for region, code i
 # Shared GPUs prefer Noida, then Chennai, then Europe.
 REGION_PRIORITY: list[str] = [INDIA_NOIDA_REGION, CHENNAI_REGION, EUROPE_REGION]
 
-# Hardcoded fallback when server_meta API is unreachable.
-# GPUs not in this map default to INDIA_NOIDA_REGION (first in priority).
-REGION_GPU_FALLBACK: dict[str, str] = {
-    "H200": EUROPE_REGION,  # EU-exclusive
-    "RTX-PRO6000": CHENNAI_REGION,  # Chennai-exclusive at launch
-}
-
 # ── Region constraints ────────────────────────────────────────────────────────
 
 EUROPE_GPU_TYPES: frozenset[str] = frozenset({"H100", "H200"})
 EUROPE_GPU_COUNTS: frozenset[int] = frozenset({1})
-VM_SUPPORTED_REGIONS: frozenset[str] = frozenset({CHENNAI_REGION, EUROPE_REGION, INDIA_NOIDA_REGION})
-FILESYSTEM_REGIONS: frozenset[str] = frozenset({CHENNAI_REGION, INDIA_NOIDA_REGION})
 
 # ── Timeouts & Polling ───────────────────────────────────────────────────────
 
@@ -61,25 +52,23 @@ DEFAULT_TEMPLATE = "pytorch"
 DEFAULT_NUM_GPUS = 1
 DEFAULT_STORAGE_GB = 100
 DEFAULT_INSTANCE_NAME = "Name me"
-CHENNAI_ALLOWED_CONTAINER_TEMPLATES: frozenset[str] = frozenset({DEFAULT_TEMPLATE})
 
 # ── Serverless deployments ─────────────────────────────────────────────────────
 
 # Region id -> serverless host URL.
 SERVERLESS_REGION_URLS: dict[str, str] = {
     INDIA_NOIDA_REGION: "https://serverlessn.jarvislabs.net/",
-    # CHENNAI_REGION: "https://serverlessc.jarvislabs.net/",
+    CHENNAI_REGION: "https://serverlessc.jarvislabs.net/",
 }
 
 # Reads fan out across these; kept in sync with the URL keys.
 SERVERLESS_REGIONS: frozenset[str] = frozenset(SERVERLESS_REGION_URLS)
 
-# Help text bounds; the server enforces the actual range.
-SERVERLESS_STORAGE_MIN_GB = 50
-SERVERLESS_STORAGE_MAX_GB = 1000
-
 DEPLOYMENT_POLL_INTERVAL_S = 3
 DEPLOYMENT_POLL_MAX_TRANSIENT_ERRORS = 5
+# Overall wall-clock cap for wait_until_running (20 min) so an unrecognized
+# terminal status can't poll forever. Generous — model downloads can be slow.
+DEPLOYMENT_WAIT_TIMEOUT_S = 1200
 
 # Statuses treated as a transient/unreachable region rather than a missing
 # deployment (retryable HTTP statuses plus 0 for connection/timeout).

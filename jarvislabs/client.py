@@ -17,8 +17,6 @@ from datetime import datetime
 from jarvislabs import serverless_regions
 from jarvislabs.config import resolve_token
 from jarvislabs.constants import (
-    CHENNAI_ALLOWED_CONTAINER_TEMPLATES,
-    CHENNAI_REGION,
     DEFAULT_INSTANCE_NAME,
     DEFAULT_NUM_GPUS,
     DEFAULT_POLL_TIMEOUT_S,
@@ -31,19 +29,17 @@ from jarvislabs.constants import (
     DEPLOYMENT_TERMINAL_OTHER,
     DEPLOYMENT_TERMINAL_SUCCESS,
     DEPLOYMENT_TRANSIENT_STATUS,
+    DEPLOYMENT_WAIT_TIMEOUT_S,
     EUROPE_GPU_COUNTS,
     EUROPE_GPU_TYPES,
     EUROPE_REGION,
     FETCH_RETRY_INTERVAL_S,
-    FILESYSTEM_REGIONS,
     INDIA_NOIDA_REGION,
     POLL_INTERVAL_S,
     REGION_CODE_TO_REGION,
     REGION_DISPLAY_CODES,
-    REGION_GPU_FALLBACK,
     REGION_PRIORITY,
     REGION_URLS,
-    VM_SUPPORTED_REGIONS,
 )
 from jarvislabs.exceptions import APIError, AuthError, JarvislabsError, NotFoundError, ValidationError
 from jarvislabs.models import (
@@ -218,7 +214,7 @@ class Filesystems:
     def create(self, fs_name: str, storage: int, *, region: str | None = None, deployment_id: str | None = None) -> int:
         _validate_filesystem_name(fs_name)
         _validate_filesystem_storage(storage)
-        region = _normalize_region_input(region, allowed=FILESYSTEM_REGIONS) or INDIA_NOIDA_REGION
+        region = _normalize_region_input(region) or INDIA_NOIDA_REGION
         payload: dict[str, str | int] = {"fs_name": fs_name, "storage": storage, "region": region}
         if deployment_id:
             payload["deployment_id"] = deployment_id
@@ -411,11 +407,18 @@ class Deployments:
 
     # ── helpers ──
 
-    def wait_until_running(self, deployment_id: str, *, region: str | None = None) -> Deployment:
-        """Poll status until a terminal state. No overall timeout."""
+    def wait_until_running(
+        self, deployment_id: str, *, region: str | None = None, timeout: float = DEPLOYMENT_WAIT_TIMEOUT_S
+    ) -> Deployment:
+        """Poll status until a terminal state, or until ``timeout`` seconds elapse.
+
+        The poller recognizes terminal statuses (anything else means in-progress);
+        the timeout is a backstop so an unrecognized terminal status can't poll forever.
+        """
         resolved = self._resolve_for_read(deployment_id, region)
         base_url = serverless_regions.serverless_region_url(resolved)
         transient = 0
+        deadline = time.monotonic() + timeout
         while True:
             try:
                 resp = self._t.request("GET", f"management/{deployment_id}/status", base_url=base_url)
@@ -446,6 +449,11 @@ class Deployments:
             if status in DEPLOYMENT_TERMINAL_OTHER:
                 raise JarvislabsError(f"Deployment {deployment_id} is being deleted (status: {status}).")
 
+            if time.monotonic() >= deadline:
+                raise JarvislabsError(
+                    f"Deployment {deployment_id} did not reach a terminal state within {int(timeout)}s "
+                    f"(last status: {status!r}). Check `jl deploy status {deployment_id}`."
+                )
             time.sleep(DEPLOYMENT_POLL_INTERVAL_S)
 
     def openai_base_url(self, deployment_id: str, *, region: str | None = None) -> str:
@@ -603,7 +611,6 @@ class Instances:
                 num_gpus=num_gpus,
                 is_spot=is_spot,
             )
-        _validate_chennai_template_policy(region=region, template=template)
 
         if region == EUROPE_REGION:
             _validate_europe(gpu_type, num_gpus)
@@ -1024,9 +1031,7 @@ def _resolve_region(
     is_spot: bool = False,
 ) -> str:
     """Auto-route to the best region via server_meta."""
-    fallback = REGION_GPU_FALLBACK.get(gpu_type, INDIA_NOIDA_REGION)
-    if template == "vm" and fallback not in VM_SUPPORTED_REGIONS:
-        fallback = INDIA_NOIDA_REGION
+    fallback = INDIA_NOIDA_REGION
 
     try:
         resp = transport.request("GET", "misc/server_meta")
@@ -1037,7 +1042,7 @@ def _resolve_region(
     all_for_gpu = [s for s in meta.server_meta if s.gpu_type == gpu_type and s.region]
     active_for_gpu = [s for s in all_for_gpu if s.region in REGION_URLS]
     if template == "vm":
-        candidates = [s for s in active_for_gpu if s.region in VM_SUPPORTED_REGIONS and s.workload_type in ("vm", None)]
+        candidates = [s for s in active_for_gpu if s.workload_type in ("vm", None)]
     else:
         candidates = [s for s in active_for_gpu if s.workload_type in ("container", None)]
     if is_spot:
@@ -1151,23 +1156,10 @@ def _validate_create_region(
     num_gpus: int,
     is_spot: bool = False,
 ) -> None:
-    if template == "vm" and region not in VM_SUPPORTED_REGIONS:
-        valid_codes = _format_region_codes(VM_SUPPORTED_REGIONS)
-        raise ValidationError(f"VM instances are only available in: {valid_codes}")
     if is_spot:
         _check_gpu_in_region(transport, gpu_type, num_gpus, region, template=template, require_spot=True)
     else:
         _check_gpu_in_region(transport, gpu_type, num_gpus, region, template=template)
-
-
-def _validate_chennai_template_policy(*, region: str, template: str) -> None:
-    """Keep CLI launches aligned with the current UI surface for Chennai."""
-    if region != CHENNAI_REGION or template == "vm" or template in CHENNAI_ALLOWED_CONTAINER_TEMPLATES:
-        return
-    label = _region_label(CHENNAI_REGION)
-    raise ValidationError(
-        f"Template {template!r} is not yet available in {label}. Use --template pytorch or choose --region IN2."
-    )
 
 
 def is_cpu_vm(instance: Instance) -> bool:
