@@ -13,13 +13,13 @@ from typing import Annotated, Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
-from jarvislabs import regions
+from jarvislabs.regions import region_code
 
 # Region fields serialize their internal id to a display code (IN1/IN2/EU1) in
 # model dumps, while the attribute keeps the raw id. Two variants preserve each
 # field's required/optional contract.
-RegionCode = Annotated[str, PlainSerializer(regions.label)]
-OptionalRegionCode = Annotated[str | None, PlainSerializer(regions.label)]
+RegionCode = Annotated[str, PlainSerializer(region_code)]
+OptionalRegionCode = Annotated[str | None, PlainSerializer(region_code)]
 
 # ── Account ──────────────────────────────────────────────────────────────────
 

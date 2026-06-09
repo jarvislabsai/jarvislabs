@@ -13,9 +13,9 @@ from rich.markup import escape
 from rich.table import Table
 from rich.theme import Theme
 
-from jarvislabs import regions
-from jarvislabs.client import is_cpu_vm
 from jarvislabs.constants import EUROPE_REGION, REGION_CODE_TO_REGION
+from jarvislabs.instances import is_cpu_vm
+from jarvislabs.regions import region_code
 
 TABLE_BOX = box.ROUNDED
 HEADER_STYLE = "bold"
@@ -675,7 +675,7 @@ def region_label(region: str | None) -> str:
     """Convert backend region IDs to short CLI labels like IN2 and EU1."""
     if not region:
         return "—"
-    return regions.label(region)
+    return region_code(region)
 
 
 def region_input_label(region: str | None, *, default: str | None = None) -> str:

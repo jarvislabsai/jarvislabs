@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from jarvislabs import client as client_mod
-from jarvislabs.client import Deployments
+from jarvislabs import deployments as client_mod
 from jarvislabs.constants import CHENNAI_REGION, INDIA_NOIDA_REGION
+from jarvislabs.deployments import Deployments
 from jarvislabs.exceptions import APIError, AuthError, JarvislabsError, NotFoundError, ValidationError
 from jarvislabs.models import Deployment, DeploymentStatus, DeploymentSummary
 
@@ -291,7 +291,7 @@ def test_list_merges_tags_and_sorts_newest_first(monkeypatch, mock_transport):
         chennai = [_summary("new", "2026-06-01T00:00:00", CHENNAI_REGION)]
         return [(INDIA_NOIDA_REGION, noida), (CHENNAI_REGION, chennai)], []
 
-    monkeypatch.setattr(client_mod.regions, "search_serverless_regions", fake_fan_out)
+    monkeypatch.setattr(client_mod, "search_serverless_regions", fake_fan_out)
     result = _deps(mock_transport).list()
     assert [d.deployment_id for d in result.deployments] == ["new", "old"]  # newest first
     assert result.deployments[0].model_dump()["region"] == "IN1"
@@ -302,16 +302,14 @@ def test_list_partial_failure_records_region_error(monkeypatch, mock_transport):
         noida = [_summary("a", "2026-01-01T00:00:00", INDIA_NOIDA_REGION)]
         return [(INDIA_NOIDA_REGION, noida)], [(CHENNAI_REGION, "timeout")]
 
-    monkeypatch.setattr(client_mod.regions, "search_serverless_regions", fake_fan_out)
+    monkeypatch.setattr(client_mod, "search_serverless_regions", fake_fan_out)
     result = _deps(mock_transport).list()
     assert len(result.deployments) == 1
     assert result.region_errors[0].model_dump() == {"region": "IN1", "error": "timeout"}
 
 
 def test_list_all_regions_down_hard_fails(monkeypatch, mock_transport):
-    monkeypatch.setattr(
-        client_mod.regions, "search_serverless_regions", lambda op, **k: ([], [(INDIA_NOIDA_REGION, "down")])
-    )
+    monkeypatch.setattr(client_mod, "search_serverless_regions", lambda op, **k: ([], [(INDIA_NOIDA_REGION, "down")]))
     with pytest.raises(JarvislabsError) as exc:
         _deps(mock_transport).list()
     assert not isinstance(exc.value, APIError)

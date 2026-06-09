@@ -33,17 +33,17 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 
 
-def label(region: str | None) -> str | None:
+def region_code(region: str | None) -> str | None:
     """Internal region id -> user-facing display code (e.g. "india-noida-01" -> "IN2"). None passes through."""
     return REGION_DISPLAY_CODES.get(region, region)
 
 
 def format_codes() -> str:
     """Valid region codes in product order: IN1, IN2, EU1."""
-    return ", ".join(label(region) for region in REGION_DISPLAY_CODES)
+    return ", ".join(region_code(region) for region in REGION_DISPLAY_CODES)
 
 
-def base_url(region: str | None) -> str:
+def region_base_url(region: str | None) -> str:
     """Backend base URL for an internal region id (defaults to the default region)."""
     if region is None:
         return REGION_URLS[DEFAULT_REGION]
@@ -53,7 +53,7 @@ def base_url(region: str | None) -> str:
         raise ValidationError(f"Unknown region {region!r}. Use one of: {format_codes()}") from exc
 
 
-def normalize_input(region: str | None) -> str | None:
+def normalize_region(region: str | None) -> str | None:
     """Validate a user-supplied region (display code or internal id) and return the internal id.
 
     Returns None for a None/blank input. Raises ValidationError for an unknown region.
@@ -86,12 +86,12 @@ def serverless_region_url(region: str) -> str:
     try:
         return SERVERLESS_REGION_URLS[region]
     except KeyError:
-        raise ValidationError(f"No serverless host for region {label(region)}.") from None
+        raise ValidationError(f"No serverless host for region {region_code(region)}.") from None
 
 
 def _serverless_valid_codes(allowed_regions: frozenset[str]) -> str:
     """Serverless region display codes, sorted, for error messages (e.g. 'IN1, IN2')."""
-    return ", ".join(sorted(label(region) for region in allowed_regions))
+    return ", ".join(sorted(region_code(region) for region in allowed_regions))
 
 
 def normalize_serverless_region(region: str) -> str:
@@ -101,7 +101,7 @@ def normalize_serverless_region(region: str) -> str:
     resolved = REGION_CODE_TO_REGION.get(key, key)
     if resolved not in SERVERLESS_REGIONS:
         raise ValidationError(
-            f"Region {label(resolved)} is not a valid serverless region. Use one of: {_serverless_valid_codes(SERVERLESS_REGIONS)}."
+            f"Region {region_code(resolved)} is not a valid serverless region. Use one of: {_serverless_valid_codes(SERVERLESS_REGIONS)}."
         )
     return resolved
 
@@ -174,11 +174,11 @@ def resolve_deployment_region(
         return region, result
 
     if len(found) > 1:
-        a, b = (label(region) for region, _ in found[:2])
+        a, b = (region_code(region) for region, _ in found[:2])
         raise RegionResolutionError(f"Deployment {deployment_id} found in {a} and {b} — pass --region to disambiguate.")
 
     if unreachable:
-        codes = ", ".join(label(region) for region, _ in unreachable)
+        codes = ", ".join(region_code(region) for region, _ in unreachable)
         raise RegionResolutionError(
             f"Deployment {deployment_id} not found; could not check {codes}. Retry, or pass --region."
         )

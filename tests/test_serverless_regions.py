@@ -55,9 +55,9 @@ def test_serverless_region_url_unknown_raises():
 
 
 def test_region_label_maps_and_passes_none():
-    assert regions.label(INDIA_NOIDA_REGION) == "IN2"
-    assert regions.label(CHENNAI_REGION) == "IN1"
-    assert regions.label(None) is None
+    assert regions.region_code(INDIA_NOIDA_REGION) == "IN2"
+    assert regions.region_code(CHENNAI_REGION) == "IN1"
+    assert regions.region_code(None) is None
 
 
 # ── search_serverless_regions ───────────────────────────────────────────────────────────────
