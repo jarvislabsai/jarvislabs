@@ -108,7 +108,7 @@ def test_wait_until_running_times_out_on_unknown_status(mock_transport):
     # An unrecognized non-terminal status must not poll forever — the wall-clock
     # backstop raises with a clear message instead of hanging.
     mock_transport.request.return_value = {"status": "some_new_status"}
-    with pytest.raises(JarvislabsError, match="did not reach a terminal state"):
+    with pytest.raises(JarvislabsError, match="Stopped waiting on deployment"):
         _deps(mock_transport).wait_until_running("dep1", region="IN2", timeout=0)
 
 

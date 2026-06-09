@@ -451,8 +451,9 @@ class Deployments:
 
             if time.monotonic() >= deadline:
                 raise JarvislabsError(
-                    f"Deployment {deployment_id} did not reach a terminal state within {int(timeout)}s "
-                    f"(last status: {status!r}). Check `jl deploy status {deployment_id}`."
+                    f"Stopped waiting on deployment {deployment_id} after {int(timeout)}s "
+                    f"(last status: {status!r}). It may still be coming up — large model "
+                    f"downloads can take a while. Check: jl deploy get {deployment_id}"
                 )
             time.sleep(DEPLOYMENT_POLL_INTERVAL_S)
 
