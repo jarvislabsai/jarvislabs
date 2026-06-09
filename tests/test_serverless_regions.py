@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import pytest
 
+from jarvislabs import regions
 from jarvislabs.constants import CHENNAI_REGION, EUROPE_REGION, INDIA_NOIDA_REGION
 from jarvislabs.exceptions import APIError, AuthError, NotFoundError, RegionResolutionError, ValidationError
-from jarvislabs.serverless_regions import (
-    fan_out_read,
+from jarvislabs.regions import (
     normalize_serverless_region,
-    region_display,
-    resolve_region,
+    resolve_deployment_region,
+    search_serverless_regions,
     serverless_region_url,
 )
 
@@ -42,7 +42,7 @@ def test_normalize_rejects_bad_string():
         normalize_serverless_region("nope")
 
 
-# ── serverless_region_url / region_display ─────────────────────────────────────
+# ── serverless_region_url / region label ───────────────────────────────────────
 
 
 def test_serverless_region_url_known():
@@ -54,17 +54,17 @@ def test_serverless_region_url_unknown_raises():
         serverless_region_url(EUROPE_REGION)
 
 
-def test_region_display_maps_and_passes_none():
-    assert region_display(INDIA_NOIDA_REGION) == "IN2"
-    assert region_display(CHENNAI_REGION) == "IN1"
-    assert region_display(None) is None
+def test_region_label_maps_and_passes_none():
+    assert regions.label(INDIA_NOIDA_REGION) == "IN2"
+    assert regions.label(CHENNAI_REGION) == "IN1"
+    assert regions.label(None) is None
 
 
-# ── fan_out_read ───────────────────────────────────────────────────────────────
+# ── search_serverless_regions ───────────────────────────────────────────────────────────────
 
 
 def test_fan_out_found():
-    found, unreachable = fan_out_read(lambda region: f"r:{region}", regions=TWO_REGIONS)
+    found, unreachable = search_serverless_regions(lambda region: f"r:{region}", allowed_regions=TWO_REGIONS)
     assert sorted(found) == [(CHENNAI_REGION, f"r:{CHENNAI_REGION}"), (INDIA_NOIDA_REGION, f"r:{INDIA_NOIDA_REGION}")]
     assert unreachable == []
 
@@ -75,7 +75,7 @@ def test_fan_out_404_skipped():
             raise NotFoundError("nope")
         return "ok"
 
-    found, unreachable = fan_out_read(op, regions=TWO_REGIONS)
+    found, unreachable = search_serverless_regions(op, allowed_regions=TWO_REGIONS)
     assert found == [(INDIA_NOIDA_REGION, "ok")]
     assert unreachable == []
 
@@ -86,7 +86,7 @@ def test_fan_out_transient_recorded_as_unreachable():
             raise APIError(0, "connection failed")
         return "ok"
 
-    found, unreachable = fan_out_read(op, regions=TWO_REGIONS)
+    found, unreachable = search_serverless_regions(op, allowed_regions=TWO_REGIONS)
     assert found == [(INDIA_NOIDA_REGION, "ok")]
     assert unreachable == [(CHENNAI_REGION, "connection failed")]
 
@@ -96,7 +96,7 @@ def test_fan_out_auth_reraises():
         raise AuthError("bad token")
 
     with pytest.raises(AuthError):
-        fan_out_read(op, regions=TWO_REGIONS)
+        search_serverless_regions(op, allowed_regions=TWO_REGIONS)
 
 
 def test_fan_out_non_transient_apierror_reraises():
@@ -104,10 +104,10 @@ def test_fan_out_non_transient_apierror_reraises():
         raise APIError(400, "bad request")
 
     with pytest.raises(APIError):
-        fan_out_read(op, regions=TWO_REGIONS)
+        search_serverless_regions(op, allowed_regions=TWO_REGIONS)
 
 
-# ── resolve_region ─────────────────────────────────────────────────────────────
+# ── resolve_deployment_region ─────────────────────────────────────────────────────────────
 
 
 def test_resolve_fast_path_hint_hit():
@@ -118,7 +118,9 @@ def test_resolve_fast_path_hint_hit():
         return "ok"
 
     cache: dict[str, str] = {}
-    region, result = resolve_region("dep1", op, hint=INDIA_NOIDA_REGION, cache=cache, regions=TWO_REGIONS)
+    region, result = resolve_deployment_region(
+        "dep1", op, hint=INDIA_NOIDA_REGION, cache=cache, allowed_regions=TWO_REGIONS
+    )
     assert (region, result) == (INDIA_NOIDA_REGION, "ok")
     assert calls == [INDIA_NOIDA_REGION]  # no fan-out
     assert cache == {"dep1": INDIA_NOIDA_REGION}
@@ -132,7 +134,7 @@ def test_resolve_fast_path_cache_hit():
         return "ok"
 
     cache = {"dep1": CHENNAI_REGION}
-    region, _ = resolve_region("dep1", op, cache=cache, regions=TWO_REGIONS)
+    region, _ = resolve_deployment_region("dep1", op, cache=cache, allowed_regions=TWO_REGIONS)
     assert region == CHENNAI_REGION
     assert calls == [CHENNAI_REGION]
 
@@ -145,7 +147,7 @@ def test_resolve_fast_path_404_evicts_and_falls_back():
             raise NotFoundError("gone here")
         return "ok"
 
-    region, result = resolve_region("dep1", op, cache=cache, regions=TWO_REGIONS)
+    region, result = resolve_deployment_region("dep1", op, cache=cache, allowed_regions=TWO_REGIONS)
     assert (region, result) == (INDIA_NOIDA_REGION, "ok")
     assert cache == {"dep1": INDIA_NOIDA_REGION}  # evicted then repopulated by fan-out
 
@@ -157,14 +159,14 @@ def test_resolve_exactly_one():
         raise NotFoundError("nope")
 
     cache: dict[str, str] = {}
-    region, result = resolve_region("dep1", op, cache=cache, regions=TWO_REGIONS)
+    region, result = resolve_deployment_region("dep1", op, cache=cache, allowed_regions=TWO_REGIONS)
     assert (region, result) == (INDIA_NOIDA_REGION, "ok")
     assert cache == {"dep1": INDIA_NOIDA_REGION}
 
 
 def test_resolve_collision_raises():
     with pytest.raises(RegionResolutionError) as exc:
-        resolve_region("dep1", lambda region: "ok", regions=TWO_REGIONS)
+        resolve_deployment_region("dep1", lambda region: "ok", allowed_regions=TWO_REGIONS)
     msg = str(exc.value)
     assert "IN1" in msg and "IN2" in msg
     assert "disambiguate" in msg
@@ -175,7 +177,7 @@ def test_resolve_zero_clean_not_found():
         raise NotFoundError("nope")
 
     with pytest.raises(NotFoundError) as exc:
-        resolve_region("dep1", op, regions=TWO_REGIONS)
+        resolve_deployment_region("dep1", op, allowed_regions=TWO_REGIONS)
     assert "not found in any region" in str(exc.value)
 
 
@@ -186,7 +188,7 @@ def test_resolve_zero_with_unreachable_raises_resolution():
         raise NotFoundError("nope")
 
     with pytest.raises(RegionResolutionError) as exc:
-        resolve_region("dep1", op, regions=TWO_REGIONS)
+        resolve_deployment_region("dep1", op, allowed_regions=TWO_REGIONS)
     msg = str(exc.value)
     assert "could not check" in msg
     assert "IN1" in msg
@@ -200,6 +202,6 @@ def test_resolve_fast_path_transient_falls_back():
             raise APIError(0, "timeout")
         return "ok"
 
-    region, result = resolve_region("dep1", op, cache=cache, regions=TWO_REGIONS)
+    region, result = resolve_deployment_region("dep1", op, cache=cache, allowed_regions=TWO_REGIONS)
     assert (region, result) == (INDIA_NOIDA_REGION, "ok")
     assert cache == {"dep1": INDIA_NOIDA_REGION}

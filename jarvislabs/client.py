@@ -14,7 +14,7 @@ import re
 import time
 from datetime import datetime
 
-from jarvislabs import serverless_regions
+from jarvislabs import regions
 from jarvislabs.config import resolve_token
 from jarvislabs.constants import (
     DEFAULT_INSTANCE_NAME,
@@ -36,8 +36,6 @@ from jarvislabs.constants import (
     FETCH_RETRY_INTERVAL_S,
     INDIA_NOIDA_REGION,
     POLL_INTERVAL_S,
-    REGION_CODE_TO_REGION,
-    REGION_DISPLAY_CODES,
     REGION_PRIORITY,
     REGION_URLS,
 )
@@ -169,7 +167,7 @@ class Scripts:
         resp = self._t.request("GET", "scripts/")
         if not isinstance(resp, dict):
             raise APIError(0, "Failed to fetch scripts: unexpected response")
-        if ("success" in resp or "sucess" in resp) and not _normalize_success(resp):
+        if _declared_failure(resp):
             raise APIError(0, f"Failed to fetch scripts: {_backend_msg(resp)}")
         return [StartupScript(**item) for item in resp.get("script_meta", [])]
 
@@ -214,11 +212,11 @@ class Filesystems:
     def create(self, fs_name: str, storage: int, *, region: str | None = None, deployment_id: str | None = None) -> int:
         _validate_filesystem_name(fs_name)
         _validate_filesystem_storage(storage)
-        region = _normalize_region_input(region) or INDIA_NOIDA_REGION
+        region = regions.normalize_input(region) or INDIA_NOIDA_REGION
         payload: dict[str, str | int] = {"fs_name": fs_name, "storage": storage, "region": region}
         if deployment_id:
             payload["deployment_id"] = deployment_id
-        base_url = _region_url(region)
+        base_url = regions.base_url(region)
         resp = self._t.request("POST", "filesystem/create", json=payload, base_url=base_url)
         fs_id = resp.get("fs_id") if isinstance(resp, dict) else None
         if fs_id is None:
@@ -227,7 +225,7 @@ class Filesystems:
 
     def edit(self, fs_id: int, storage: int) -> int:
         _validate_filesystem_storage(storage)
-        base_url = _region_url(self._fs_region(fs_id))
+        base_url = regions.base_url(self._fs_region(fs_id))
         resp = self._t.request("POST", "filesystem/edit", json={"fs_id": fs_id, "storage": storage}, base_url=base_url)
         edited_fs_id = resp.get("fs_id") if isinstance(resp, dict) else None
         if edited_fs_id is None:
@@ -235,12 +233,10 @@ class Filesystems:
         return int(edited_fs_id)
 
     def remove(self, fs_id: int) -> bool:
-        base_url = _region_url(self._fs_region(fs_id))
+        base_url = regions.base_url(self._fs_region(fs_id))
         resp = self._t.request("POST", "filesystem/delete", params={"fs_id": fs_id}, base_url=base_url)
-        if isinstance(resp, dict) and ("success" in resp or "sucess" in resp):
-            if not _normalize_success(resp):
-                raise APIError(0, f"Failed to remove filesystem: {_backend_msg(resp)}")
-            return True
+        if _declared_failure(resp):
+            raise APIError(0, f"Failed to remove filesystem: {_backend_msg(resp)}")
         return True
 
     def _fs_region(self, fs_id: int) -> str:
@@ -294,7 +290,7 @@ class Deployments:
         ``wait=True`` polls until the deployment is running and returns the final
         ``Deployment``; ``wait=False`` returns the deployment id.
         """
-        internal_region = serverless_regions.normalize_serverless_region(region)
+        internal_region = regions.normalize_serverless_region(region)
         payload: dict = {
             "name": name,
             "region": internal_region,
@@ -313,7 +309,7 @@ class Deployments:
         if concurrent is not None:
             payload["concurrent_requests"] = concurrent
 
-        base_url = serverless_regions.serverless_region_url(internal_region)
+        base_url = regions.serverless_region_url(internal_region)
         resp = self._t.request("POST", "management/create", json=payload, base_url=base_url)
         deployment_id = resp.get("deployment_id") if isinstance(resp, dict) else None
         if not deployment_id:
@@ -328,14 +324,14 @@ class Deployments:
         """Fan out across all serverless regions, merge, and sort newest-first."""
 
         def fetch(region: str) -> list[DeploymentSummary]:
-            base_url = serverless_regions.serverless_region_url(region)
+            base_url = regions.serverless_region_url(region)
             resp = self._t.request("GET", "management/list", base_url=base_url)
             items = resp.get("deployments", []) if isinstance(resp, dict) else []
             return [DeploymentSummary(**{**item, "region": region}) for item in items]
 
-        found, unreachable = serverless_regions.fan_out_read(fetch)
+        found, unreachable = regions.search_serverless_regions(fetch)
         if not found and unreachable:
-            raise JarvislabsError("; ".join(f"{serverless_regions.region_display(r)}: {msg}" for r, msg in unreachable))
+            raise JarvislabsError("; ".join(f"{regions.label(r)}: {msg}" for r, msg in unreachable))
 
         deployments: list[DeploymentSummary] = []
         for region, rows in found:
@@ -350,7 +346,7 @@ class Deployments:
     def get(self, deployment_id: str, *, region: str | None = None) -> Deployment:
         """Full record. Fast-path a region hint/cache; otherwise fan out."""
         hint = self._resolve_hint(region)
-        _, deployment = serverless_regions.resolve_region(
+        _, deployment = regions.resolve_deployment_region(
             deployment_id, lambda r: self._fetch_get(deployment_id, r), hint=hint, cache=self._region_cache
         )
         return deployment
@@ -358,7 +354,7 @@ class Deployments:
     def status(self, deployment_id: str, *, region: str | None = None) -> DeploymentStatus:
         """Lightweight status with the resolved region attached."""
         hint = self._resolve_hint(region)
-        resolved, status = serverless_regions.resolve_region(
+        resolved, status = regions.resolve_deployment_region(
             deployment_id, lambda r: self._fetch_status(deployment_id, r), hint=hint, cache=self._region_cache
         )
         return DeploymentStatus(deployment_id=deployment_id, region=resolved, status=status)
@@ -384,7 +380,7 @@ class Deployments:
             raise ValidationError("Pass at least one of name / idle_timeout / wait_time.")
 
         resolved, deployment = self._resolve_for_mutation(deployment_id, region)
-        base_url = serverless_regions.serverless_region_url(resolved)
+        base_url = regions.serverless_region_url(resolved)
         try:
             self._t.request("PATCH", f"management/{deployment_id}", json=patch, base_url=base_url)
         except APIError as exc:
@@ -399,7 +395,7 @@ class Deployments:
     def delete(self, deployment_id: str, *, region: str | None = None) -> bool:
         """Find the deployment's region, then delete it."""
         resolved, _ = self._resolve_for_mutation(deployment_id, region)
-        base_url = serverless_regions.serverless_region_url(resolved)
+        base_url = regions.serverless_region_url(resolved)
         with contextlib.suppress(NotFoundError):
             self._t.request("DELETE", f"management/{deployment_id}", base_url=base_url)
         self._region_cache.pop(deployment_id, None)
@@ -416,7 +412,7 @@ class Deployments:
         the timeout is a backstop so an unrecognized terminal status can't poll forever.
         """
         resolved = self._resolve_for_read(deployment_id, region)
-        base_url = serverless_regions.serverless_region_url(resolved)
+        base_url = regions.serverless_region_url(resolved)
         transient = 0
         deadline = time.monotonic() + timeout
         while True:
@@ -460,18 +456,18 @@ class Deployments:
     def openai_base_url(self, deployment_id: str, *, region: str | None = None) -> str:
         """OpenAI-compatible base URL: ``<host>/openai/<id>`` (no /v1, no trailing slash)."""
         resolved = self._resolve_for_read(deployment_id, region)
-        host = serverless_regions.serverless_region_url(resolved).rstrip("/")
+        host = regions.serverless_region_url(resolved).rstrip("/")
         return f"{host}/openai/{deployment_id}"
 
     def _resolve_hint(self, region: str | None) -> str | None:
-        return serverless_regions.normalize_serverless_region(region) if region else None
+        return regions.normalize_serverless_region(region) if region else None
 
     def _resolve_for_read(self, deployment_id: str, region: str | None) -> str:
         """Resolve a region for a read-only op: hint fast-path, else the cheap status endpoint."""
         hint = self._resolve_hint(region)
         if hint is not None:
             return hint
-        resolved, _ = serverless_regions.resolve_region(
+        resolved, _ = regions.resolve_deployment_region(
             deployment_id, lambda r: self._fetch_status(deployment_id, r), cache=self._region_cache
         )
         return resolved
@@ -479,17 +475,17 @@ class Deployments:
     def _resolve_for_mutation(self, deployment_id: str, region: str | None) -> tuple[str, Deployment]:
         """Find which region the deployment is in before changing it."""
         hint = self._resolve_hint(region)
-        return serverless_regions.resolve_region(
+        return regions.resolve_deployment_region(
             deployment_id, lambda r: self._fetch_get(deployment_id, r), hint=hint, cache=self._region_cache
         )
 
     def _fetch_get(self, deployment_id: str, region: str) -> Deployment:
-        base_url = serverless_regions.serverless_region_url(region)
+        base_url = regions.serverless_region_url(region)
         resp = self._t.request("GET", f"management/{deployment_id}", base_url=base_url)
         return Deployment(**{**resp, "region": region})
 
     def _fetch_status(self, deployment_id: str, region: str) -> str:
-        base_url = serverless_regions.serverless_region_url(region)
+        base_url = regions.serverless_region_url(region)
         resp = self._t.request("GET", f"management/{deployment_id}/status", base_url=base_url)
         return resp.get("status", "") if isinstance(resp, dict) else ""
 
@@ -537,7 +533,7 @@ class Instances:
             self._t,
             vcpus=vcpus,
             ram=ram,
-            region=_normalize_region_input(region),
+            region=regions.normalize_input(region),
         )
 
     def create(
@@ -600,7 +596,7 @@ class Instances:
         if name:
             _validate_instance_name(name)
 
-        region = _normalize_region_input(region)
+        region = regions.normalize_input(region)
         if region is None:
             region = _resolve_region(self._t, gpu_type=gpu_type, num_gpus=num_gpus, template=template, is_spot=is_spot)
         else:
@@ -639,7 +635,7 @@ class Instances:
             "arguments": arguments,
         }
 
-        base_url = _region_url(region)
+        base_url = regions.base_url(region)
         resp = self._t.request(
             "POST",
             f"templates/{template}/create",
@@ -680,7 +676,7 @@ class Instances:
                 "VM instances require at least one SSH key. Add one with: jl ssh-key add <pubkey-file> --name 'my-key'"
             )
 
-        normalized_region = _normalize_region_input(region)
+        normalized_region = regions.normalize_input(region)
         selected_vcpus, selected_ram, selected_region = choose_cpu_vm_plan(
             self._t,
             vcpus=vcpus,
@@ -703,7 +699,7 @@ class Instances:
             "POST",
             "templates/vm/cpu/create",
             json=payload,
-            base_url=_region_url(selected_region),
+            base_url=regions.base_url(selected_region),
         )
 
         machine_id = resp.get("machine_id")
@@ -715,7 +711,7 @@ class Instances:
 
     def pause(self, machine_id: int) -> bool:
         instance = _get_instance(self._t, machine_id)
-        base_url = _region_url(instance.region or DEFAULT_REGION)
+        base_url = regions.base_url(instance.region or DEFAULT_REGION)
 
         if is_cpu_vm(instance):
             endpoint = "templates/vm/cpu/pause"
@@ -757,7 +753,7 @@ class Instances:
             _validate_instance_name(name)
         # Resume is region-locked — backend always uses instance's original region
         region = instance.region or DEFAULT_REGION
-        base_url = _region_url(region)
+        base_url = regions.base_url(region)
         is_vm = instance.template == "vm"
 
         if is_cpu_vm(instance):
@@ -888,7 +884,7 @@ class Instances:
             "POST",
             "templates/vm/cpu/resume",
             json=payload,
-            base_url=_region_url(region),
+            base_url=regions.base_url(region),
         )
 
         mid = resp.get("machine_id")
@@ -900,7 +896,7 @@ class Instances:
 
     def destroy(self, machine_id: int) -> bool:
         instance = _get_instance(self._t, machine_id)
-        base_url = _region_url(instance.region or DEFAULT_REGION)
+        base_url = regions.base_url(instance.region or DEFAULT_REGION)
 
         if is_cpu_vm(instance):
             endpoint = "templates/vm/cpu/destroy"
@@ -935,7 +931,7 @@ class Instances:
             "machines/machine_name",
             params={"machine_id": machine_id, "machine_name": name},
         )
-        if isinstance(resp, dict) and ("success" in resp or "sucess" in resp) and not _normalize_success(resp):
+        if _declared_failure(resp):
             raise APIError(0, f"Failed to rename instance: {_backend_msg(resp)}")
         return True
 
@@ -1006,8 +1002,8 @@ def _ensure_filesystem_exists(transport: Transport, fs_id: int, region: str | No
                 fs_region = item["region"]
                 if fs_region != region:
                     raise ValidationError(
-                        f"Filesystem {fs_id} is in {_region_label(fs_region)}, "
-                        f"but the instance is in {_region_label(region)}. "
+                        f"Filesystem {fs_id} is in {regions.label(fs_region)}, "
+                        f"but the instance is in {regions.label(region)}. "
                         f"Filesystems can only be attached to instances in the same region."
                     )
             return
@@ -1021,6 +1017,15 @@ def _normalize_success(data: dict) -> bool:
     if isinstance(val, str):
         return val.lower() == "true"
     return bool(val)
+
+
+def _declared_failure(resp: object) -> bool:
+    """True when a response includes a success flag and it is false (an explicit backend failure).
+
+    A missing flag is not a failure — some endpoints simply omit it — so presence is
+    checked before the value.
+    """
+    return isinstance(resp, dict) and ("success" in resp or "sucess" in resp) and not _normalize_success(resp)
 
 
 def _resolve_region(
@@ -1052,12 +1057,12 @@ def _resolve_region(
         # GPU exists but not for this workload type — fail early
         if all_for_gpu:
             if template == "vm" and any(s.workload_type == "container" for s in active_for_gpu):
-                regions = ", ".join(
-                    _region_label(region)
+                container_regions = ", ".join(
+                    regions.label(region)
                     for region in dict.fromkeys(s.region for s in active_for_gpu if s.workload_type == "container")
                 )
                 raise ValidationError(
-                    f"{gpu_type} is available for containers in {regions}, but VM support is not available yet."
+                    f"{gpu_type} is available for containers in {container_regions}, but VM support is not available yet."
                 )
             if not active_for_gpu:
                 raise ValidationError(f"{gpu_type} is not available in any supported region right now.")
@@ -1081,7 +1086,7 @@ def _resolve_region(
 
 
 def _validate_europe(gpu_type: str, num_gpus: int) -> None:
-    label = _region_label(EUROPE_REGION)
+    label = regions.label(EUROPE_REGION)
     if gpu_type not in EUROPE_GPU_TYPES:
         raise ValidationError(f"{label} supports only {sorted(EUROPE_GPU_TYPES)} GPUs, got {gpu_type}")
     if num_gpus not in EUROPE_GPU_COUNTS:
@@ -1126,7 +1131,7 @@ def _check_gpu_in_region(
         in_region = [s for s in in_region if s.workload_type in ("vm", None)]
     else:
         in_region = [s for s in in_region if s.workload_type in ("container", None)]
-    label = _region_label(region)
+    label = regions.label(region)
     if not in_region:
         if template == "vm" and any(
             s.gpu_type == gpu_type and s.region == region and s.workload_type == "container" for s in meta.server_meta
@@ -1165,7 +1170,7 @@ def _validate_create_region(
 
 def is_cpu_vm(instance: Instance) -> bool:
     """Return True when an instance row represents a CPU VM."""
-    return instance.template == "vm" and instance.gpu_type == "CPU"
+    return getattr(instance, "template", None) == "vm" and getattr(instance, "gpu_type", None) == "CPU"
 
 
 def choose_cpu_vm_plan(
@@ -1217,81 +1222,26 @@ def cpu_combo_available(combo: dict) -> bool:
 
 def select_cpu_region(combo: dict, *, region: str | None) -> str:
     """Pick the requested CPU VM region, or the first available preferred region."""
-    regions = combo.get("regions") or {}
+    region_availability = combo.get("regions") or {}
     if region is not None:
-        if regions.get(region) is True:
+        if region_availability.get(region) is True:
             return region
         raise ValidationError(
-            f"CPU VM size {combo.get('vcpus')} vCPU / {combo.get('ram_gb')}GB RAM is not available in {_region_label(region)}."
+            f"CPU VM size {combo.get('vcpus')} vCPU / {combo.get('ram_gb')}GB RAM is not available in {regions.label(region)}."
         )
 
     for candidate in REGION_PRIORITY:
-        if regions.get(candidate) is True:
+        if region_availability.get(candidate) is True:
             return candidate
-    for candidate, available in regions.items():
+    for candidate, available in region_availability.items():
         if available:
             return candidate
     raise ValidationError("No CPU VM plans available right now. Run jl resources to check availability.")
 
 
-def _normalize_region_input(region: str | None, *, allowed: frozenset[str] | None = None) -> str | None:
-    if region is None:
-        return None
-
-    normalized = region.strip()
-    if not normalized:
-        return None
-
-    if normalized in REGION_DISPLAY_CODES:
-        if allowed is not None and normalized not in allowed:
-            valid = _format_region_codes(allowed)
-            raise ValidationError(
-                f"Region {_region_label(normalized)} is not available for this resource. Allowed: {valid}"
-            )
-        return normalized
-
-    upper = normalized.upper()
-    if upper in REGION_DISPLAY_CODES.values():
-        internal = REGION_CODE_TO_REGION[upper.lower()]
-        if allowed is not None and internal not in allowed:
-            valid = _format_region_codes(allowed)
-            raise ValidationError(f"Region {upper} is not available for this resource. Allowed: {valid}")
-        return internal
-
-    if allowed is not None:
-        valid_codes = _format_region_codes(allowed)
-    else:
-        valid_codes = _format_region_codes()
-    raise ValidationError(f"Unknown region {region!r}. Use one of: {valid_codes}")
-
-
-def _region_label(region: str) -> str:
-    """Convert internal region ID to user-facing display code."""
-    return REGION_DISPLAY_CODES.get(region, region)
-
-
-def _format_region_codes(regions: frozenset[str] | None = None) -> str:
-    """Render region codes in product order: IN1, IN2, EU1."""
-    if regions is None:
-        ordered_regions = list(REGION_DISPLAY_CODES)
-    else:
-        ordered_regions = [r for r in REGION_DISPLAY_CODES if r in regions]
-        ordered_regions.extend(sorted(r for r in regions if r not in REGION_DISPLAY_CODES))
-    return ", ".join(_region_label(region) for region in ordered_regions)
-
-
-def _region_url(region: str | None) -> str:
-    if region is None:
-        return REGION_URLS[DEFAULT_REGION]
-    try:
-        return REGION_URLS[region]
-    except KeyError as exc:
-        raise ValidationError(f"Unknown region {region!r}. Use one of: {_format_region_codes()}") from exc
-
-
 def _poll_until_running(transport: Transport, machine_id: int, region: str) -> None:
     """Poll /misc/status until Running or Failed. Raises on failure/timeout."""
-    base_url = _region_url(region)
+    base_url = regions.base_url(region)
     deadline = time.monotonic() + DEFAULT_POLL_TIMEOUT_S
     transient_errors = 0
     max_transient_errors = 5

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from jarvislabs import regions
 from jarvislabs.client import (
     Account,
     Filesystems,
@@ -14,10 +15,8 @@ from jarvislabs.client import (
     SSHKeys,
     _fetch_instances,
     _get_instance,
-    _normalize_region_input,
     _normalize_success,
     _poll_until_running,
-    _region_url,
     _resolve_region,
     _validate_create_region,
     _validate_europe,
@@ -156,13 +155,13 @@ def test_normalize_success(data, expected):
     ],
 )
 def test_normalize_region_input(region, expected):
-    assert _normalize_region_input(region) == expected
+    assert regions.normalize_input(region) == expected
 
 
 @pytest.mark.parametrize("region", ["XX9", "moon-01", "india-01"])
 def test_normalize_region_input_rejects_unknown(region):
     with pytest.raises(ValidationError, match="Unknown region"):
-        _normalize_region_input(region)
+        regions.normalize_input(region)
 
 
 # ── _validate_europe ─────────────────────────────────────────────────────────
@@ -206,12 +205,12 @@ class TestValidateEurope:
     ids=["chennai", "noida", "europe", "none"],
 )
 def test_region_url(region, expected):
-    assert _region_url(region) == expected
+    assert regions.base_url(region) == expected
 
 
 def test_region_url_rejects_unknown_region():
     with pytest.raises(ValidationError, match="Unknown region"):
-        _region_url("unknown-region")
+        regions.base_url("unknown-region")
 
 
 # ── _resolve_region ──────────────────────────────────────────────────────────

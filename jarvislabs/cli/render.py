@@ -13,7 +13,9 @@ from rich.markup import escape
 from rich.table import Table
 from rich.theme import Theme
 
-from jarvislabs.constants import EUROPE_REGION, REGION_CODE_TO_REGION, REGION_DISPLAY_CODES
+from jarvislabs import regions
+from jarvislabs.client import is_cpu_vm
+from jarvislabs.constants import EUROPE_REGION, REGION_CODE_TO_REGION
 
 TABLE_BOX = box.ROUNDED
 HEADER_STYLE = "bold"
@@ -434,11 +436,6 @@ def resource_label(inst) -> str:
     return f"{inst.num_gpus or 1}x {inst.gpu_type or '—'}"
 
 
-def is_cpu_vm(inst) -> bool:
-    """Return True when an instance should be displayed as a CPU VM."""
-    return getattr(inst, "template", None) == "vm" and getattr(inst, "gpu_type", None) == "CPU"
-
-
 def instance_type(inst) -> str:
     """Display-only billing type. Reserved wins because backend can return both signals."""
     if getattr(inst, "committed_resource_id", None) or getattr(inst, "reservation_info", None):
@@ -552,8 +549,8 @@ def cpu_vm_table(cpu_meta: dict, currency: str = "USD", *, show_legend: bool = T
     sym = "₹" if currency == "INR" else "$"
     rows = []
     for combo in combinations:
-        regions = combo.get("regions") or {}
-        for region, available in regions.items():
+        region_availability = combo.get("regions") or {}
+        for region, available in region_availability.items():
             rows.append(
                 (
                     int(combo.get("vcpus") or 0),
@@ -678,7 +675,7 @@ def region_label(region: str | None) -> str:
     """Convert backend region IDs to short CLI labels like IN2 and EU1."""
     if not region:
         return "—"
-    return REGION_DISPLAY_CODES.get(region, region)
+    return regions.label(region)
 
 
 def region_input_label(region: str | None, *, default: str | None = None) -> str:
