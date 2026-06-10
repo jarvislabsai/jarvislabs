@@ -112,7 +112,7 @@ def _missing_hardening(parts: list[str]) -> list[str]:
     return additions
 
 
-def _passthrough_options(parts: list[str], *, port_flag: str) -> list[str]:
+def _passthrough_options(parts: list[str], *, port_flag: str, command: str) -> list[str]:
     """Carry an ssh command's connection options into another tool (scp/rsync),
     translating the port flag and dropping `-l user` and the target host."""
     out: list[str] = []
@@ -120,6 +120,8 @@ def _passthrough_options(parts: list[str], *, port_flag: str) -> list[str]:
         if flag == "-p":
             out.extend([port_flag, arg])
         elif flag in {"-o", "-i", "-F", "-J"}:
+            if arg is None:
+                raise SSHError(f"Missing SSH option value in command: {command}")
             out.extend([flag, arg])
         elif flag is not None and flag != "-l":
             out.append(flag)  # argless flag (e.g. -C); -l and the target are dropped
@@ -151,7 +153,7 @@ def build_scp_command(
     parts = split_ssh_command(ssh_command)
     info = parse_ssh_command(ssh_command)
 
-    command = ["scp", *_passthrough_options(parts, port_flag="-P"), *_missing_hardening(parts)]
+    command = ["scp", *_passthrough_options(parts, port_flag="-P", command=ssh_command), *_missing_hardening(parts)]
     if recursive:
         command.append("-r")
 
@@ -173,7 +175,7 @@ def build_rsync_upload_command(
     parts = split_ssh_command(ssh_command)
     info = parse_ssh_command(ssh_command)
 
-    transport = ["ssh", *_passthrough_options(parts, port_flag="-p"), *_missing_hardening(parts)]
+    transport = ["ssh", *_passthrough_options(parts, port_flag="-p", command=ssh_command), *_missing_hardening(parts)]
 
     source_path = source.rstrip("/") + "/"
     dest_path = dest.rstrip("/") + "/"

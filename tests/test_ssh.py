@@ -60,6 +60,16 @@ def test_parse_ssh_command_rejects_missing_option_value():
         parse_ssh_command("ssh -o")
 
 
+def test_build_scp_command_rejects_missing_option_value():
+    with pytest.raises(SSHError, match="Missing SSH option value"):
+        build_scp_command("ssh root@example.com -i", source="/tmp/a", dest="~/a", upload=True)
+
+
+def test_build_rsync_upload_command_rejects_missing_option_value():
+    with pytest.raises(SSHError, match="Missing SSH option value"):
+        build_rsync_upload_command("ssh root@example.com -F", source="/tmp/proj", dest="~/proj")
+
+
 def test_build_remote_shell_command_quotes_command_and_prefixes():
     command = build_remote_shell_command(
         ["python", "train.py", "--name", "hello world"],
