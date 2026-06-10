@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 import click
 import typer
@@ -22,8 +22,3 @@ def option_was_explicit(name: str) -> bool:
     if ctx is None:
         return False
     return ctx.get_parameter_source(name) == click.core.ParameterSource.COMMANDLINE
-
-
-def value_or_default(value: Any, default: Any) -> Any:
-    """Use normal Python defaults when tests call Typer commands directly."""
-    return default if isinstance(value, typer.models.OptionInfo) else value

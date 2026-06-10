@@ -207,14 +207,6 @@ def test_install_skill_to_path_overwrites_existing(tmp_path):
     assert skill_path.read_text() == SKILL_CONTENT
 
 
-# ── _select_agents_noninteractive ────────────────────────────────────────────
-
-
-def test_select_agents_noninteractive_returns_all_additional():
-    result = setup._select_agents_noninteractive()
-    assert result == list(setup.ADDITIONAL_AGENTS.keys())
-
-
 # ── _select_additional_agents_interactive ────────────────────────────────────
 
 

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
 import questionary
 import typer
@@ -95,7 +95,6 @@ def _load_bundled_skill() -> str:
         return ref.read_text()
     except Exception:
         render.die("Could not find SKILL.md. Try reinstalling jarvislabs.")
-        return ""  # unreachable
 
 
 # ── Agent selection ──────────────────────────────────────────────────────────
@@ -143,11 +142,6 @@ def _select_additional_agents_interactive() -> list[str]:
     return selected
 
 
-def _select_agents_noninteractive() -> list[str]:
-    """Auto-select all agents when --yes is set."""
-    return list(ADDITIONAL_AGENTS.keys())
-
-
 def _parse_agents_flag(agents: str) -> list[str]:
     """Parse --agents flag value into validated list of additional agent keys."""
     if agents == "all":
@@ -190,7 +184,8 @@ def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
     if agents_flag:
         additional = _parse_agents_flag(agents_flag)
     elif state.yes:
-        additional = _select_agents_noninteractive()
+        # --yes auto-selects all additional agents
+        additional = list(ADDITIONAL_AGENTS.keys())
     else:
         additional = _select_additional_agents_interactive()
 
@@ -226,7 +221,7 @@ def _show_account_status(client: Client) -> None:
         metrics = client.account.resource_metrics()
         currency = client.account.currency()
 
-    sym = "₹" if currency == "INR" else "$"
+    sym = render.currency_symbol(currency)
     render.console.print()
     render.account_status(info, bal, metrics, sym)
 
@@ -368,10 +363,13 @@ def _show_getting_started() -> None:
 
 @app.command(rich_help_panel="Account")
 def setup(
-    token: str = typer.Option(None, "--token", "-t", help="API token (skips interactive prompt)."),
-    agents: str = typer.Option(
-        None, "--agents", help="Comma-separated additional agents: claude-code,all (.agents/skills always installed)"
-    ),
+    token: Annotated[str, typer.Option("--token", "-t", help="API token (skips interactive prompt).")] = None,
+    agents: Annotated[
+        str,
+        typer.Option(
+            "--agents", help="Comma-separated additional agents: claude-code,all (.agents/skills always installed)"
+        ),
+    ] = None,
     yes: cli_options.YesOption = False,
 ) -> None:
     """Set up the JarvisLabs CLI: authenticate and install agent skills."""

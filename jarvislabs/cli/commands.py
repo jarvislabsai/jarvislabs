@@ -1,15 +1,21 @@
 from __future__ import annotations
 
-import os
+from pathlib import Path
+from typing import Annotated
 
 import typer
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
 from jarvislabs.config import load_config, save_config
-from jarvislabs.constants import EUROPE_GPU_TYPES, EUROPE_REGION, INDIA_NOIDA_REGION, REGION_DISPLAY_CODES
+from jarvislabs.constants import EUROPE_GPU_TYPES, EUROPE_REGION, INDIA_NOIDA_REGION
 
 EUROPE_AVAILABILITY_NOTE = "EU1 H100/H200 launches are currently limited to 1 GPU."
+
+
+def _maybe_eu_note(gpus) -> None:
+    if any(gpu.region == EUROPE_REGION and gpu.gpu_type in EUROPE_GPU_TYPES for gpu in gpus):
+        render.info(EUROPE_AVAILABILITY_NOTE)
 
 
 @app.command(rich_help_panel="Account")
@@ -19,19 +25,19 @@ def logout(
     """Remove saved API token from config file."""
     cli_options.apply_command_options(json_output=json_output)
     config = load_config()
-    if "auth" in config and "token" in config["auth"]:
+    logged_out = "auth" in config and "token" in config["auth"]
+    if logged_out:
         del config["auth"]["token"]
         if not config["auth"]:
             del config["auth"]
         save_config(config)
-        if state.json_output:
-            render.print_json({"success": True, "logged_out": True})
-            return
+
+    if state.json_output:
+        render.print_json({"success": True, "logged_out": logged_out})
+        return
+    if logged_out:
         render.success("Logged out — token removed from config.")
     else:
-        if state.json_output:
-            render.print_json({"success": True, "logged_out": False})
-            return
         render.info("No saved token found.")
 
 
@@ -47,7 +53,7 @@ def status(
         bal = client.account.balance()
         metrics = client.account.resource_metrics()
         currency = client.account.currency()
-        sym = "₹" if currency == "INR" else "$"
+        sym = render.currency_symbol(currency)
 
     if state.json_output:
         render.print_json(
@@ -79,8 +85,7 @@ def gpus(
         return
 
     render.gpu_table(availability, currency)
-    if any(gpu.region == EUROPE_REGION and gpu.gpu_type in EUROPE_GPU_TYPES for gpu in availability):
-        render.info(EUROPE_AVAILABILITY_NOTE)
+    _maybe_eu_note(availability)
 
 
 @app.command(rich_help_panel="Resources")
@@ -96,14 +101,13 @@ def resources(
         currency = client.account.currency()
 
     if state.json_output:
-        render.print_json({"gpus": gpus, "cpu_meta": _json_cpu_meta(meta.cpu_meta)})
+        render.print_json({"gpus": gpus, "cpu_meta": render.jsonable_cpu_meta(meta.cpu_meta)})
         return
 
     render.gpu_table(gpus, currency, show_legend=False)
     render.cpu_vm_table(meta.cpu_meta, currency, show_legend=False)
     render.availability_legend()
-    if any(gpu.region == EUROPE_REGION and gpu.gpu_type in EUROPE_GPU_TYPES for gpu in gpus):
-        render.info(EUROPE_AVAILABILITY_NOTE)
+    _maybe_eu_note(gpus)
 
 
 @app.command(rich_help_panel="Resources")
@@ -121,26 +125,6 @@ def templates(
         return
 
     render.templates_table(tpls)
-
-
-def _json_cpu_meta(cpu_meta: dict) -> dict:
-    """Return CPU metadata with CLI display region codes and no legacy top-level region."""
-    sanitized = dict(cpu_meta)
-    sanitized.pop("region", None)
-    combinations = []
-    for combo in sanitized.get("combinations", []):
-        item = dict(combo)
-        regions = item.get("regions")
-        if isinstance(regions, dict):
-            item["regions"] = {
-                REGION_DISPLAY_CODES[region]: available
-                for region, available in regions.items()
-                if region in REGION_DISPLAY_CODES
-            }
-        combinations.append(item)
-    if combinations:
-        sanitized["combinations"] = combinations
-    return sanitized
 
 
 ssh_key_app = typer.Typer(name="ssh-key", help="Manage SSH keys.")
@@ -172,8 +156,8 @@ def ssh_key_list(
 
 @ssh_key_app.command("add")
 def ssh_key_add(
-    pubkey_file: typer.FileText = typer.Argument(..., help="Path to public key file."),
-    name: str = typer.Option(..., "--name", "-n", help="Name for this key."),
+    pubkey_file: Annotated[typer.FileText, typer.Argument(help="Path to public key file.")],
+    name: Annotated[str, typer.Option("--name", "-n", help="Name for this key.")],
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Add an SSH public key."""
@@ -192,7 +176,7 @@ def ssh_key_add(
 
 @ssh_key_app.command("remove")
 def ssh_key_remove(
-    key_id: str = typer.Argument(..., help="Key ID to remove."),
+    key_id: Annotated[str, typer.Argument(help="Key ID to remove.")],
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -228,8 +212,8 @@ def scripts_list(
 
 @scripts_app.command("add")
 def scripts_add(
-    script_file: typer.FileBinaryRead = typer.Argument(..., help="Path to script file."),
-    name: str | None = typer.Option(None, "--name", "-n", help="Script name (defaults to filename stem)."),
+    script_file: Annotated[typer.FileBinaryRead, typer.Argument(help="Path to script file.")],
+    name: Annotated[str | None, typer.Option("--name", "-n", help="Script name (defaults to filename stem).")] = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Add a startup script."""
@@ -238,7 +222,7 @@ def scripts_add(
     if not content.strip():
         render.die("Script file is empty.")
 
-    default_name = os.path.splitext(os.path.basename(script_file.name))[0]
+    default_name = Path(script_file.name).stem
     script_name = name.strip() if name else default_name
     client = get_client()
     with render.spinner("Adding startup script..."):
@@ -253,8 +237,8 @@ def scripts_add(
 
 @scripts_app.command("update")
 def scripts_update(
-    script_id: int = typer.Argument(..., help="Script ID to update."),
-    script_file: typer.FileBinaryRead = typer.Argument(..., help="Path to script file."),
+    script_id: Annotated[int, typer.Argument(help="Script ID to update.")],
+    script_file: Annotated[typer.FileBinaryRead, typer.Argument(help="Path to script file.")],
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Update startup script contents."""
@@ -276,7 +260,7 @@ def scripts_update(
 
 @scripts_app.command("remove")
 def scripts_remove(
-    script_id: int = typer.Argument(..., help="Script ID to remove."),
+    script_id: Annotated[int, typer.Argument(help="Script ID to remove.")],
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -315,9 +299,9 @@ def filesystem_list(
 
 @filesystem_app.command("create")
 def filesystem_create(
-    name: str = typer.Option(..., "--name", "-n", help="Filesystem name."),
-    storage: int = typer.Option(..., "--storage", "-s", help="Storage in GB (50-2048)."),
-    region: str | None = typer.Option(None, "--region", help="Region (IN1 or IN2). Defaults to IN2."),
+    name: Annotated[str, typer.Option("--name", "-n", help="Filesystem name.")],
+    storage: Annotated[int, typer.Option("--storage", "-s", help="Storage in GB (50-2048).")],
+    region: Annotated[str | None, typer.Option("--region", help="Region (IN1 or IN2). Defaults to IN2.")] = None,
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -343,8 +327,8 @@ def filesystem_create(
 
 @filesystem_app.command("edit")
 def filesystem_edit(
-    fs_id: int = typer.Argument(..., help="Filesystem ID to edit."),
-    storage: int = typer.Option(..., "--storage", "-s", help="New storage size in GB (increase only)."),
+    fs_id: Annotated[int, typer.Argument(help="Filesystem ID to edit.")],
+    storage: Annotated[int, typer.Option("--storage", "-s", help="New storage size in GB (increase only).")],
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -366,7 +350,7 @@ def filesystem_edit(
 
 @filesystem_app.command("remove")
 def filesystem_remove(
-    fs_id: int = typer.Argument(..., help="Filesystem ID to remove."),
+    fs_id: Annotated[int, typer.Argument(help="Filesystem ID to remove.")],
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:

@@ -12,15 +12,14 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 from typer.core import TyperGroup
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
-from jarvislabs.cli.instance import _default_upload_dest, _remote_home
-from jarvislabs.cli.options import value_or_default
+from jarvislabs.cli.instance import default_upload_dest, remote_home, resolve_vm_template
 from jarvislabs.constants import DEFAULT_NUM_GPUS, DEFAULT_STORAGE_GB, DEFAULT_TEMPLATE
 from jarvislabs.exceptions import JarvislabsError, SSHError
 from jarvislabs.ssh import build_rsync_upload_command, build_scp_command, harden_ssh_parts, split_ssh_command
@@ -143,7 +142,7 @@ def _make_run_id() -> str:
 
 
 def _build_run_paths(run_id: str, ssh_command: str | None = None) -> RunPaths:
-    remote_runs_root = PurePosixPath(_remote_home(ssh_command)) / _REMOTE_RUNS_SUFFIX
+    remote_runs_root = PurePosixPath(remote_home(ssh_command)) / _REMOTE_RUNS_SUFFIX
     remote_run_dir = remote_runs_root / run_id
     return RunPaths(
         run_id=run_id,
@@ -263,7 +262,7 @@ def _currency_symbol() -> str:
     global _cached_currency_sym
     if _cached_currency_sym is None:
         try:
-            _cached_currency_sym = "₹" if get_client().account.currency() == "INR" else "$"
+            _cached_currency_sym = render.currency_symbol(get_client().account.currency())
         except Exception:
             return "$"
     return _cached_currency_sym
@@ -441,7 +440,7 @@ def _build_run_spec(
         )
 
     if local_target.is_dir():
-        remote_target = _default_upload_dest(local_target, ssh_command)
+        remote_target = default_upload_dest(local_target, ssh_command)
         if script_path:
             launch_command = _entrypoint_command(script_path, extra_args)
         elif extra_args:
@@ -468,7 +467,7 @@ def _build_run_spec(
             "Use a directory target or the instance upload/exec primitives for other files."
         )
 
-    remote_root = PurePosixPath(_remote_home(ssh_command))
+    remote_root = PurePosixPath(remote_home(ssh_command))
     remote_target = (remote_root / local_target.name).as_posix()
     return RunSpec(
         target_kind="file",
@@ -601,10 +600,6 @@ def _detect_requirements(spec: RunSpec) -> str | None:
     return None
 
 
-def _upload_support_file(inst, ssh_parts: list[str], source: Path, destination: str, *, label: str) -> None:
-    _upload_file_to_instance(inst, ssh_parts, source, destination, label=label)
-
-
 def _prepare_support_files(
     inst,
     ssh_parts: list[str],
@@ -619,7 +614,7 @@ def _prepare_support_files(
         render.die("--requirements requires a file or directory target.")
 
     requirements_name = requirements_path.name
-    _upload_support_file(
+    _upload_file_to_instance(
         inst,
         ssh_parts,
         requirements_path,
@@ -936,53 +931,55 @@ def _apply_lifecycle(machine_id: int, policy: str) -> None:
 @run_app.command("start", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def run_start(
     ctx: typer.Context,
-    on: int | None = typer.Option(None, "--on", help="Run on an existing instance."),
-    gpu: str | None = typer.Option(None, "--gpu", "-g", help="Create a fresh instance with this GPU."),
-    region: str | None = typer.Option(
-        None,
-        "--region",
-        help="Optional region pin for fresh instances (IN1, IN2, EU1).",
-    ),
-    script: str | None = typer.Option(
-        None,
-        "--script",
-        help="Python script path inside a directory target. Example: jl run . --script train.py --gpu L4",
-    ),
-    vm: bool = typer.Option(False, "--vm", help="Create a VM instance instead of a container."),
-    template: str = typer.Option(DEFAULT_TEMPLATE, "--template", "-t", help="Framework template for fresh instances."),
-    storage: int = typer.Option(DEFAULT_STORAGE_GB, "--storage", "-s", help="Storage in GB for fresh instances."),
-    name: str = typer.Option("jl-run", "--name", "-n", help="Instance name for fresh runs."),
-    num_gpus: int = typer.Option(DEFAULT_NUM_GPUS, "--num-gpus", help="Number of GPUs for fresh runs."),
-    spot: bool = typer.Option(False, "--spot", help="Create a spot GPU container for this run."),
-    http_ports: str = typer.Option("", "--http-ports", help="Comma-separated HTTP ports to expose on fresh instances."),
-    setup: str | None = typer.Option(None, "--setup", help="Shell command to run before the main command."),
-    requirements: str | None = typer.Option(
-        None,
-        "--requirements",
-        help="Override auto-detection: upload and install this requirements file instead.",
-    ),
-    pause: bool = typer.Option(False, "--pause", help="Pause a fresh instance after the run completes."),
-    destroy: bool = typer.Option(False, "--destroy", help="Destroy a fresh instance after the run completes."),
-    keep: bool = typer.Option(False, "--keep", help="Leave a fresh instance running after the run completes."),
-    follow: bool = typer.Option(True, "--follow/--no-follow", help="Stream logs after starting the run."),
+    on: Annotated[int | None, typer.Option("--on", help="Run on an existing instance.")] = None,
+    gpu: Annotated[str | None, typer.Option("--gpu", "-g", help="Create a fresh instance with this GPU.")] = None,
+    region: Annotated[
+        str | None, typer.Option("--region", help="Optional region pin for fresh instances (IN1, IN2, EU1).")
+    ] = None,
+    script: Annotated[
+        str | None,
+        typer.Option(
+            "--script",
+            help="Python script path inside a directory target. Example: jl run . --script train.py --gpu L4",
+        ),
+    ] = None,
+    vm: Annotated[bool, typer.Option("--vm", help="Create a VM instance instead of a container.")] = False,
+    template: Annotated[
+        str, typer.Option("--template", "-t", help="Framework template for fresh instances.")
+    ] = DEFAULT_TEMPLATE,
+    storage: Annotated[
+        int, typer.Option("--storage", "-s", help="Storage in GB for fresh instances.")
+    ] = DEFAULT_STORAGE_GB,
+    name: Annotated[str, typer.Option("--name", "-n", help="Instance name for fresh runs.")] = "jl-run",
+    num_gpus: Annotated[int, typer.Option("--num-gpus", help="Number of GPUs for fresh runs.")] = DEFAULT_NUM_GPUS,
+    spot: Annotated[bool, typer.Option("--spot", help="Create a spot GPU container for this run.")] = False,
+    http_ports: Annotated[
+        str, typer.Option("--http-ports", help="Comma-separated HTTP ports to expose on fresh instances.")
+    ] = "",
+    setup: Annotated[str | None, typer.Option("--setup", help="Shell command to run before the main command.")] = None,
+    requirements: Annotated[
+        str | None,
+        typer.Option(
+            "--requirements", help="Override auto-detection: upload and install this requirements file instead."
+        ),
+    ] = None,
+    pause: Annotated[bool, typer.Option("--pause", help="Pause a fresh instance after the run completes.")] = False,
+    destroy: Annotated[
+        bool, typer.Option("--destroy", help="Destroy a fresh instance after the run completes.")
+    ] = False,
+    keep: Annotated[
+        bool, typer.Option("--keep", help="Leave a fresh instance running after the run completes.")
+    ] = False,
+    follow: Annotated[bool, typer.Option("--follow/--no-follow", help="Stream logs after starting the run.")] = True,
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Start a managed run."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
-    spot = value_or_default(spot, False)
     target, extra_args = _parse_run_inputs(list(ctx.args))
     requirements_path = _resolve_local_input(requirements, label="Requirements file")
 
-    # Handle --vm flag
-    if vm:
-        if template != DEFAULT_TEMPLATE:
-            render.die("--vm and --template cannot be used together.")
-        template = "vm"
-        if http_ports:
-            render.die("--http-ports is not supported with --vm. VMs are SSH-only.")
-    if template.strip().lower() == "vm" and not vm:
-        render.die("Use --vm instead of --template vm.")
+    template = resolve_vm_template(vm, template, http_ports)
     if spot and vm:
         render.die("--spot is only supported for GPU container runs.")
 
@@ -1096,12 +1093,13 @@ def run_start(
 
 @run_app.command("list")
 def run_list(
-    refresh: bool = typer.Option(False, "--refresh", help="Refresh live status for each run. Can be slow."),
-    machine: int | None = typer.Option(None, "--machine", "-m", help="Filter by instance ID."),
-    limit: int | None = typer.Option(None, "--limit", "-l", help="Show only the N most recent runs."),
-    status_filter: str | None = typer.Option(
-        None, "--status", "-s", help="Filter by state (running, succeeded, failed). Implies --refresh."
-    ),
+    refresh: Annotated[bool, typer.Option("--refresh", help="Refresh live status for each run. Can be slow.")] = False,
+    machine: Annotated[int | None, typer.Option("--machine", "-m", help="Filter by instance ID.")] = None,
+    limit: Annotated[int | None, typer.Option("--limit", "-l", help="Show only the N most recent runs.")] = None,
+    status_filter: Annotated[
+        str | None,
+        typer.Option("--status", "-s", help="Filter by state (running, succeeded, failed). Implies --refresh."),
+    ] = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """List locally tracked managed runs."""
@@ -1133,28 +1131,24 @@ def run_list(
     if not refresh:
         render.info("Showing saved runs from this machine. Use --refresh for live status checks.")
 
-    table = render._table("Managed Runs")
-    table.add_column("Run ID", style="cyan")
-    table.add_column("Machine", style="bold")
-    table.add_column("Kind")
-    table.add_column("State")
-    table.add_column("Lifecycle")
-    table.add_column("Started")
-    for record in records:
-        table.add_row(
-            record.run_id,
-            str(record.machine_id),
-            record.target_kind,
-            _get_run_snapshot(record).state if refresh else "saved",
-            record.lifecycle_policy,
-            record.started_at[:19].replace("T", " "),
-        )
-    render.stdout_console.print(table)
+    render.runs_table(
+        [
+            (
+                record.run_id,
+                str(record.machine_id),
+                record.target_kind,
+                _get_run_snapshot(record).state if refresh else "saved",
+                record.lifecycle_policy,
+                record.started_at[:19].replace("T", " "),
+            )
+            for record in records
+        ]
+    )
 
 
 @run_app.command("status")
 def run_status(
-    run_id: str = typer.Argument(..., help="Run ID."),
+    run_id: Annotated[str, typer.Argument(help="Run ID.")],
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Show the current status of a managed run."""
@@ -1186,9 +1180,9 @@ def run_status(
 
 @run_app.command("logs")
 def run_logs(
-    run_id: str = typer.Argument(..., help="Run ID."),
-    follow: bool = typer.Option(False, "--follow", "-f", help="Follow logs in real time."),
-    tail: int | None = typer.Option(None, "--tail", "-n", min=1, help="Show only the last N lines."),
+    run_id: Annotated[str, typer.Argument(help="Run ID.")],
+    follow: Annotated[bool, typer.Option("--follow", "-f", help="Follow logs in real time.")] = False,
+    tail: Annotated[int | None, typer.Option("--tail", "-n", min=1, help="Show only the last N lines.")] = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Show logs for a managed run."""
@@ -1256,7 +1250,7 @@ def run_logs(
 
 @run_app.command("stop")
 def run_stop(
-    run_id: str = typer.Argument(..., help="Run ID."),
+    run_id: Annotated[str, typer.Argument(help="Run ID.")],
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Stop a managed run by sending TERM to its tracked process."""

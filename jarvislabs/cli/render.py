@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any
+from contextlib import nullcontext
+from typing import Any, NoReturn
 
 from pydantic import BaseModel
 from rich import box
@@ -13,7 +14,8 @@ from rich.markup import escape
 from rich.table import Table
 from rich.theme import Theme
 
-from jarvislabs.constants import EUROPE_REGION, REGION_CODE_TO_REGION
+from jarvislabs.cli import state
+from jarvislabs.constants import EUROPE_REGION, REGION_CODE_TO_REGION, REGION_DISPLAY_CODES
 from jarvislabs.instances import is_cpu_vm
 from jarvislabs.regions import region_code
 
@@ -107,7 +109,7 @@ def instances_table(instances: list, currency: str = "USD") -> None:
         info("No instances found.")
         return
 
-    sym = "₹" if currency == "INR" else "$"
+    sym = currency_symbol(currency)
 
     table = _table("Instances", show_lines=True)
     table.add_column("ID", style="cyan", no_wrap=True)
@@ -165,7 +167,7 @@ def _service_url_rows(inst) -> list[tuple[str, str]]:
 
 
 def instance_detail(inst, currency: str = "USD") -> None:
-    sym = "₹" if currency == "INR" else "$"
+    sym = currency_symbol(currency)
     table = Table(show_header=False, box=None, padding=(0, 2), border_style=BORDER_STYLE)
     table.add_column("Field", style="dim")
     # Avoid cutting off long values like notebook URLs with auth tokens.
@@ -268,6 +270,20 @@ def filesystems_table(filesystems: list) -> None:
         storage = f"{filesystem.storage}GB" if filesystem.storage is not None else "—"
         table.add_row(str(filesystem.fs_id), filesystem.fs_name or "—", storage, region_label(filesystem.region))
 
+    stdout_console.print(table)
+
+
+def runs_table(rows: list) -> None:
+    """Render managed runs. Rows are (run_id, machine, kind, state, lifecycle, started) strings."""
+    table = _table("Managed Runs")
+    table.add_column("Run ID", style="cyan")
+    table.add_column("Machine", style="bold")
+    table.add_column("Kind")
+    table.add_column("State")
+    table.add_column("Lifecycle")
+    table.add_column("Started")
+    for row in rows:
+        table.add_row(*row)
     stdout_console.print(table)
 
 
@@ -451,7 +467,7 @@ def gpu_table(gpus: list, currency: str = "USD", *, show_legend: bool = True) ->
         info("No GPU data available.")
         return
 
-    sym = "₹" if currency == "INR" else "$"
+    sym = currency_symbol(currency)
     container_gpus = [g for g in gpus if g.workload_type in ("container", None)]
     vm_gpus = [g for g in gpus if g.workload_type in ("vm", None)]
 
@@ -546,7 +562,7 @@ def cpu_vm_table(cpu_meta: dict, currency: str = "USD", *, show_legend: bool = T
         info("No CPU VM data available.")
         return
 
-    sym = "₹" if currency == "INR" else "$"
+    sym = currency_symbol(currency)
     rows = []
     for combo in combinations:
         region_availability = combo.get("regions") or {}
@@ -592,36 +608,48 @@ def cpu_vm_table(cpu_meta: dict, currency: str = "USD", *, show_legend: bool = T
         availability_legend()
 
 
+def jsonable_cpu_meta(cpu_meta: dict) -> dict:
+    """Return CPU metadata with CLI display region codes and no legacy top-level region."""
+    sanitized = dict(cpu_meta)
+    sanitized.pop("region", None)
+    combinations = []
+    for combo in sanitized.get("combinations", []):
+        item = dict(combo)
+        regions = item.get("regions")
+        if isinstance(regions, dict):
+            item["regions"] = {
+                REGION_DISPLAY_CODES[region]: available
+                for region, available in regions.items()
+                if region in REGION_DISPLAY_CODES
+            }
+        combinations.append(item)
+    if combinations:
+        sanitized["combinations"] = combinations
+    return sanitized
+
+
 # ── Messages ─────────────────────────────────────────────────────────────────
 
 
 def success(msg: str) -> None:
-    from jarvislabs.cli import state
-
     if state.json_output:
         return
     console.print(f"[green]✓[/green] {msg}")
 
 
 def error(msg: str) -> None:
-    from jarvislabs.cli import state
-
     if state.json_output:
         return
     console.print(f"[red]✗[/red] {msg}", style="red")
 
 
 def info(msg: str) -> None:
-    from jarvislabs.cli import state
-
     if state.json_output:
         return
     console.print(f"[dim]{msg}[/dim]")
 
 
 def warning(msg: str) -> None:
-    from jarvislabs.cli import state
-
     if state.json_output:
         return
     console.print(f"[yellow]![/yellow] {msg}")
@@ -634,8 +662,6 @@ def confirm(msg: str, *, skip: bool = False) -> bool:
     """Ask for confirmation. Returns True if confirmed or skip=True (--yes flag)."""
     if skip:
         return True
-    from jarvislabs.cli import state
-
     if state.json_output:
         # Never prompt in machine mode — commands enforce --yes explicitly.
         return False
@@ -652,16 +678,16 @@ def confirm(msg: str, *, skip: bool = False) -> bool:
 
 def spinner(msg: str):
     """Rich spinner context manager for wrapping API calls. Suppressed in --json mode."""
-    from contextlib import nullcontext
-
-    from jarvislabs.cli import state
-
     if state.json_output:
         return nullcontext()
     return console.status(f"[bold]{msg}[/bold]", spinner="dots")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def currency_symbol(currency: str) -> str:
+    return "₹" if currency == "INR" else "$"
 
 
 def _cost_cell(inst, sym: str) -> str:
@@ -700,10 +726,8 @@ def _status_style(status: str) -> str:
     }.get(status, "white")
 
 
-def die(msg: str, code: int = 1) -> None:
+def die(msg: str, code: int = 1) -> NoReturn:
     """Print error and exit. Emits JSON to stdout when --json is active."""
-    from jarvislabs.cli import state
-
     if state.json_output:
         print_json({"error": msg})
     else:

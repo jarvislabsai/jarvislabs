@@ -5,14 +5,17 @@ Thin wrapper over ``client.deployments``: parse flags, call the SDK, render outp
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import typer
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
-from jarvislabs.cli.options import value_or_default
 
 deploy_app = typer.Typer(name="deploy", help="Create and manage serverless model deployments.")
 app.add_typer(deploy_app, rich_help_panel="Workloads")
+
+RegionHintOption = Annotated[str | None, typer.Option("--region", help="Region hint (fast-path).")]
 
 
 def _parse_kv(pairs: list[str] | None, *, flag: str, redact: bool = False) -> dict[str, str]:
@@ -32,31 +35,28 @@ def _parse_kv(pairs: list[str] | None, *, flag: str, redact: bool = False) -> di
 
 @deploy_app.command("create")
 def deploy_create(
-    name: str = typer.Option(..., "--name", help="Deployment name."),
-    region: str = typer.Option(..., "--region", help="Region (IN1 or IN2)."),
-    framework: str = typer.Option(..., "--framework", help="vllm | sglang | ollama."),
-    gpu: str = typer.Option(..., "--gpu", help="GPU type (v1: H100 | L4)."),
-    gpus_per_worker: int = typer.Option(..., "--gpus-per-worker", help="GPUs per worker."),
-    min_workers: int = typer.Option(..., "--min-workers", help="Minimum workers (0-100)."),
-    max_workers: int = typer.Option(..., "--max-workers", help="Maximum workers (0-100)."),
-    idle_timeout: int = typer.Option(..., "--idle-timeout", help="Idle timeout in seconds (0-86400)."),
-    wait_time: int = typer.Option(..., "--wait-time", help="Wait time in seconds (0-600)."),
-    storage: int = typer.Option(
-        ...,
-        "--storage",
-        help="Deployment filesystem size in GB.",
-    ),
-    model: str = typer.Option(..., "--model", help="Model id (e.g. a Hugging Face repo id)."),
-    concurrent: int | None = typer.Option(None, "--concurrent", help="Concurrent requests per worker (default 1)."),
-    arg: list[str] | None = typer.Option(
-        None,
-        "--arg",
-        help="Repeatable framework flag as key=value (e.g. --arg max-model-len=8192).",
-    ),
-    env: list[str] | None = typer.Option(
-        None, "--env", help="Repeatable env key=value. HF token via --env HF_TOKEN=..."
-    ),
-    detach: bool = typer.Option(False, "--detach", help="Skip the wait: print the id and exit."),
+    name: Annotated[str, typer.Option("--name", help="Deployment name.")],
+    region: Annotated[str, typer.Option("--region", help="Region (IN1 or IN2).")],
+    framework: Annotated[str, typer.Option("--framework", help="vllm | sglang | ollama.")],
+    gpu: Annotated[str, typer.Option("--gpu", help="GPU type (v1: H100 | L4).")],
+    gpus_per_worker: Annotated[int, typer.Option("--gpus-per-worker", help="GPUs per worker.")],
+    min_workers: Annotated[int, typer.Option("--min-workers", help="Minimum workers (0-100).")],
+    max_workers: Annotated[int, typer.Option("--max-workers", help="Maximum workers (0-100).")],
+    idle_timeout: Annotated[int, typer.Option("--idle-timeout", help="Idle timeout in seconds (0-86400).")],
+    wait_time: Annotated[int, typer.Option("--wait-time", help="Wait time in seconds (0-600).")],
+    storage: Annotated[int, typer.Option("--storage", help="Deployment filesystem size in GB.")],
+    model: Annotated[str, typer.Option("--model", help="Model id (e.g. a Hugging Face repo id).")],
+    concurrent: Annotated[
+        int | None, typer.Option("--concurrent", help="Concurrent requests per worker (default 1).")
+    ] = None,
+    arg: Annotated[
+        list[str] | None,
+        typer.Option("--arg", help="Repeatable framework flag as key=value (e.g. --arg max-model-len=8192)."),
+    ] = None,
+    env: Annotated[
+        list[str] | None, typer.Option("--env", help="Repeatable env key=value. HF token via --env HF_TOKEN=...")
+    ] = None,
+    detach: Annotated[bool, typer.Option("--detach", help="Skip the wait: print the id and exit.")] = False,
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -65,9 +65,8 @@ def deploy_create(
     Use --arg to pass extra framework flags as key=value.
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
-    concurrent = value_or_default(concurrent, None)
-    args = _parse_kv(value_or_default(arg, None), flag="--arg")
-    env_dict = _parse_kv(value_or_default(env, None), flag="--env", redact=True)
+    args = _parse_kv(arg, flag="--arg")
+    env_dict = _parse_kv(env, flag="--env", redact=True)
 
     details = (
         f"name={name!r}, region={render.region_input_label(region)}, framework={framework}, "
@@ -141,13 +140,12 @@ def deploy_list(
 
 @deploy_app.command("get")
 def deploy_get(
-    deployment_id: str = typer.Argument(..., help="Deployment id."),
-    region: str | None = typer.Option(None, "--region", help="Region hint (fast-path)."),
+    deployment_id: Annotated[str, typer.Argument(help="Deployment id.")],
+    region: RegionHintOption = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Show full detail of one deployment, including worker info."""
     cli_options.apply_command_options(json_output=json_output)
-    region = value_or_default(region, None)
     client = get_client()
     with render.spinner("Fetching deployment..."):
         deployment = client.deployments.get(deployment_id, region=region)
@@ -167,13 +165,12 @@ def deploy_get(
 
 @deploy_app.command("status")
 def deploy_status(
-    deployment_id: str = typer.Argument(..., help="Deployment id."),
-    region: str | None = typer.Option(None, "--region", help="Region hint (fast-path)."),
+    deployment_id: Annotated[str, typer.Argument(help="Deployment id.")],
+    region: RegionHintOption = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Cheap status check for one deployment."""
     cli_options.apply_command_options(json_output=json_output)
-    region = value_or_default(region, None)
     client = get_client()
     with render.spinner("Checking status..."):
         status = client.deployments.status(deployment_id, region=region)
@@ -186,19 +183,15 @@ def deploy_status(
 
 @deploy_app.command("update")
 def deploy_update(
-    deployment_id: str = typer.Argument(..., help="Deployment id."),
-    name: str | None = typer.Option(None, "--name", help="New name."),
-    idle_timeout: int | None = typer.Option(None, "--idle-timeout", help="New idle timeout in seconds."),
-    wait_time: int | None = typer.Option(None, "--wait-time", help="New wait time in seconds."),
-    region: str | None = typer.Option(None, "--region", help="Region hint (fast-path)."),
+    deployment_id: Annotated[str, typer.Argument(help="Deployment id.")],
+    name: Annotated[str | None, typer.Option("--name", help="New name.")] = None,
+    idle_timeout: Annotated[int | None, typer.Option("--idle-timeout", help="New idle timeout in seconds.")] = None,
+    wait_time: Annotated[int | None, typer.Option("--wait-time", help="New wait time in seconds.")] = None,
+    region: RegionHintOption = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Patch a running deployment. Only name/idle_timeout/wait_time are mutable; rescale = recreate."""
     cli_options.apply_command_options(json_output=json_output)
-    name = value_or_default(name, None)
-    idle_timeout = value_or_default(idle_timeout, None)
-    wait_time = value_or_default(wait_time, None)
-    region = value_or_default(region, None)
 
     client = get_client()
     with render.spinner("Updating deployment..."):
@@ -214,14 +207,13 @@ def deploy_update(
 
 @deploy_app.command("delete")
 def deploy_delete(
-    deployment_id: str = typer.Argument(..., help="Deployment id."),
+    deployment_id: Annotated[str, typer.Argument(help="Deployment id.")],
     yes: cli_options.YesOption = False,
-    region: str | None = typer.Option(None, "--region", help="Region hint (fast-path)."),
+    region: RegionHintOption = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Tear down a deployment."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
-    region = value_or_default(region, None)
 
     if state.json_output and not state.yes:
         render.die("--json requires --yes for delete")

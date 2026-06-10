@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 import typer
+
+from jarvislabs.cli.render import die
+from jarvislabs.client import Client
+from jarvislabs.exceptions import JarvislabsError
 
 app = typer.Typer(
     name="jl",
@@ -32,7 +38,7 @@ app = typer.Typer(
 @app.callback(invoke_without_command=True)
 def _global_flags(
     ctx: typer.Context,
-    version: bool = typer.Option(False, "--version", help="Show version and exit."),
+    version: Annotated[bool, typer.Option("--version", help="Show version and exit.")] = False,
 ) -> None:
     if version:
         from importlib.metadata import version as pkg_version
@@ -46,12 +52,8 @@ def _global_flags(
         raise typer.Exit()
 
 
-def get_client():
+def get_client() -> Client:
     """Create a Client using the resolved token. Called lazily by commands that need it."""
-    from jarvislabs.cli.render import die
-    from jarvislabs.client import Client
-    from jarvislabs.exceptions import JarvislabsError
-
     try:
         return Client()
     except JarvislabsError as e:
@@ -60,17 +62,15 @@ def get_client():
 
 def main() -> None:
     """Entry point for `jl` command (wired via pyproject.toml [project.scripts])."""
+    # Command modules import `app` from this module, so they can only load after it exists.
     from jarvislabs.cli import commands, deploy, instance, run, setup  # noqa: F401
     from jarvislabs.cli.update_check import finish_update_check, start_update_check
-    from jarvislabs.exceptions import JarvislabsError
 
     start_update_check()
 
     try:
         app()
     except JarvislabsError as e:
-        from jarvislabs.cli.render import die
-
         die(str(e))
     finally:
         finish_update_check()
