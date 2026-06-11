@@ -246,6 +246,21 @@ def test_create_confirm_declined_no_call(monkeypatch):
     assert called == []
 
 
+def test_create_json_without_yes_dies(monkeypatch):
+    called = []
+    deployments = SimpleNamespace(create=lambda **kw: called.append(kw) or "dep1")
+    _install_client(monkeypatch, deployments)
+
+    def fake_die(msg, code=1):
+        raise SystemExit(msg)
+
+    monkeypatch.setattr(deploy.render, "die", fake_die)
+    with pytest.raises(SystemExit) as exc:
+        _create_call(None, yes=False, json_output=True)
+    assert "requires --yes" in str(exc.value)
+    assert called == []
+
+
 def test_env_invalid_syntax_does_not_echo_value(monkeypatch):
     def fake_die(msg, code=1):
         raise SystemExit(msg)

@@ -215,8 +215,6 @@ def deploy_delete(
     """Tear down a deployment."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
 
-    if state.json_output and not state.yes:
-        render.die("--json requires --yes for delete")
     if not render.confirm(f"Delete deployment {deployment_id}?", skip=state.yes):
         raise typer.Exit()
 

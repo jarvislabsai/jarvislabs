@@ -176,9 +176,18 @@ def test_status_colors():
     assert render._deployment_status_style("deleted") == "dim"
 
 
-def test_confirm_json_mode_returns_false(monkeypatch):
+def test_confirm_json_mode_dies(monkeypatch, capsys):
     from jarvislabs.cli import state
 
     monkeypatch.setattr(state, "json_output", True)
-    assert render.confirm("Delete?", skip=False) is False
-    monkeypatch.setattr(state, "json_output", False)
+    with pytest.raises(SystemExit) as excinfo:
+        render.confirm("Delete?", skip=False)
+    assert excinfo.value.code == 1
+    assert "--json requires --yes" in capsys.readouterr().out
+
+
+def test_confirm_json_mode_skip_still_wins(monkeypatch):
+    from jarvislabs.cli import state
+
+    monkeypatch.setattr(state, "json_output", True)
+    assert render.confirm("Delete?", skip=True) is True

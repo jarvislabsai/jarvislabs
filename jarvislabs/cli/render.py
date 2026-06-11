@@ -659,12 +659,15 @@ def warning(msg: str) -> None:
 
 
 def confirm(msg: str, *, skip: bool = False) -> bool:
-    """Ask for confirmation. Returns True if confirmed or skip=True (--yes flag)."""
+    """Ask for confirmation. Returns True if confirmed or skip=True (--yes flag).
+
+    In --json mode confirmation cannot be prompted, so a missing --yes is a
+    hard error — never a silent decline a script would read as success.
+    """
     if skip:
         return True
     if state.json_output:
-        # Never prompt in machine mode — commands enforce --yes explicitly.
-        return False
+        die("--json requires --yes")
     try:
         response = console.input(f"[yellow]?[/yellow] {msg} [dim]\\[y/N][/dim] ")
         return response.strip().lower() in ("y", "yes")
