@@ -388,7 +388,10 @@ def deployment_detail(dep, *, base_url: str | None = None) -> None:
         ("Workers (live)", f"{workers.total} total · {workers.healthy} healthy · {workers.provisioning} provisioning")
     )
     rows.extend(
-        (f"  worker {i}", f"{escape(str(w.status))} (last used: {escape(str(w.last_used or '—'))})")
+        (
+            f"  worker {w.worker_id if w.worker_id is not None else i}",
+            f"{escape(str(w.status))} (last used: {escape(str(w.last_used or '—'))})",
+        )
         for i, w in enumerate(workers.list, start=1)
     )
 

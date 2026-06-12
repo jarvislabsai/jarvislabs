@@ -110,6 +110,22 @@ def test_detail_shows_env_and_workers(capture):
     assert "serverlessn.jarvislabs.net/openai/dep1/v1" in out
 
 
+def test_detail_shows_worker_id_when_present(capture):
+    workers = {
+        "total": 2,
+        "healthy": 1,
+        "provisioning": 1,
+        "list": [
+            {"worker_id": 8841, "status": "healthy", "last_used": "now"},
+            {"worker_id": None, "status": "provisioning", "last_used": None},
+        ],
+    }
+    render.deployment_detail(_deployment(workers=workers))
+    out = capture.getvalue()
+    assert "worker 8841" in out  # real id when the API sends one
+    assert "worker 2" in out  # positional fallback while it's null
+
+
 def test_detail_shows_error_message(capture):
     render.deployment_detail(_deployment(status="failed", error_message="download timeout"))
     assert "download timeout" in capture.getvalue()

@@ -1,7 +1,8 @@
-"""Tests for backend error-response parsing."""
+"""Tests for backend error-response parsing and the streaming transport."""
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from jarvislabs.exceptions import (
@@ -13,6 +14,7 @@ from jarvislabs.exceptions import (
     extract_message,
     validation_field,
 )
+from jarvislabs.transport import Transport
 
 
 @pytest.mark.parametrize(
@@ -108,3 +110,72 @@ def test_error_from_response_unmapped_status_carries_code():
     assert isinstance(err, APIError)
     assert err.status_code == 500
     assert err.message == "kaboom"
+
+
+# ── stream_lines ──
+
+
+def _stream_transport(handler) -> Transport:
+    """A Transport whose httpx client talks to an in-memory handler."""
+    transport = Transport(token="t")
+    transport._client = httpx.Client(transport=httpx.MockTransport(handler))
+    return transport
+
+
+def test_stream_lines_yields_lines():
+    def handler(request):
+        return httpx.Response(200, content=b"data: [worker-1] hello\n\n: ping\n\ndata: [worker-1] bye\n\n")
+
+    t = _stream_transport(handler)
+    lines = list(t.stream_lines("management/dep1/logs", base_url="https://example.test"))
+    assert "data: [worker-1] hello" in lines
+    assert ": ping" in lines
+    assert "data: [worker-1] bye" in lines
+
+
+def test_stream_lines_passes_params():
+    seen = {}
+
+    def handler(request):
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, content=b"")
+
+    t = _stream_transport(handler)
+    list(t.stream_lines("management/dep1/logs", params={"tail": 100, "follow": True}, base_url="https://example.test"))
+    assert seen["params"] == {"tail": "100", "follow": "true"}
+
+
+def test_stream_lines_maps_http_errors():
+    def handler(request):
+        return httpx.Response(404, json={"detail": "Deployment not found"})
+
+    t = _stream_transport(handler)
+    with pytest.raises(NotFoundError, match="Deployment not found"):
+        list(t.stream_lines("management/dep1/logs", base_url="https://example.test"))
+
+
+def test_stream_lines_maps_429_with_detail():
+    def handler(request):
+        return httpx.Response(429, json={"detail": "Too many concurrent log streams"})
+
+    t = _stream_transport(handler)
+    with pytest.raises(APIError, match="Too many concurrent log streams"):
+        list(t.stream_lines("management/dep1/logs", base_url="https://example.test"))
+
+
+def test_stream_lines_wraps_connection_errors():
+    def handler(request):
+        raise httpx.ConnectError("boom")
+
+    t = _stream_transport(handler)
+    with pytest.raises(APIError, match="Stream failed"):
+        list(t.stream_lines("management/dep1/logs", base_url="https://example.test"))
+
+
+def test_stream_lines_wraps_timeouts():
+    def handler(request):
+        raise httpx.ReadTimeout("slow")
+
+    t = _stream_transport(handler)
+    with pytest.raises(APIError, match="Stream timed out"):
+        list(t.stream_lines("management/dep1/logs", base_url="https://example.test"))

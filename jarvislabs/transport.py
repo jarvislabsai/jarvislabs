@@ -6,8 +6,12 @@ Every API call goes through Transport. client.py never touches httpx directly.
 from __future__ import annotations
 
 import time
+from typing import TYPE_CHECKING
 
 import httpx
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 from jarvislabs.constants import (
     DEFAULT_REGION,
@@ -22,6 +26,15 @@ from jarvislabs.exceptions import APIError, error_from_response
 # Only idempotent methods are safe to retry: replaying a POST/PUT/DELETE after a
 # timeout can trigger a duplicate operation on the backend.
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def _api_error(resp: httpx.Response) -> APIError:
+    """Map a non-success response to a typed exception."""
+    try:
+        payload = resp.json()
+    except ValueError:
+        payload = {}
+    return error_from_response(resp.status_code, payload)
 
 
 class Transport:
@@ -69,16 +82,29 @@ class Transport:
                 continue
 
             if not resp.is_success:
-                try:
-                    payload = resp.json()
-                except ValueError:
-                    payload = {}
-                raise error_from_response(resp.status_code, payload)
+                raise _api_error(resp)
             return resp.json()
 
         # The loop always returns or raises on the final attempt; this line only
         # keeps the type checker happy.
         raise AssertionError("unreachable")
+
+    def stream_lines(self, path: str, *, params: dict | None = None, base_url: str | None = None) -> Iterator[str]:
+        """Open a streaming GET and yield response lines as they arrive.
+
+        No retries: a stream is long-lived and replaying it would repeat
+        lines. The connection closes when the caller stops iterating.
+        """
+        url = (base_url or self._base_url).rstrip("/") + "/" + path.lstrip("/")
+        try:
+            with self._client.stream("GET", url, params=params) as resp:
+                if not resp.is_success:
+                    resp.read()  # streamed bodies aren't loaded until asked
+                    raise _api_error(resp)
+                yield from resp.iter_lines()
+        except httpx.HTTPError as exc:
+            label = "timed out" if isinstance(exc, httpx.TimeoutException) else "failed"
+            raise APIError(0, f"Stream {label}: GET {path}") from exc
 
     def close(self) -> None:
         self._client.close()

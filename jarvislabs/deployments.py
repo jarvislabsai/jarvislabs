@@ -31,6 +31,8 @@ from jarvislabs.models import (
 from jarvislabs.regions import normalize_serverless_region, region_code, serverless_region_url
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from jarvislabs.transport import Transport
 
 
@@ -258,6 +260,44 @@ class Deployments:
                     f"downloads can take a while. Check: jl deploy get {deployment_id}"
                 )
             time.sleep(DEPLOYMENT_POLL_INTERVAL_S)
+
+    def logs(
+        self,
+        deployment_id: str,
+        *,
+        region: str | None = None,
+        tail: int = 100,
+        follow: bool = True,
+        worker: int | None = None,
+    ) -> Iterator[tuple[str, str]]:
+        """Stream a deployment's logs, live from its running workers.
+
+        Starts with the last ``tail`` lines from each worker (0 = live lines
+        only), then follows until you stop iterating; ``follow=False`` ends
+        after the replay. ``worker`` narrows to one worker id.
+
+        Yields ``(kind, text)`` pairs: kind ``"log"`` is a worker log line,
+        kind ``"notice"`` is a status message about the stream itself.
+        """
+        if region:
+            resolved_region = normalize_serverless_region(region)
+        else:
+            resolved_region, _ = self._find_deployment(deployment_id)
+
+        params: dict = {"tail": tail, "follow": follow}
+        if worker is not None:
+            params["worker"] = worker
+
+        lines = self._t.stream_lines(
+            f"management/{deployment_id}/logs", params=params, base_url=serverless_region_url(resolved_region)
+        )
+        for line in lines:
+            if line.startswith("data: "):
+                yield "log", line[len("data: ") :]
+            elif line.startswith(":"):
+                notice = line[1:].strip()
+                if notice and notice != "ping":
+                    yield "notice", notice
 
     def openai_base_url(self, deployment_id: str, *, region: str | None = None) -> str:
         """OpenAI-compatible base URL for the deployment, ready to paste into any

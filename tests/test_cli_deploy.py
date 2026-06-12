@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from jarvislabs.cli import deploy, state
 from jarvislabs.cli.app import app
-from jarvislabs.exceptions import RegionResolutionError
+from jarvislabs.exceptions import NotFoundError, RegionResolutionError
 from jarvislabs.models import (
     Deployment,
     DeploymentListResult,
@@ -355,6 +355,116 @@ def test_status_json_shape(monkeypatch):
     monkeypatch.setattr(deploy.render, "print_json", lambda data: printed.update({"r": data}))
     deploy.deploy_status("dep1", region=None, json_output=True)
     assert printed["r"].model_dump() == {"deployment_id": "dep1", "region": "IN2", "status": "running"}
+
+
+# ── logs ────────────────────────────────────────────────────────────────────────
+
+
+def _install_logs(monkeypatch, events, captured=None, record=None):
+    def logs(dep_id, **kw):
+        if captured is not None:
+            captured.update(kw, deployment_id=dep_id)
+        yield from events
+
+    deployments = SimpleNamespace(get=lambda dep_id, region=None: record or _deployment(), logs=logs)
+    _install_client(monkeypatch, deployments)
+
+
+def test_logs_lines_to_stdout_notices_to_info(monkeypatch, capsys):
+    infos: list[str] = []
+    monkeypatch.setattr(deploy.render, "info", lambda m: infos.append(m))
+    _install_logs(
+        monkeypatch,
+        [
+            ("notice", "deployment status is running"),
+            ("log", "[worker-1] hello"),
+            ("log", "[worker-1] world"),
+        ],
+    )
+    deploy.deploy_logs("dep1", region="IN2")
+    assert capsys.readouterr().out == "[worker-1] hello\n[worker-1] world\n"
+    assert infos == ["deployment status is running"]
+
+
+def test_logs_passes_flags_and_resolved_region(monkeypatch):
+    captured = {}
+    _install_logs(monkeypatch, [], captured)
+    deploy.deploy_logs("dep1", region="IN2", tail=0, follow=False, worker=12)
+    # logs() gets the region from the fetched record, not the raw user input.
+    assert captured == {
+        "deployment_id": "dep1",
+        "region": "india-noida-01",
+        "tail": 0,
+        "follow": False,
+        "worker": 12,
+    }
+
+
+def test_logs_json_rejected_before_any_call(monkeypatch):
+    called = []
+    _install_client(
+        monkeypatch,
+        SimpleNamespace(get=lambda *a, **k: called.append("get"), logs=lambda *a, **k: called.append("logs")),
+    )
+
+    def fake_die(msg, code=1):
+        raise SystemExit(msg)
+
+    monkeypatch.setattr(deploy.render, "die", fake_die)
+    with pytest.raises(SystemExit) as exc:
+        deploy.deploy_logs("dep1", json_output=True)
+    assert "log streaming" in str(exc.value)
+    assert called == []
+
+
+def test_logs_ctrl_c_exits_cleanly(monkeypatch):
+    def logs(dep_id, **kw):
+        yield ("log", "line")
+        raise KeyboardInterrupt
+
+    _install_client(monkeypatch, SimpleNamespace(get=lambda *a, **k: _deployment(), logs=logs))
+    with pytest.raises(typer.Exit) as exc:
+        deploy.deploy_logs("dep1", region="IN2")
+    assert exc.value.exit_code == 0
+
+
+def test_logs_no_workers_failed_points_to_get(monkeypatch):
+    infos: list[str] = []
+    monkeypatch.setattr(deploy.render, "info", lambda m: infos.append(m))
+    _install_logs(monkeypatch, [("notice", "no active workers")], record=_deployment(status="failed"))
+    deploy.deploy_logs("dep1", region="IN2")
+    assert any("jl deploy get dep1" in m for m in infos)
+
+
+def test_logs_no_workers_while_starting_says_retry(monkeypatch):
+    infos: list[str] = []
+    monkeypatch.setattr(deploy.render, "info", lambda m: infos.append(m))
+    _install_logs(monkeypatch, [("notice", "no active workers")], record=_deployment(status="starting"))
+    deploy.deploy_logs("dep1", region="IN2")
+    assert any("once a worker is running" in m for m in infos)
+
+
+def test_logs_unknown_id_fails_before_streaming(monkeypatch):
+    streamed = []
+
+    def get(*a, **k):
+        raise NotFoundError("Deployment ghost not found in any region.")
+
+    _install_client(monkeypatch, SimpleNamespace(get=get, logs=lambda *a, **k: streamed.append(1)))
+    with pytest.raises(NotFoundError):
+        deploy.deploy_logs("ghost")
+    assert streamed == []
+
+
+def test_logs_prefetches_record_even_with_region_hint(monkeypatch):
+    calls = []
+    deployments = SimpleNamespace(
+        get=lambda dep_id, region=None: calls.append(("get", region)) or _deployment(),
+        logs=lambda dep_id, **kw: iter([]),
+    )
+    _install_client(monkeypatch, deployments)
+    deploy.deploy_logs("dep1", region="IN2")
+    assert calls == [("get", "IN2")]
 
 
 # ── update ──────────────────────────────────────────────────────────────────────

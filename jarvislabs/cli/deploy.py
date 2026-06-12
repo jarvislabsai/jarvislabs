@@ -5,6 +5,8 @@ Thin wrapper over ``client.deployments``: parse flags, call the SDK, render outp
 
 from __future__ import annotations
 
+import os
+import sys
 from typing import Annotated
 
 import typer
@@ -181,6 +183,61 @@ def deploy_status(
         render.print_json(status)
         return
     render.deployment_status_line(status)
+
+
+@deploy_app.command("logs")
+def deploy_logs(
+    deployment_id: Annotated[str, typer.Argument(help="Deployment id.")],
+    region: RegionHintOption = None,
+    tail: Annotated[int, typer.Option("--tail", help="Last N lines from each worker (0 = live only).")] = 100,
+    follow: Annotated[
+        bool, typer.Option("--follow/--no-follow", "-f", help="Keep streaming new lines (Ctrl+C to stop).")
+    ] = True,
+    worker: Annotated[
+        int | None, typer.Option("--worker", help="Only this worker id (ids shown in `jl deploy get`).")
+    ] = None,
+    json_output: cli_options.JsonOption = False,
+) -> None:
+    """Stream a deployment's logs, live from its running workers (logs are not stored)."""
+    cli_options.apply_command_options(json_output=json_output)
+    if state.json_output:
+        render.die("--json is not supported for log streaming.")
+
+    client = get_client()
+    # Read the record before streaming: it resolves the region once (so logs()
+    # skips its own search) and carries the status used to explain an empty
+    # stream — no parsing it out of notice text.
+    with render.spinner("Fetching deployment..."):
+        deployment = client.deployments.get(deployment_id, region=region)
+
+    events = client.deployments.logs(deployment_id, region=deployment.region, tail=tail, follow=follow, worker=worker)
+    try:
+        for kind, text in events:
+            if kind == "log":
+                print(text, flush=True)
+                continue
+            if text == "no active workers":
+                text = _no_workers_message(deployment.status, deployment_id)
+            render.info(text)
+    except KeyboardInterrupt:
+        raise typer.Exit() from None
+    except BrokenPipeError:
+        # The reader went away (e.g. `| head`); exit quietly. Point stdout at
+        # devnull so the interpreter's final flush doesn't complain.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        raise typer.Exit() from None
+
+
+def _no_workers_message(status: str, deployment_id: str) -> str:
+    """Why the log stream is empty, in terms of the deployment's status."""
+    if status in ("failed", "cleaning"):
+        return (
+            "No running workers — the deployment failed; logs stream live and are not stored. "
+            f"For the failure reason: jl deploy get {deployment_id}"
+        )
+    if status == "deleting":
+        return "No running workers — the deployment is being deleted."
+    return "No workers up yet — logs start once a worker is running. Try again shortly."
 
 
 @deploy_app.command("update")

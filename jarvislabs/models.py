@@ -215,6 +215,8 @@ class StatusResponse(BaseModel):
 class WorkerInfo(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
+    # worker_id can be null for a worker that is still being set up.
+    worker_id: int | None = None
     status: str
     last_used: str | None = None
 

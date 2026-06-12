@@ -506,6 +506,82 @@ def test_delete_unknown_id_raises_not_found(mock_transport):
         _deps(mock_transport).delete("dep1")
 
 
+# ── logs ────────────────────────────────────────────────────────────────────────
+
+
+RAW_STREAM = [
+    ": deployment status is running",
+    "",
+    "data: [worker-12] INFO: server started",
+    "",
+    ": ping",
+    "",
+    "data: [worker-12] INFO: request handled",
+    "",
+    ": all streams ended",
+    "",
+]
+
+
+def test_logs_parses_lines_and_notices(mock_transport):
+    mock_transport.stream_lines.return_value = iter(RAW_STREAM)
+    events = list(_deps(mock_transport).logs("dep1", region="IN2"))
+    assert events == [
+        ("notice", "deployment status is running"),
+        ("log", "[worker-12] INFO: server started"),
+        ("log", "[worker-12] INFO: request handled"),
+        ("notice", "all streams ended"),
+    ]
+
+
+def test_logs_swallows_pings_and_blanks(mock_transport):
+    mock_transport.stream_lines.return_value = iter([": ping", "", ": ping", ""])
+    assert list(_deps(mock_transport).logs("dep1", region="IN2")) == []
+
+
+def test_logs_params_and_path(mock_transport):
+    mock_transport.stream_lines.return_value = iter([])
+    list(_deps(mock_transport).logs("dep1", region="IN2", tail=50, follow=False))
+    args, kwargs = mock_transport.stream_lines.call_args
+    assert args[0] == "management/dep1/logs"
+    assert kwargs["params"] == {"tail": 50, "follow": False}
+    assert kwargs["base_url"] == NOIDA_URL
+
+
+def test_logs_worker_param_only_when_given(mock_transport):
+    mock_transport.stream_lines.return_value = iter([])
+    list(_deps(mock_transport).logs("dep1", region="IN2", worker=12))
+    assert mock_transport.stream_lines.call_args.kwargs["params"]["worker"] == 12
+
+    mock_transport.stream_lines.return_value = iter([])
+    list(_deps(mock_transport).logs("dep1", region="IN2"))
+    assert "worker" not in mock_transport.stream_lines.call_args.kwargs["params"]
+
+
+def test_logs_without_region_searches_first(mock_transport):
+    # First region 404s, the second has it; the stream must go to the second.
+    mock_transport.request.side_effect = [NotFoundError("nope"), _get_payload()]
+    mock_transport.stream_lines.return_value = iter(["data: [worker-1] hi", ""])
+    events = list(_deps(mock_transport).logs("dep1"))
+    assert events == [("log", "[worker-1] hi")]
+    assert mock_transport.stream_lines.call_args.kwargs["base_url"] == NOIDA_URL
+
+
+def test_logs_unknown_id_raises_before_streaming(mock_transport):
+    mock_transport.request.side_effect = [NotFoundError("nope"), NotFoundError("nope")]
+    with pytest.raises(NotFoundError, match="not found in any region"):
+        list(_deps(mock_transport).logs("ghost"))
+    mock_transport.stream_lines.assert_not_called()
+
+
+def test_logs_is_lazy_until_iterated(mock_transport):
+    gen = _deps(mock_transport).logs("dep1", region="IN2")
+    mock_transport.stream_lines.assert_not_called()
+    mock_transport.stream_lines.return_value = iter([])
+    list(gen)
+    mock_transport.stream_lines.assert_called_once()
+
+
 # ── path assertions ─────────────────────────────────────────────────────────────
 
 
