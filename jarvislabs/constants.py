@@ -75,8 +75,3 @@ DEPLOYMENT_WAIT_TIMEOUT_S = 4500
 # Statuses treated as a transient/unreachable region rather than a missing
 # deployment (retryable HTTP statuses plus 0 for connection/timeout).
 DEPLOYMENT_TRANSIENT_STATUS: frozenset[int] = RETRY_STATUS_CODES | frozenset({0})
-
-# Terminal statuses the poller stops on. Any other status means in-progress.
-DEPLOYMENT_TERMINAL_SUCCESS: frozenset[str] = frozenset({"running"})
-DEPLOYMENT_TERMINAL_FAILURE: frozenset[str] = frozenset({"failed", "cleaning"})
-DEPLOYMENT_TERMINAL_OTHER: frozenset[str] = frozenset({"deleting", "deleted"})

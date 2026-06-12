@@ -92,7 +92,7 @@ def test_create_prints_id_then_handoff(monkeypatch):
     deployments = SimpleNamespace(
         create=lambda **kw: captured.update(kw) or "dep1",
         wait_until_running=lambda dep_id, region=None: _deployment(),
-        openai_base_url=lambda dep_id, region=None: "https://serverlessn.jarvislabs.net/openai/dep1",
+        openai_base_url=lambda dep_id, region=None: "https://serverlessn.jarvislabs.net/openai/dep1/v1",
     )
     _install_client(monkeypatch, deployments)
 
@@ -103,13 +103,12 @@ def test_create_prints_id_then_handoff(monkeypatch):
 
     _create_call(None, arg=["max-model-len=8192"], env=["HF_TOKEN=hf_x"])
 
-    assert captured["wait"] is False
     # The CLI passes args raw + model separately; the SDK folds model into args.
     assert captured["args"] == {"max-model-len": "8192"}
     assert captured["model"] == "Qwen/Qwen3-0.6B"
     assert captured["env"] == {"HF_TOKEN": "hf_x"}
     assert any("dep1" in m for m in info_calls)  # id printed early
-    assert handoffs == [("https://serverlessn.jarvislabs.net/openai/dep1", "Qwen/Qwen3-0.6B")]
+    assert handoffs == [("https://serverlessn.jarvislabs.net/openai/dep1/v1", "Qwen/Qwen3-0.6B")]
 
 
 def test_create_detach_does_not_poll(monkeypatch):
@@ -130,7 +129,7 @@ def test_create_json_suppresses_early_id_and_snippet(monkeypatch):
     deployments = SimpleNamespace(
         create=lambda **kw: "dep1",
         wait_until_running=lambda *a, **k: _deployment(),
-        openai_base_url=lambda *a, **k: "https://serverlessn.jarvislabs.net/openai/dep1",
+        openai_base_url=lambda *a, **k: "https://serverlessn.jarvislabs.net/openai/dep1/v1",
     )
     _install_client(monkeypatch, deployments)
     info_calls: list[str] = []
@@ -141,9 +140,10 @@ def test_create_json_suppresses_early_id_and_snippet(monkeypatch):
 
     _create_call(None, json_output=True)
 
-    assert info_calls == []  # early id suppressed
-    assert handoffs == []  # snippet suppressed
-    assert printed["openai_base_url"] == "https://serverlessn.jarvislabs.net/openai/dep1"
+    # The early-id info line self-suppresses in json mode (render.info checks state);
+    # the snippet must not render — json mode emits exactly one json payload.
+    assert handoffs == []
+    assert printed["openai_base_url"] == "https://serverlessn.jarvislabs.net/openai/dep1/v1"
     assert printed["deployment_id"] == "dep1"
     assert printed["env"]["HF_TOKEN"] == "hf_****"  # env included in --json output
 
@@ -172,6 +172,25 @@ def test_create_ctrl_c_clean_detach(monkeypatch):
         _create_call(None)
     assert exc.value.exit_code == 0
     assert any("keeps running" in m for m in info_calls)
+
+
+def test_create_ctrl_c_json_emits_id(monkeypatch):
+    """json mode + Ctrl-C must still hand back the id — it must never be silently lost."""
+
+    def boom(*a, **k):
+        raise KeyboardInterrupt
+
+    deployments = SimpleNamespace(
+        create=lambda **kw: "dep1", wait_until_running=boom, openai_base_url=lambda *a, **k: "x"
+    )
+    _install_client(monkeypatch, deployments)
+    printed = {}
+    monkeypatch.setattr(deploy.render, "print_json", lambda data: printed.update(data))
+
+    with pytest.raises(typer.Exit) as exc:
+        _create_call(None, json_output=True)
+    assert exc.value.exit_code == 0
+    assert printed == {"deployment_id": "dep1", "region": "IN2"}
 
 
 def test_create_invalid_arg_syntax_dies(monkeypatch):
@@ -205,8 +224,11 @@ def test_create_handoff_uses_served_model_name_override(monkeypatch):
     handoffs: list[tuple] = []
     deployments = SimpleNamespace(
         create=lambda **kw: "dep1",
-        wait_until_running=lambda *a, **k: _deployment(),
-        openai_base_url=lambda *a, **k: "https://serverlessn.jarvislabs.net/openai/dep1",
+        # The handoff reads served_model off the record the server returned.
+        wait_until_running=lambda *a, **k: _deployment(
+            args={"model": "Qwen/Qwen3-0.6B", "served-model-name": "custom"}
+        ),
+        openai_base_url=lambda *a, **k: "https://serverlessn.jarvislabs.net/openai/dep1/v1",
     )
     _install_client(monkeypatch, deployments)
     monkeypatch.setattr(deploy.render, "info", lambda m: None)
@@ -214,7 +236,7 @@ def test_create_handoff_uses_served_model_name_override(monkeypatch):
 
     _create_call(None, arg=["served-model-name=custom"])
     # snippet model= uses the served-model-name override, not --model
-    assert handoffs == [("https://serverlessn.jarvislabs.net/openai/dep1", "custom")]
+    assert handoffs == [("https://serverlessn.jarvislabs.net/openai/dep1/v1", "custom")]
 
 
 def test_create_missing_required_flag_exits_nonzero():
@@ -305,13 +327,13 @@ def test_list_json(monkeypatch):
 def test_get_json_includes_base_url_when_running(monkeypatch):
     deployments = SimpleNamespace(
         get=lambda dep_id, region=None: _deployment(),
-        openai_base_url=lambda dep_id, region=None: "https://serverlessn.jarvislabs.net/openai/dep1",
+        openai_base_url=lambda dep_id, region=None: "https://serverlessn.jarvislabs.net/openai/dep1/v1",
     )
     _install_client(monkeypatch, deployments)
     printed = {}
     monkeypatch.setattr(deploy.render, "print_json", lambda data: printed.update(data))
     deploy.deploy_get("dep1", region=None, json_output=True)
-    assert printed["openai_base_url"] == "https://serverlessn.jarvislabs.net/openai/dep1"
+    assert printed["openai_base_url"] == "https://serverlessn.jarvislabs.net/openai/dep1/v1"
     assert printed["env"]["HF_TOKEN"] == "hf_****"  # env included
 
 

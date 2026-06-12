@@ -15,7 +15,9 @@ from jarvislabs.cli.app import app, get_client
 deploy_app = typer.Typer(name="deploy", help="Create and manage serverless model deployments.")
 app.add_typer(deploy_app, rich_help_panel="Workloads")
 
-RegionHintOption = Annotated[str | None, typer.Option("--region", help="Region hint (fast-path).")]
+RegionHintOption = Annotated[
+    str | None, typer.Option("--region", help="Region of the deployment (skips the cross-region search).")
+]
 
 
 def _parse_kv(pairs: list[str] | None, *, flag: str, redact: bool = False) -> dict[str, str]:
@@ -76,50 +78,50 @@ def deploy_create(
         raise typer.Exit()
 
     client = get_client()
-    deployment_id = client.deployments.create(
-        name=name,
-        region=region,
-        framework=framework,
-        gpu=gpu,
-        model=model,
-        gpus_per_worker=gpus_per_worker,
-        min_workers=min_workers,
-        max_workers=max_workers,
-        idle_timeout=idle_timeout,
-        wait_time=wait_time,
-        storage=storage,
-        concurrent=concurrent,
-        args=args or None,
-        env=env_dict or None,
-        wait=False,
-    )
-    # Print the id immediately so Ctrl-C can never orphan it silently (human mode only).
-    if not state.json_output:
-        render.info(f"Deployment {deployment_id} created.")
+    with render.spinner("Creating deployment..."):
+        deployment_id = client.deployments.create(
+            name=name,
+            region=region,
+            framework=framework,
+            gpu=gpu,
+            model=model,
+            gpus_per_worker=gpus_per_worker,
+            min_workers=min_workers,
+            max_workers=max_workers,
+            idle_timeout=idle_timeout,
+            wait_time=wait_time,
+            storage=storage,
+            concurrent=concurrent,
+            args=args or None,
+            env=env_dict or None,
+        )
+    # Print the id immediately so Ctrl-C can never orphan it silently.
+    render.info(f"Deployment {deployment_id} created.")
+    followup = f"Check: jl deploy get {deployment_id} · Delete: jl deploy delete {deployment_id}"
 
     if detach:
         if state.json_output:
             render.print_json({"deployment_id": deployment_id, "region": render.region_input_label(region)})
             return
-        render.info(f"Detached. Check: jl deploy get {deployment_id} · Delete: jl deploy delete {deployment_id}")
+        render.info(f"Detached. {followup}")
         return
 
     try:
         with render.spinner("Deploying..."):
             deployment = client.deployments.wait_until_running(deployment_id, region=region)
     except KeyboardInterrupt:
-        render.info(
-            f"Detached. The deployment keeps running. "
-            f"Check: jl deploy get {deployment_id} · Delete: jl deploy delete {deployment_id}"
-        )
+        # The deployment keeps building — hand back the id in both modes so it's never lost.
+        if state.json_output:
+            render.print_json({"deployment_id": deployment_id, "region": render.region_input_label(region)})
+        else:
+            render.info(f"Detached. The deployment keeps running. {followup}")
         raise typer.Exit() from None
 
     base_url = client.deployments.openai_base_url(deployment_id, region=deployment.region)
     if state.json_output:
         render.print_json({**deployment.model_dump(), "openai_base_url": base_url})
         return
-    served_model = args.get("served-model-name", model)
-    render.deployment_running_handoff(base_url, served_model)
+    render.deployment_running_handoff(base_url, deployment.served_model)
 
 
 @deploy_app.command("list")

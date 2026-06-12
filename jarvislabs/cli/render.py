@@ -104,6 +104,17 @@ def _table(title: str | None = None, **kwargs) -> Table:
     )
 
 
+def _print_detail_table(rows: list[tuple[str, str]]) -> None:
+    """Print a borderless field/value detail view (shared by instance and deployment detail)."""
+    table = Table(show_header=False, box=None, padding=(0, 2), border_style=BORDER_STYLE)
+    table.add_column("Field", style="dim")
+    # Avoid cutting off long values like notebook URLs with auth tokens.
+    table.add_column("Value", overflow="fold")
+    for field, value in rows:
+        table.add_row(field, value)
+    stdout_console.print(table)
+
+
 def instances_table(instances: list, currency: str = "USD") -> None:
     if not instances:
         info("No instances found.")
@@ -168,11 +179,6 @@ def _service_url_rows(inst) -> list[tuple[str, str]]:
 
 def instance_detail(inst, currency: str = "USD") -> None:
     sym = currency_symbol(currency)
-    table = Table(show_header=False, box=None, padding=(0, 2), border_style=BORDER_STYLE)
-    table.add_column("Field", style="dim")
-    # Avoid cutting off long values like notebook URLs with auth tokens.
-    table.add_column("Value", overflow="fold")
-
     status_style = _status_style(inst.status)
 
     cost_label = "Storage cost" if inst.status == "Paused" else "Session cost"
@@ -200,11 +206,7 @@ def instance_detail(inst, currency: str = "USD") -> None:
         rows.append(("HTTP Ports", inst.http_ports or "—"))
 
     rows.extend(_service_url_rows(inst))
-
-    for field, value in rows:
-        table.add_row(field, value)
-
-    stdout_console.print(table)
+    _print_detail_table(rows)
 
 
 def ssh_keys_table(keys: list) -> None:
@@ -357,10 +359,6 @@ def deployments_table(result) -> None:
 
 def deployment_detail(dep, *, base_url: str | None = None) -> None:
     """Full detail view including worker info (folds the would-be `health` command)."""
-    table = Table(show_header=False, box=None, padding=(0, 2), border_style=BORDER_STYLE)
-    table.add_column("Field", style="dim")
-    table.add_column("Value", overflow="fold")
-
     style = _deployment_status_style(dep.status)
     rows = [
         ("ID", f"[cyan]{escape(dep.deployment_id)}[/cyan]"),
@@ -384,10 +382,15 @@ def deployment_detail(dep, *, base_url: str | None = None) -> None:
     if dep.env:
         rows.append(("Env", _kv_label(dep.env)))
 
+    workers = dep.workers
     rows.append(("Queue depth", str(dep.queue_depth) if dep.queue_depth is not None else "—"))
-    rows.append(("Workers (live)", _workers_summary(dep.workers)))
-
-    rows.extend(_worker_rows(dep.workers))
+    rows.append(
+        ("Workers (live)", f"{workers.total} total · {workers.healthy} healthy · {workers.provisioning} provisioning")
+    )
+    rows.extend(
+        (f"  worker {i}", f"{escape(str(w.status))} (last used: {escape(str(w.last_used or '—'))})")
+        for i, w in enumerate(workers.list, start=1)
+    )
 
     rows.append(("Created", _started_label(dep.created_at)))
     rows.append(("Updated", _started_label(dep.updated_at)))
@@ -396,24 +399,11 @@ def deployment_detail(dep, *, base_url: str | None = None) -> None:
     if base_url:
         rows.append(("Base URL", _link_value(base_url)))
 
-    for field, value in rows:
-        table.add_row(field, value)
-    stdout_console.print(table)
+    _print_detail_table(rows)
 
 
 def _kv_label(data: dict) -> str:
     return ", ".join(f"{escape(str(key))}={escape(str(value))}" for key, value in data.items())
-
-
-def _workers_summary(workers) -> str:
-    return f"{workers.total} total · {workers.healthy} healthy · {workers.provisioning} provisioning"
-
-
-def _worker_rows(workers) -> list[tuple[str, str]]:
-    return [
-        (f"  worker {i}", f"{escape(str(w.status))} (last used: {escape(str(w.last_used or '—'))})")
-        for i, w in enumerate(workers.list, start=1)
-    ]
 
 
 def deployment_status_line(status) -> None:
@@ -429,7 +419,7 @@ def deployment_running_handoff(base_url: str, model: str | None) -> None:
     stdout_console.print(f"Base URL: {base_url}", markup=False, soft_wrap=True)
     snippet = (
         "from openai import OpenAI\n"
-        f'client = OpenAI(base_url="{base_url}/v1", api_key="<YOUR_JL_API_KEY>")\n'
+        f'client = OpenAI(base_url="{base_url}", api_key="<YOUR_JL_API_KEY>")\n'
         "resp = client.chat.completions.create(\n"
         f'    model="{model or "<model>"}",\n'
         '    messages=[{"role": "user", "content": "Hello"}],\n'

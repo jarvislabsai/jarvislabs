@@ -101,13 +101,13 @@ def _deployment(status="running", **overrides):
 
 
 def test_detail_shows_env_and_workers(capture):
-    render.deployment_detail(_deployment(), base_url="https://serverlessn.jarvislabs.net/openai/dep1")
+    render.deployment_detail(_deployment(), base_url="https://serverlessn.jarvislabs.net/openai/dep1/v1")
     out = capture.getvalue()
     assert "Qwen/Qwen3-0.6B" in out
     assert "max-model-len=8192" in out
     assert "hf_****" in out
     assert "worker 1" in out
-    assert "serverlessn.jarvislabs.net/openai/dep1" in out
+    assert "serverlessn.jarvislabs.net/openai/dep1/v1" in out
 
 
 def test_detail_shows_error_message(capture):
@@ -131,10 +131,11 @@ def test_status_line(capture):
 
 
 def test_running_handoff_snippet_markup_safe(capture):
-    base_url = "https://serverlessn.jarvislabs.net/openai/dep1"
+    # The base URL arrives in /v1 form and is used verbatim — print and snippet identical.
+    base_url = "https://serverlessn.jarvislabs.net/openai/dep1/v1"
     render.deployment_running_handoff(base_url, "Qwen/Qwen3-0.6B")
     out = capture.getvalue()
-    assert f'base_url="{base_url}/v1"' in out
+    assert f'base_url="{base_url}"' in out
     assert 'model="Qwen/Qwen3-0.6B"' in out
     # Brackets must survive (markup disabled).
     assert '{"role": "user", "content": "Hello"}' in out
@@ -174,6 +175,19 @@ def test_status_colors():
     assert render._deployment_status_style("cleaning") == "red"
     assert render._deployment_status_style("deleting") == "yellow"
     assert render._deployment_status_style("deleted") == "dim"
+
+
+def test_info_suppressed_in_json_mode(monkeypatch):
+    from jarvislabs.cli import state
+
+    buf = StringIO()
+    monkeypatch.setattr(render, "console", Console(file=buf, force_terminal=False, color_system=None))
+    monkeypatch.setattr(state, "json_output", True)
+    render.info("should not appear")
+    assert buf.getvalue() == ""
+    monkeypatch.setattr(state, "json_output", False)
+    render.info("visible")
+    assert "visible" in buf.getvalue()
 
 
 def test_confirm_json_mode_dies(monkeypatch, capsys):

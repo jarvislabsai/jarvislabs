@@ -88,6 +88,16 @@ def test_model_property_none_without_args():
     assert dep.model is None
 
 
+def test_served_model_prefers_served_model_name():
+    dep = Deployment(deployment_id="d", status="running", args={"model": "org/base", "served-model-name": "alias"})
+    assert dep.served_model == "alias"
+
+
+def test_served_model_falls_back_to_model():
+    dep = Deployment(deployment_id="d", status="running", args={"model": "org/base"})
+    assert dep.served_model == "org/base"
+
+
 def test_start_time_parses_naive_and_tz_aware():
     naive = Deployment(deployment_id="d", status="running", start_time="2026-06-08T08:38:45.011322")
     assert isinstance(naive.start_time, datetime)

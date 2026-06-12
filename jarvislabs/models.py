@@ -259,6 +259,11 @@ class Deployment(BaseModel):
     def model(self) -> str | None:
         return (self.args or {}).get("model")
 
+    @property
+    def served_model(self) -> str | None:
+        """Model name inference clients must use: the served-model-name arg when set, else the model id."""
+        return (self.args or {}).get("served-model-name") or self.model
+
 
 class DeploymentSummary(BaseModel):
     model_config = ConfigDict(extra="ignore")

@@ -5,12 +5,20 @@ from __future__ import annotations
 import pytest
 
 from jarvislabs import deployments as client_mod
-from jarvislabs.constants import CHENNAI_REGION, INDIA_NOIDA_REGION
+from jarvislabs.constants import INDIA_NOIDA_REGION
 from jarvislabs.deployments import Deployments
-from jarvislabs.exceptions import APIError, AuthError, JarvislabsError, NotFoundError, ValidationError
-from jarvislabs.models import Deployment, DeploymentStatus, DeploymentSummary
+from jarvislabs.exceptions import (
+    APIError,
+    AuthError,
+    JarvislabsError,
+    NotFoundError,
+    RegionResolutionError,
+    ValidationError,
+)
+from jarvislabs.models import Deployment, DeploymentStatus
 
 NOIDA_URL = "https://serverlessn.jarvislabs.net/"
+CHENNAI_URL = "https://serverlessc.jarvislabs.net/"
 
 
 def _deps(mock_transport):
@@ -59,7 +67,6 @@ def _create_kwargs(**overrides):
         "idle_timeout": 600,
         "wait_time": 60,
         "storage": 50,
-        "wait": False,
     }
     kwargs.update(overrides)
     return kwargs
@@ -99,9 +106,8 @@ def test_create_thin_cli_passes_arbitrary_gpu_through(mock_transport):
 def test_create_accepts_in1_region(mock_transport):
     # Serverless is now live in Chennai (IN1) — create routes there instead of rejecting.
     mock_transport.request.return_value = {"deployment_id": "dep1"}
-    deps = _deps(mock_transport)
-    assert deps.create(**_create_kwargs(region="IN1")) == "dep1"
-    assert deps._region_cache["dep1"] == CHENNAI_REGION
+    assert _deps(mock_transport).create(**_create_kwargs(region="IN1")) == "dep1"
+    assert mock_transport.request.call_args.kwargs["base_url"] == CHENNAI_URL
 
 
 def test_wait_until_running_times_out_on_unknown_status(mock_transport):
@@ -115,13 +121,6 @@ def test_wait_until_running_times_out_on_unknown_status(mock_transport):
 def test_create_rejects_eu_region(mock_transport):
     with pytest.raises(ValidationError):
         _deps(mock_transport).create(**_create_kwargs(region="EU1"))
-
-
-def test_create_populates_cache(mock_transport):
-    mock_transport.request.return_value = {"deployment_id": "dep1"}
-    deps = _deps(mock_transport)
-    deps.create(**_create_kwargs())
-    assert deps._region_cache["dep1"] == INDIA_NOIDA_REGION
 
 
 def test_create_no_id_raises(mock_transport):
@@ -147,11 +146,9 @@ def test_wait_until_running_success(monkeypatch, mock_transport):
         {"status": "running"},
         _get_payload(),  # final GET
     ]
-    deps = _deps(mock_transport)
-    result = deps.wait_until_running("dep1", region="IN2")
+    result = _deps(mock_transport).wait_until_running("dep1", region="IN2")
     assert isinstance(result, Deployment)
     assert result.status == "running"
-    assert deps._region_cache["dep1"] == INDIA_NOIDA_REGION
 
 
 def test_wait_until_running_failed_surfaces_reason(monkeypatch, mock_transport):
@@ -239,20 +236,38 @@ def test_wait_until_running_non_transient_raises_immediately(monkeypatch, mock_t
 
 
 def test_openai_base_url_exact_string(mock_transport):
+    # The /v1 form — paste-ready for any OpenAI client's base_url field.
     url = _deps(mock_transport).openai_base_url("dep1", region="IN2")
-    assert url == "https://serverlessn.jarvislabs.net/openai/dep1"
-    assert not url.endswith("/v1")
+    assert url == "https://serverlessn.jarvislabs.net/openai/dep1/v1"
     assert not url.endswith("/")
     mock_transport.request.assert_not_called()
 
 
-# ── get / status fan-out ───────────────────────────────────────────────────────
+# ── get / status (region given vs. searched) ────────────────────────────────────
 
 
-def test_get_fast_path_with_region_skips_fan_out(mock_transport):
+def test_get_with_region_goes_straight_there(mock_transport):
     mock_transport.request.return_value = _get_payload()
-    deps = _deps(mock_transport)
-    dep = deps.get("dep1", region="IN2")
+    dep = _deps(mock_transport).get("dep1", region="IN2")
+    assert dep.deployment_id == "dep1"
+    assert mock_transport.request.call_count == 1
+    assert mock_transport.request.call_args.kwargs["base_url"] == NOIDA_URL
+
+
+def test_get_without_region_searches_and_finds(mock_transport):
+    # Chennai says "never heard of it", Noida has it — and the search already
+    # returned the record, so no extra fetch happens.
+    mock_transport.request.side_effect = [NotFoundError("nope"), _get_payload()]
+    dep = _deps(mock_transport).get("dep1")
+    assert dep.deployment_id == "dep1"
+    assert mock_transport.request.call_count == 2
+    assert dep.region == INDIA_NOIDA_REGION
+
+
+def test_get_search_stops_at_first_region_that_has_it(mock_transport):
+    # Found in Chennai (asked first) — the search returns immediately, no second request.
+    mock_transport.request.return_value = _get_payload()
+    dep = _deps(mock_transport).get("dep1")
     assert dep.deployment_id == "dep1"
     assert mock_transport.request.call_count == 1
 
@@ -264,22 +279,94 @@ def test_get_not_found_all_regions(mock_transport):
     assert "not found in any region" in str(exc.value)
 
 
+def test_get_wrong_region_is_trusted_not_rescued(mock_transport):
+    # An explicit --region is trusted: if the deployment isn't there, that's a
+    # plain 404 — we don't search other regions behind the user's back.
+    mock_transport.request.side_effect = NotFoundError("nope")
+    with pytest.raises(NotFoundError):
+        _deps(mock_transport).get("dep1", region="IN1")
+    assert mock_transport.request.call_count == 1
+
+
+def test_get_one_region_down_other_has_it_succeeds(mock_transport):
+    # Chennai is unreachable but Noida has the deployment — partial outage
+    # doesn't block a successful lookup.
+    mock_transport.request.side_effect = [APIError(0, "timeout"), _get_payload()]
+    dep = _deps(mock_transport).get("dep1")
+    assert dep.deployment_id == "dep1"
+
+
+def test_get_non_transient_error_raises_immediately(mock_transport):
+    mock_transport.request.side_effect = APIError(400, "bad")
+    with pytest.raises(APIError):
+        _deps(mock_transport).get("dep1", region="IN2")
+    assert mock_transport.request.call_count == 1
+
+
+def test_get_unreachable_region_raises_resolution_error(mock_transport):
+    # Not found in Chennai, Noida unreachable — can't honestly say "not found".
+    mock_transport.request.side_effect = [NotFoundError("nope"), APIError(503, "down")]
+    with pytest.raises(RegionResolutionError) as exc:
+        _deps(mock_transport).get("dep1")
+    msg = str(exc.value)
+    assert "could not check" in msg and "IN2" in msg
+
+
+def test_get_unreachable_then_404_raises_resolution_error(mock_transport):
+    # Mirror ordering: Chennai unreachable, Noida says no — same honest answer.
+    mock_transport.request.side_effect = [APIError(0, "down"), NotFoundError("nope")]
+    with pytest.raises(RegionResolutionError) as exc:
+        _deps(mock_transport).get("dep1")
+    msg = str(exc.value)
+    assert "could not check" in msg and "IN1" in msg
+
+
 def test_status_json_shape_includes_region(mock_transport):
     mock_transport.request.return_value = {"status": "running"}
     status = _deps(mock_transport).status("dep1", region="IN2")
     assert isinstance(status, DeploymentStatus)
     dumped = status.model_dump()
     assert dumped == {"deployment_id": "dep1", "region": "IN2", "status": "running"}
+    # With a region given, status uses the lightweight status endpoint.
+    assert mock_transport.request.call_args.args[1] == "management/dep1/status"
 
 
-def test_get_uses_cache_fast_path(mock_transport):
-    """A cache hit reads the cached region directly (no fan-out)."""
-    mock_transport.request.return_value = _get_payload()
-    deps = _deps(mock_transport)
-    deps._region_cache["dep1"] = INDIA_NOIDA_REGION
-    deps.get("dep1")
-    assert mock_transport.request.call_count == 1
-    assert mock_transport.request.call_args.kwargs["base_url"] == NOIDA_URL
+def test_status_without_region_searches_and_reads_record(mock_transport):
+    # The search returns the full record; status comes from it — no extra call.
+    mock_transport.request.side_effect = [NotFoundError("nope"), _get_payload(status="starting")]
+    status = _deps(mock_transport).status("dep1")
+    assert status.model_dump() == {"deployment_id": "dep1", "region": "IN2", "status": "starting"}
+    assert mock_transport.request.call_count == 2
+
+
+def test_wait_until_running_hintless_reaped_reports_failure(mock_transport, monkeypatch):
+    # The search proved the deployment existed; if it vanishes before the first
+    # poll, that's a failure — not a confusing "not found".
+    _patch_sleep(monkeypatch)
+    mock_transport.request.side_effect = [
+        NotFoundError("nope"),  # search: Chennai
+        _get_payload(status="downloading_model"),  # search: Noida — it exists
+        *[NotFoundError("gone")] * 5,  # reaped before the first poll
+    ]
+    with pytest.raises(JarvislabsError) as exc:
+        _deps(mock_transport).wait_until_running("dep1")
+    assert not isinstance(exc.value, NotFoundError)
+    assert "failed: reason unavailable" in str(exc.value)
+
+
+def test_wait_until_running_without_region_searches_then_polls(mock_transport, monkeypatch):
+    _patch_sleep(monkeypatch)
+    mock_transport.request.side_effect = [
+        NotFoundError("nope"),  # search: Chennai
+        _get_payload(status="downloading_model"),  # search: Noida — found
+        {"status": "running"},  # poll
+        _get_payload(),  # final GET
+    ]
+    result = _deps(mock_transport).wait_until_running("dep1")
+    assert result.status == "running"
+    polled = mock_transport.request.call_args_list[2]
+    assert polled.args[1] == "management/dep1/status"
+    assert polled.kwargs["base_url"] == NOIDA_URL
 
 
 # ── list ────────────────────────────────────────────────────────────────────────
@@ -303,45 +390,65 @@ def _list_item(deployment_id, start_time):
     }
 
 
-def _summary(deployment_id, start_time, region):
-    return DeploymentSummary(**{**_list_item(deployment_id, start_time), "region": region})
-
-
-def test_list_merges_tags_and_sorts_newest_first(monkeypatch, mock_transport):
-    def fake_fan_out(op, **kwargs):
-        noida = [_summary("old", "2026-01-01T00:00:00", INDIA_NOIDA_REGION)]
-        chennai = [_summary("new", "2026-06-01T00:00:00", CHENNAI_REGION)]
-        return [(INDIA_NOIDA_REGION, noida), (CHENNAI_REGION, chennai)], []
-
-    monkeypatch.setattr(client_mod, "search_serverless_regions", fake_fan_out)
+def test_list_merges_tags_and_sorts_newest_first(mock_transport):
+    # Chennai (queried first) has the newer deployment, Noida the older one.
+    mock_transport.request.side_effect = [
+        {"deployments": [_list_item("new", "2026-06-01T00:00:00")]},  # Chennai
+        {"deployments": [_list_item("old", "2026-01-01T00:00:00")]},  # Noida
+    ]
     result = _deps(mock_transport).list()
     assert [d.deployment_id for d in result.deployments] == ["new", "old"]  # newest first
-    assert result.deployments[0].model_dump()["region"] == "IN1"
+    assert result.deployments[0].model_dump()["region"] == "IN1"  # host region wins over payload's
 
 
-def test_list_partial_failure_records_region_error(monkeypatch, mock_transport):
-    def fake_fan_out(op, **kwargs):
-        noida = [_summary("a", "2026-01-01T00:00:00", INDIA_NOIDA_REGION)]
-        return [(INDIA_NOIDA_REGION, noida)], [(CHENNAI_REGION, "timeout")]
-
-    monkeypatch.setattr(client_mod, "search_serverless_regions", fake_fan_out)
+def test_list_partial_failure_records_region_error(mock_transport):
+    mock_transport.request.side_effect = [
+        APIError(0, "timeout"),  # Chennai down
+        {"deployments": [_list_item("a", "2026-01-01T00:00:00")]},  # Noida fine
+    ]
     result = _deps(mock_transport).list()
     assert len(result.deployments) == 1
     assert result.region_errors[0].model_dump() == {"region": "IN1", "error": "timeout"}
 
 
-def test_list_all_regions_down_hard_fails(monkeypatch, mock_transport):
-    monkeypatch.setattr(client_mod, "search_serverless_regions", lambda op, **k: ([], [(INDIA_NOIDA_REGION, "down")]))
+def test_list_all_regions_down_hard_fails(mock_transport):
+    mock_transport.request.side_effect = APIError(503, "down")
     with pytest.raises(JarvislabsError) as exc:
         _deps(mock_transport).list()
     assert not isinstance(exc.value, APIError)
+    assert "IN1: down" in str(exc.value) and "IN2: down" in str(exc.value)
 
 
-def test_list_caches_regions(mock_transport):
-    mock_transport.request.return_value = {"deployments": [_list_item("a", "2026-01-01T00:00:00")]}
-    deps = _deps(mock_transport)
-    deps.list()
-    assert deps._region_cache["a"] == INDIA_NOIDA_REGION
+def test_list_empty_regions_is_not_an_error(mock_transport):
+    # Both regions answered with nothing — that's a clean empty list, not a failure.
+    mock_transport.request.return_value = {"deployments": []}
+    result = _deps(mock_transport).list()
+    assert result.deployments == [] and result.region_errors == []
+
+
+def test_list_non_transient_error_reraises(mock_transport):
+    mock_transport.request.side_effect = APIError(400, "bad request")
+    with pytest.raises(APIError):
+        _deps(mock_transport).list()
+
+
+def test_list_region_404_propagates_loudly(mock_transport):
+    # /list is a fixed route and can't legitimately 404 — if it ever does,
+    # fail loudly instead of silently treating the region as empty.
+    mock_transport.request.side_effect = NotFoundError("nope")
+    with pytest.raises(NotFoundError):
+        _deps(mock_transport).list()
+
+
+def test_list_sorts_mixed_none_and_tz_aware_start_times(mock_transport):
+    # Aware, naive, and missing timestamps must sort without crashing —
+    # newest first, missing last.
+    mock_transport.request.side_effect = [
+        {"deployments": [_list_item("aware", "2026-06-01T00:00:00+00:00"), _list_item("missing", None)]},
+        {"deployments": [_list_item("naive", "2026-01-01T00:00:00")]},
+    ]
+    result = _deps(mock_transport).list()
+    assert [d.deployment_id for d in result.deployments] == ["aware", "naive", "missing"]
 
 
 # ── update ──────────────────────────────────────────────────────────────────────

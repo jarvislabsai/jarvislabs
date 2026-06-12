@@ -10,13 +10,17 @@ from typing import TYPE_CHECKING
 from jarvislabs.constants import (
     DEPLOYMENT_POLL_INTERVAL_S,
     DEPLOYMENT_POLL_MAX_TRANSIENT_ERRORS,
-    DEPLOYMENT_TERMINAL_FAILURE,
-    DEPLOYMENT_TERMINAL_OTHER,
-    DEPLOYMENT_TERMINAL_SUCCESS,
     DEPLOYMENT_TRANSIENT_STATUS,
     DEPLOYMENT_WAIT_TIMEOUT_S,
+    SERVERLESS_REGIONS,
 )
-from jarvislabs.exceptions import APIError, JarvislabsError, NotFoundError, ValidationError
+from jarvislabs.exceptions import (
+    APIError,
+    JarvislabsError,
+    NotFoundError,
+    RegionResolutionError,
+    ValidationError,
+)
 from jarvislabs.models import (
     Deployment,
     DeploymentListResult,
@@ -24,30 +28,23 @@ from jarvislabs.models import (
     DeploymentSummary,
     RegionError,
 )
-from jarvislabs.regions import (
-    normalize_serverless_region,
-    region_code,
-    resolve_deployment_region,
-    search_serverless_regions,
-    serverless_region_url,
-)
+from jarvislabs.regions import normalize_serverless_region, region_code, serverless_region_url
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from jarvislabs.transport import Transport
 
 
 class Deployments:
     """Serverless model deployments: create, list, get, status, update, delete.
 
-    Resolves a deployment's region (with an in-memory id->region cache) and routes
-    each call to the right serverless host.
+    A deployment lives in exactly one region, and an id alone doesn't say
+    which. Every per-id method therefore takes an optional ``region``: when
+    given, we go straight to that region's host; when not, ``_find_deployment``
+    asks every region and exactly one is expected to have it.
     """
 
     def __init__(self, transport: Transport) -> None:
         self._t = transport
-        self._region_cache: dict[str, str] = {}
 
     def create(
         self,
@@ -66,12 +63,11 @@ class Deployments:
         concurrent: int | None = None,
         args: dict[str, str] | None = None,
         env: dict[str, str] | None = None,
-        wait: bool = True,
-    ) -> Deployment | str:
-        """Create a deployment in the chosen region.
+    ) -> str:
+        """Create a deployment and return its id.
 
-        ``wait=True`` polls until the deployment is running and returns the final
-        ``Deployment``; ``wait=False`` returns the deployment id.
+        Creation is asynchronous: the id comes back immediately while the
+        deployment builds in the background. Poll with ``wait_until_running``.
         """
         internal_region = normalize_serverless_region(region)
         payload: dict = {
@@ -94,47 +90,55 @@ class Deployments:
 
         base_url = serverless_region_url(internal_region)
         resp = self._t.request("POST", "management/create", json=payload, base_url=base_url)
-        deployment_id = resp.get("deployment_id") if isinstance(resp, dict) else None
+        deployment_id = resp.get("deployment_id")
         if not deployment_id:
             raise JarvislabsError("Failed to create deployment: no deployment_id returned.")
-
-        self._region_cache[deployment_id] = internal_region
-        if not wait:
-            return deployment_id
-        return self.wait_until_running(deployment_id, region=internal_region)
+        return deployment_id
 
     def list(self) -> DeploymentListResult:
-        """Fan out across all serverless regions, merge, and sort newest-first."""
+        """List deployments across all serverless regions, newest first.
 
-        def fetch(region: str) -> list[DeploymentSummary]:
-            base_url = serverless_region_url(region)
-            resp = self._t.request("GET", "management/list", base_url=base_url)
-            items = resp.get("deployments", []) if isinstance(resp, dict) else []
-            return [DeploymentSummary(**{**item, "region": region}) for item in items]
-
-        found, unreachable = search_serverless_regions(fetch)
-        if not found and unreachable:
-            raise JarvislabsError("; ".join(f"{region_code(r)}: {msg}" for r, msg in unreachable))
-
+        Regions that can't be reached are reported in ``region_errors`` rather
+        than hiding the rest; if no region answers at all, raise.
+        """
         deployments: list[DeploymentSummary] = []
-        for region, rows in found:
-            for row in rows:
-                self._region_cache[row.deployment_id] = region
-                deployments.append(row)
-        deployments.sort(key=_summary_sort_key, reverse=True)
+        region_errors: list[RegionError] = []
+        answered = False
 
-        region_errors = [RegionError(region=region, error=msg) for region, msg in unreachable]
+        for region in sorted(SERVERLESS_REGIONS):
+            try:
+                resp = self._t.request("GET", "management/list", base_url=serverless_region_url(region))
+            except APIError as exc:
+                if exc.status_code not in DEPLOYMENT_TRANSIENT_STATUS:
+                    raise
+                region_errors.append(RegionError(region=region, error=str(exc)))
+                continue
+            answered = True
+            for item in resp.get("deployments", []):
+                deployments.append(DeploymentSummary(**{**item, "region": region}))
+
+        if not answered and region_errors:
+            raise JarvislabsError("; ".join(f"{region_code(e.region)}: {e.error}" for e in region_errors))
+
+        deployments.sort(key=_newest_first_key, reverse=True)
         return DeploymentListResult(deployments=deployments, region_errors=region_errors)
 
     def get(self, deployment_id: str, *, region: str | None = None) -> Deployment:
-        """Full record. Fast-path a region hint/cache; otherwise fan out."""
-        _, deployment = self._resolve(deployment_id, region, self._fetch_get)
+        """Fetch the full deployment record, including live worker info."""
+        if region:
+            return self._fetch_deployment(deployment_id, normalize_serverless_region(region))
+        _, deployment = self._find_deployment(deployment_id)
         return deployment
 
     def status(self, deployment_id: str, *, region: str | None = None) -> DeploymentStatus:
-        """Lightweight status with the resolved region attached."""
-        resolved, status = self._resolve(deployment_id, region, self._fetch_status)
-        return DeploymentStatus(deployment_id=deployment_id, region=resolved, status=status)
+        """Fetch just the lifecycle status, with the deployment's region attached."""
+        if region:
+            resolved_region = normalize_serverless_region(region)
+            status = self._fetch_status(deployment_id, resolved_region)
+        else:
+            resolved_region, deployment = self._find_deployment(deployment_id)
+            status = deployment.status
+        return DeploymentStatus(deployment_id=deployment_id, region=resolved_region, status=status)
 
     def update(
         self,
@@ -145,7 +149,11 @@ class Deployments:
         wait_time: int | None = None,
         region: str | None = None,
     ) -> Deployment:
-        """Patch name/idle_timeout/wait_time on a running deployment, then re-fetch."""
+        """Update a running deployment and return the refreshed record.
+
+        Only ``name``, ``idle_timeout``, and ``wait_time`` can change; scaling
+        settings require recreating the deployment.
+        """
         patch: dict = {}
         if name is not None:
             patch["name"] = name
@@ -156,10 +164,18 @@ class Deployments:
         if not patch:
             raise ValidationError("Pass at least one of name / idle_timeout / wait_time.")
 
-        resolved, deployment = self._resolve(deployment_id, region, self._fetch_get)
-        base_url = serverless_region_url(resolved)
+        # Read before writing: confirms the deployment exists and gives us its
+        # current status for a clear message if the update is rejected.
+        if region:
+            resolved_region = normalize_serverless_region(region)
+            deployment = self._fetch_deployment(deployment_id, resolved_region)
+        else:
+            resolved_region, deployment = self._find_deployment(deployment_id)
+
         try:
-            self._t.request("PATCH", f"management/{deployment_id}", json=patch, base_url=base_url)
+            self._t.request(
+                "PATCH", f"management/{deployment_id}", json=patch, base_url=serverless_region_url(resolved_region)
+            )
         except APIError as exc:
             if exc.status_code == 409:
                 raise ValidationError(
@@ -167,45 +183,52 @@ class Deployments:
                     "Min/max workers are not patchable — recreate to rescale."
                 ) from exc
             raise
-        return self.get(deployment_id, region=resolved)
+        return self.get(deployment_id, region=resolved_region)
 
     def delete(self, deployment_id: str, *, region: str | None = None) -> bool:
-        """Find the deployment's region, then delete it."""
-        resolved, _ = self._resolve(deployment_id, region, self._fetch_get)
-        base_url = serverless_region_url(resolved)
-        with contextlib.suppress(NotFoundError):
-            self._t.request("DELETE", f"management/{deployment_id}", base_url=base_url)
-        self._region_cache.pop(deployment_id, None)
-        return True
+        """Delete a deployment. A 404 on the delete itself (it vanished after
+        lookup) is treated as success; an unknown id raises ``NotFoundError``."""
+        if region:
+            resolved_region = normalize_serverless_region(region)
+            self._fetch_deployment(deployment_id, resolved_region)  # confirm it exists before deleting
+        else:
+            resolved_region, _ = self._find_deployment(deployment_id)
 
-    # ── helpers ──
+        with contextlib.suppress(NotFoundError):
+            self._t.request("DELETE", f"management/{deployment_id}", base_url=serverless_region_url(resolved_region))
+        return True
 
     def wait_until_running(
         self, deployment_id: str, *, region: str | None = None, timeout: float = DEPLOYMENT_WAIT_TIMEOUT_S
     ) -> Deployment:
-        """Poll status until a terminal state, or until ``timeout`` seconds elapse.
+        """Poll every few seconds until the deployment is running, then return it.
 
-        The poller recognizes terminal statuses (anything else means in-progress);
-        the timeout is a backstop so an unrecognized terminal status can't poll forever.
+        Raises if the deployment fails or gets deleted while waiting, or once
+        ``timeout`` seconds pass without reaching a known final status.
         """
-        resolved = self._resolve_for_read(deployment_id, region)
-        base_url = serverless_region_url(resolved)
+        if region:
+            resolved_region = normalize_serverless_region(region)
+            seen_status = False
+        else:
+            resolved_region, _ = self._find_deployment(deployment_id)
+            seen_status = True  # the search just saw it exist
+        base_url = serverless_region_url(resolved_region)
+
         transient = 0
-        seen_status = False
         deadline = time.monotonic() + timeout
         while True:
             try:
                 resp = self._t.request("GET", f"management/{deployment_id}/status", base_url=base_url)
-                status = resp.get("status") if isinstance(resp, dict) else None
+                status = resp.get("status")
                 transient = 0
                 seen_status = True
             except NotFoundError:
                 transient += 1
                 if transient >= DEPLOYMENT_POLL_MAX_TRANSIENT_ERRORS:
                     if seen_status:
-                        # A deployment we were tracking that now consistently 404s
-                        # failed and was already cleaned up — report the failure,
-                        # not a confusing "not found".
+                        # The deployment existed and then vanished mid-poll: it
+                        # failed and was cleaned up before we could read why.
+                        # Report the failure, not a confusing "not found".
                         raise JarvislabsError(f"Deployment {deployment_id} failed: reason unavailable") from None
                     raise
                 time.sleep(DEPLOYMENT_POLL_INTERVAL_S)
@@ -219,14 +242,13 @@ class Deployments:
                 time.sleep(DEPLOYMENT_POLL_INTERVAL_S)
                 continue
 
-            if status in DEPLOYMENT_TERMINAL_SUCCESS:
-                self._region_cache[deployment_id] = resolved
-                return self._fetch_get(deployment_id, resolved)
-            if status in DEPLOYMENT_TERMINAL_FAILURE:
+            if status == "running":
+                return self._fetch_deployment(deployment_id, resolved_region)
+            if status in ("failed", "cleaning"):
                 raise JarvislabsError(
-                    f"Deployment {deployment_id} {status}: {self._failure_reason(deployment_id, resolved)}"
+                    f"Deployment {deployment_id} {status}: {self._failure_reason(deployment_id, resolved_region)}"
                 )
-            if status in DEPLOYMENT_TERMINAL_OTHER:
+            if status == "deleting":
                 raise JarvislabsError(f"Deployment {deployment_id} is being deleted (status: {status}).")
 
             if time.monotonic() >= deadline:
@@ -238,34 +260,39 @@ class Deployments:
             time.sleep(DEPLOYMENT_POLL_INTERVAL_S)
 
     def openai_base_url(self, deployment_id: str, *, region: str | None = None) -> str:
-        """OpenAI-compatible base URL: ``<host>/openai/<id>`` (no /v1, no trailing slash)."""
-        resolved = self._resolve_for_read(deployment_id, region)
-        host = serverless_region_url(resolved).rstrip("/")
-        return f"{host}/openai/{deployment_id}"
+        """OpenAI-compatible base URL for the deployment, ready to paste into any
+        OpenAI client's ``base_url`` field."""
+        if region:
+            resolved_region = normalize_serverless_region(region)
+        else:
+            resolved_region, _ = self._find_deployment(deployment_id)
+        host = serverless_region_url(resolved_region).rstrip("/")
+        return f"{host}/openai/{deployment_id}/v1"
 
-    def _resolve_hint(self, region: str | None) -> str | None:
-        return normalize_serverless_region(region) if region else None
+    # ── internals ──
 
-    def _resolve(
-        self, deployment_id: str, region: str | None, fetch: Callable[[str, str], Deployment | str]
-    ) -> tuple[str, Deployment | str]:
-        """Resolve the deployment's region (hint/cache fast-path, else fan out), running ``fetch``."""
-        return resolve_deployment_region(
-            deployment_id,
-            lambda r: fetch(deployment_id, r),
-            hint=self._resolve_hint(region),
-            cache=self._region_cache,
-        )
+    def _find_deployment(self, deployment_id: str) -> tuple[str, Deployment]:
+        """Find a deployment when its region isn't known: ask each region,
+        return (region, deployment) from the one that has it."""
+        unreachable: list[str] = []
+        for region in sorted(SERVERLESS_REGIONS):
+            try:
+                return region, self._fetch_deployment(deployment_id, region)
+            except NotFoundError:
+                continue
+            except APIError as exc:
+                if exc.status_code not in DEPLOYMENT_TRANSIENT_STATUS:
+                    raise
+                unreachable.append(region)
 
-    def _resolve_for_read(self, deployment_id: str, region: str | None) -> str:
-        """Resolve a region for a read-only op: hint fast-path, else the cheap status endpoint."""
-        hint = self._resolve_hint(region)
-        if hint is not None:
-            return hint
-        resolved, _ = self._resolve(deployment_id, region, self._fetch_status)
-        return resolved
+        if unreachable:
+            codes = ", ".join(region_code(r) for r in unreachable)
+            raise RegionResolutionError(
+                f"Deployment {deployment_id} not found; could not check {codes}. Retry, or specify the region."
+            )
+        raise NotFoundError(f"Deployment {deployment_id} not found in any region.")
 
-    def _fetch_get(self, deployment_id: str, region: str) -> Deployment:
+    def _fetch_deployment(self, deployment_id: str, region: str) -> Deployment:
         base_url = serverless_region_url(region)
         resp = self._t.request("GET", f"management/{deployment_id}", base_url=base_url)
         return Deployment(**{**resp, "region": region})
@@ -273,18 +300,22 @@ class Deployments:
     def _fetch_status(self, deployment_id: str, region: str) -> str:
         base_url = serverless_region_url(region)
         resp = self._t.request("GET", f"management/{deployment_id}/status", base_url=base_url)
-        return resp.get("status", "") if isinstance(resp, dict) else ""
+        return resp.get("status", "")
 
     def _failure_reason(self, deployment_id: str, region: str) -> str:
-        """Return the deployment's error_message, or 'reason unavailable' if it can't be read."""
+        """The deployment's error message, or 'reason unavailable' if it can't be read."""
         try:
-            return self._fetch_get(deployment_id, region).error_message or "reason unavailable"
+            return self._fetch_deployment(deployment_id, region).error_message or "reason unavailable"
         except NotFoundError:
             return "reason unavailable"
 
 
-def _summary_sort_key(summary: DeploymentSummary) -> tuple[bool, datetime]:
-    """Newest-first by start_time; rows with no start_time sort last."""
+def _newest_first_key(summary: DeploymentSummary) -> tuple[bool, datetime]:
+    """Sort key: newest start_time first, rows without one last.
+
+    Timestamps may arrive timezone-aware or naive; Python can't compare the
+    two, so strip the timezone before comparing.
+    """
     start = summary.start_time
     if start is not None and start.tzinfo is not None:
         start = start.replace(tzinfo=None)
