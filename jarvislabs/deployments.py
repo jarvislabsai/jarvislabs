@@ -191,15 +191,22 @@ class Deployments:
         resolved = self._resolve_for_read(deployment_id, region)
         base_url = serverless_region_url(resolved)
         transient = 0
+        seen_status = False
         deadline = time.monotonic() + timeout
         while True:
             try:
                 resp = self._t.request("GET", f"management/{deployment_id}/status", base_url=base_url)
                 status = resp.get("status") if isinstance(resp, dict) else None
                 transient = 0
+                seen_status = True
             except NotFoundError:
                 transient += 1
                 if transient >= DEPLOYMENT_POLL_MAX_TRANSIENT_ERRORS:
+                    if seen_status:
+                        # A deployment we were tracking that now consistently 404s
+                        # failed and was already cleaned up — report the failure,
+                        # not a confusing "not found".
+                        raise JarvislabsError(f"Deployment {deployment_id} failed: reason unavailable") from None
                     raise
                 time.sleep(DEPLOYMENT_POLL_INTERVAL_S)
                 continue

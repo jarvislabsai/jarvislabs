@@ -205,6 +205,28 @@ def test_wait_until_running_gives_up_after_max_transient(monkeypatch, mock_trans
     assert mock_transport.request.call_count == 5  # DEPLOYMENT_POLL_MAX_TRANSIENT_ERRORS
 
 
+def test_wait_until_running_vanished_mid_poll_reports_failure(monkeypatch, mock_transport):
+    _patch_sleep(monkeypatch)
+    # Seen alive once, then consistently 404s: the deployment failed and was
+    # cleaned up between polls — report the failure, not a raw "not found".
+    mock_transport.request.side_effect = [
+        {"status": "downloading_model"},
+        *[NotFoundError("gone")] * 5,
+    ]
+    with pytest.raises(JarvislabsError) as exc:
+        _deps(mock_transport).wait_until_running("dep1", region="IN2")
+    assert not isinstance(exc.value, NotFoundError)
+    assert "failed: reason unavailable" in str(exc.value)
+
+
+def test_wait_until_running_never_seen_404_raises_not_found(monkeypatch, mock_transport):
+    _patch_sleep(monkeypatch)
+    # 404 from the very first poll — the id is genuinely unknown; keep "not found".
+    mock_transport.request.side_effect = NotFoundError("nope")
+    with pytest.raises(NotFoundError):
+        _deps(mock_transport).wait_until_running("dep1", region="IN2")
+
+
 def test_wait_until_running_non_transient_raises_immediately(monkeypatch, mock_transport):
     _patch_sleep(monkeypatch)
     mock_transport.request.side_effect = APIError(400, "bad")

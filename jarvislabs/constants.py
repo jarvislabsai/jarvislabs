@@ -66,9 +66,11 @@ SERVERLESS_REGIONS: frozenset[str] = frozenset(SERVERLESS_REGION_URLS)
 
 DEPLOYMENT_POLL_INTERVAL_S = 3
 DEPLOYMENT_POLL_MAX_TRANSIENT_ERRORS = 5
-# Overall wall-clock cap for wait_until_running (20 min) so an unrecognized
-# terminal status can't poll forever. Generous — model downloads can be slow.
-DEPLOYMENT_WAIT_TIMEOUT_S = 1200
+# Overall wall-clock cap for wait_until_running (75 min) so an unrecognized
+# terminal status can't poll forever. Generous — large model downloads can
+# take close to an hour, and giving up early on a healthy deploy is worse
+# than a long wait.
+DEPLOYMENT_WAIT_TIMEOUT_S = 4500
 
 # Statuses treated as a transient/unreachable region rather than a missing
 # deployment (retryable HTTP statuses plus 0 for connection/timeout).
