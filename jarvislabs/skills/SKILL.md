@@ -62,6 +62,8 @@ Container template availability is not exposed in `jl resources --json`. Current
 
 Run `jl gpus` to check GPU availability and pricing. Output shows **GPU Containers** and **GPU VMs** tables with separate availability for each. Spot prices are shown only for GPU containers.
 
+Run `jl cpus` to check CPU VM availability and pricing. Output shows vCPU, RAM, region, and hourly price for each CPU VM size.
+
 Run `jl resources` when you also need CPU VM availability and pricing. It shows GPU containers, GPU VMs, and CPU VMs, with one shared available/unavailable legend at the end.
 
 How to read `jl gpus --json` availability:

@@ -111,6 +111,24 @@ def resources(
 
 
 @app.command(rich_help_panel="Resources")
+def cpus(
+    json_output: cli_options.JsonOption = False,
+) -> None:
+    """Show CPU VM availability and pricing."""
+    cli_options.apply_command_options(json_output=json_output)
+    client = get_client()
+    with render.spinner("Fetching CPU availability..."):
+        meta = client.account.resources()
+        currency = client.account.currency()
+
+    if state.json_output:
+        render.print_json(render.jsonable_cpu_meta(meta.cpu_meta))
+        return
+
+    render.cpu_vm_table(meta.cpu_meta, currency)
+
+
+@app.command(rich_help_panel="Resources")
 def templates(
     json_output: cli_options.JsonOption = False,
 ) -> None:

@@ -475,6 +475,9 @@ assert_output_contains "status has Balance" "Balance"
 run_expect_success "table: gpus" jl gpus
 assert_output_contains "gpus output has GPU" "GPU"
 
+run_expect_success "table: cpus" jl cpus
+assert_output_contains "cpus output has CPU VMs" "CPU VMs"
+
 run_expect_success "table: templates" jl templates
 assert_output_contains "templates output has Template" "Template"
 

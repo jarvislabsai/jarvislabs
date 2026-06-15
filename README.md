@@ -55,6 +55,9 @@ export JL_API_KEY="your_api_key"
 # See available GPUs and pricing
 jl gpus
 
+# See available CPU VM sizes and pricing
+jl cpus
+
 # Create a container instance (pre-configured with PyTorch, Jupyter, IDE)
 jl create --gpu A100 --name "my-instance"
 
@@ -109,6 +112,7 @@ jl run stop <run_id>
 
 ```bash
 jl status                   # Account info and balance
+jl cpus                     # CPU VM availability and pricing
 jl templates                # Available framework templates
 jl list            # List all instances
 jl exec <id> -- nvidia-smi   # Run a command remotely
