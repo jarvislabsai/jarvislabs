@@ -42,13 +42,13 @@ def deploy_create(
     name: Annotated[str, typer.Option("--name", help="Deployment name.")],
     region: Annotated[str, typer.Option("--region", help="Region (IN1 or IN2).")],
     framework: Annotated[str, typer.Option("--framework", help="vllm | sglang | ollama.")],
-    gpu: Annotated[str, typer.Option("--gpu", help="GPU type (v1: H100 | L4).")],
+    gpu: Annotated[str, typer.Option("--gpu", help="GPU type.")],
     gpus_per_worker: Annotated[int, typer.Option("--gpus-per-worker", help="GPUs per worker.")],
     min_workers: Annotated[int, typer.Option("--min-workers", help="Minimum workers (0-100).")],
     max_workers: Annotated[int, typer.Option("--max-workers", help="Maximum workers (0-100).")],
     idle_timeout: Annotated[int, typer.Option("--idle-timeout", help="Idle timeout in seconds (0-86400).")],
     wait_time: Annotated[int, typer.Option("--wait-time", help="Wait time in seconds (0-600).")],
-    storage: Annotated[int, typer.Option("--storage", help="Deployment filesystem size in GB.")],
+    storage: Annotated[int, typer.Option("--storage", help="Deployment filesystem size in GB (min 50).")],
     model: Annotated[str, typer.Option("--model", help="Model id (e.g. a Hugging Face repo id).")],
     concurrent: Annotated[
         int | None, typer.Option("--concurrent", help="Concurrent requests per worker (default 1).")
@@ -128,6 +128,7 @@ def deploy_create(
 
 @deploy_app.command("list")
 def deploy_list(
+    wide: Annotated[bool, typer.Option("--wide", help="Show all columns (framework, workers, concurrency).")] = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """List your deployments across all serverless regions, newest first."""
@@ -139,7 +140,7 @@ def deploy_list(
     if state.json_output:
         render.print_json(result)
         return
-    render.deployments_table(result)
+    render.deployments_table(result, wide=wide)
 
 
 @deploy_app.command("get")
@@ -173,7 +174,7 @@ def deploy_status(
     region: RegionHintOption = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Cheap status check for one deployment."""
+    """Status check for one deployment."""
     cli_options.apply_command_options(json_output=json_output)
     client = get_client()
     with render.spinner("Checking status..."):
@@ -249,7 +250,7 @@ def deploy_update(
     region: RegionHintOption = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Patch a running deployment. Only name/idle_timeout/wait_time are mutable; rescale = recreate."""
+    """Patch a running deployment. Only name/idle_timeout/wait_time are mutable."""
     cli_options.apply_command_options(json_output=json_output)
 
     client = get_client()

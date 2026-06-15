@@ -324,8 +324,20 @@ def _started_label(start_time) -> str:
     return start_time.strftime("%Y-%m-%d %H:%M") if start_time else "—"
 
 
-def deployments_table(result) -> None:
-    """Render the deployments list, newest first."""
+def _deployment_cost_cell(dep) -> str:
+    """Total accrued cost for a deployment; dim when nothing has accrued yet."""
+    sym = currency_symbol(dep.currency)
+    style = "green" if dep.total_cost > 0 else "dim"
+    return f"[{style}]{sym}{dep.total_cost:.2f}[/{style}]"
+
+
+def deployments_table(result, *, wide: bool = False) -> None:
+    """Render the deployments list, newest first.
+
+    The default view shows the columns most useful at a glance; ``wide`` adds
+    the configuration columns (framework, workers, concurrency). The full
+    record is always one ``jl deploy get <id>`` (or ``--json``) away.
+    """
     for region_error in result.region_errors:
         warning(f"Could not reach {region_label(region_error.region)}: {region_error.error}")
 
@@ -334,27 +346,40 @@ def deployments_table(result) -> None:
         return
 
     table = _table("Deployments", show_lines=True)
-    for column in ("ID", "Name", "Region", "Status", "Framework", "GPU"):
-        table.add_column(column, no_wrap=True)
-    table.add_column("Workers", justify="right")
-    table.add_column("Concurrent", justify="right")
+    table.add_column("ID", no_wrap=True)  # full id stays intact so it's copy-pasteable
+    table.add_column("Name", no_wrap=True)
+    table.add_column("Region", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+    if wide:
+        table.add_column("Framework", no_wrap=True)
+    table.add_column("GPU", no_wrap=True)
+    if wide:
+        table.add_column("Workers", justify="right")
+        table.add_column("Concurrent", justify="right")
     table.add_column("Started", no_wrap=True)
+    table.add_column("Cost", justify="right", no_wrap=True)
 
     for dep in result.deployments:
         style = _deployment_status_style(dep.status)
-        table.add_row(
+        row = [
             escape(dep.deployment_id),
             escape(dep.name or "—"),
             region_label(dep.region),
             f"[{style}]{escape(dep.status)}[/{style}]",
-            escape(dep.framework or "—"),
-            escape(_gpu_label(dep.gpus_to_use)),
-            _workers_label(dep),
-            str(dep.concurrent_requests) if dep.concurrent_requests is not None else "—",
-            _started_label(dep.start_time),
-        )
+        ]
+        if wide:
+            row.append(escape(dep.framework or "—"))
+        row.append(escape(_gpu_label(dep.gpus_to_use)))
+        if wide:
+            row.append(_workers_label(dep))
+            row.append(str(dep.concurrent_requests) if dep.concurrent_requests is not None else "—")
+        row.append(_started_label(dep.start_time))
+        row.append(_deployment_cost_cell(dep))
+        table.add_row(*row)
 
     stdout_console.print(table)
+    if not wide:
+        info("Tip: run 'jl deploy get <ID>' for full details · --wide for all columns")
 
 
 def deployment_detail(dep, *, base_url: str | None = None) -> None:
@@ -395,6 +420,7 @@ def deployment_detail(dep, *, base_url: str | None = None) -> None:
         for i, w in enumerate(workers.list, start=1)
     )
 
+    rows.append(("Total cost", _deployment_cost_cell(dep)))
     rows.append(("Created", _started_label(dep.created_at)))
     rows.append(("Updated", _started_label(dep.updated_at)))
     if dep.error_message:

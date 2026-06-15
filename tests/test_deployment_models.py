@@ -36,6 +36,8 @@ GET_PAYLOAD = {
         "list": [{"status": "healthy", "last_used": None}, {"status": "provisioning", "last_used": "soon"}],
     },
     "queue_depth": 0,
+    "total_cost": 1.23,
+    "currency": "INR",
     "id": 123,  # internal column the API omits; extra="ignore" must drop it
     "user_id": "u1",
 }
@@ -53,6 +55,8 @@ LIST_ITEM = {
     "concurrent_requests": 4,
     "gpus_per_worker": 1,
     "error_message": None,
+    "total_cost": 1.23,
+    "currency": "INR",
 }
 
 
@@ -72,6 +76,21 @@ def test_deployment_summary_parses_list_item():
     assert summary.deployment_id == "dep-abc"
     assert summary.gpus_to_use == {"gpus": ["L4"]}
     assert summary.error_message is None
+
+
+def test_cost_fields_parse():
+    dep = Deployment(**GET_PAYLOAD)
+    assert (dep.total_cost, dep.currency) == (1.23, "INR")
+    summary = DeploymentSummary(**LIST_ITEM)
+    assert (summary.total_cost, summary.currency) == (1.23, "INR")
+
+
+def test_cost_fields_default_to_zero_usd():
+    # The backend always sends these; the defaults mirror its column defaults
+    # so minimal/partial records still parse.
+    dep = Deployment(deployment_id="d", status="running")
+    assert dep.total_cost == 0.0
+    assert dep.currency == "USD"
 
 
 def test_region_serializes_to_display_code():

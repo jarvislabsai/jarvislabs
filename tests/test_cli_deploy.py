@@ -304,9 +304,20 @@ def test_list_renders_table(monkeypatch):
     deployments = SimpleNamespace(list=lambda: result)
     _install_client(monkeypatch, deployments)
     rendered = []
-    monkeypatch.setattr(deploy.render, "deployments_table", lambda r: rendered.append(r))
+    monkeypatch.setattr(deploy.render, "deployments_table", lambda r, wide=False: rendered.append((r, wide)))
     deploy.deploy_list(json_output=False)
-    assert rendered == [result]
+    assert rendered == [(result, False)]
+
+
+def test_list_wide_passes_through(monkeypatch):
+    result = DeploymentListResult(
+        deployments=[DeploymentSummary(deployment_id="dep1", status="running", region="india-noida-01")],
+    )
+    _install_client(monkeypatch, SimpleNamespace(list=lambda: result))
+    rendered = []
+    monkeypatch.setattr(deploy.render, "deployments_table", lambda r, wide=False: rendered.append((r, wide)))
+    deploy.deploy_list(wide=True, json_output=False)
+    assert rendered == [(result, True)]
 
 
 def test_list_json(monkeypatch):

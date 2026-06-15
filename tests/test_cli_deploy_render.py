@@ -49,8 +49,43 @@ def test_table_renders_rows(capture):
     assert "IN2" in out
     assert "running" in out
     assert "L4" in out
-    assert "0-2" in out
     assert "Model" not in out  # no model column (the list endpoint omits it)
+    # The default view drops the configuration columns.
+    assert "Framework" not in out
+    assert "Workers" not in out
+    assert "Concurrent" not in out
+
+
+def test_table_wide_shows_config_columns(capture):
+    render.deployments_table(DeploymentListResult(deployments=[_summary()]), wide=True)
+    out = capture.getvalue()
+    assert "Framework" in out and "vllm" in out
+    assert "Workers" in out and "0-2" in out
+    assert "Concurrent" in out
+
+
+def test_table_tip_shown_only_in_default_view(capture, monkeypatch):
+    tips: list[str] = []
+    monkeypatch.setattr(render, "info", lambda m: tips.append(m))
+    render.deployments_table(DeploymentListResult(deployments=[_summary()]))
+    assert any("jl deploy get" in m for m in tips)
+    tips.clear()
+    render.deployments_table(DeploymentListResult(deployments=[_summary()]), wide=True)
+    assert tips == []
+
+
+def test_table_shows_cost(capture):
+    result = DeploymentListResult(deployments=[_summary(total_cost=12.5, currency="USD")])
+    render.deployments_table(result)
+    out = capture.getvalue()
+    assert "Cost" in out
+    assert "$12.50" in out
+
+
+def test_table_shows_inr_cost(capture):
+    result = DeploymentListResult(deployments=[_summary(total_cost=81.0, currency="INR")])
+    render.deployments_table(result)
+    assert "₹81.00" in capture.getvalue()
 
 
 def test_table_warns_on_region_errors(capture, monkeypatch):
@@ -129,6 +164,19 @@ def test_detail_shows_worker_id_when_present(capture):
 def test_detail_shows_error_message(capture):
     render.deployment_detail(_deployment(status="failed", error_message="download timeout"))
     assert "download timeout" in capture.getvalue()
+
+
+def test_detail_shows_cost(capture):
+    render.deployment_detail(_deployment(total_cost=2.5, currency="USD"))
+    out = capture.getvalue()
+    assert "Total cost" in out
+    assert "$2.50" in out
+
+
+def test_detail_shows_zero_cost(capture):
+    # A brand-new deployment has accrued nothing yet; show the real $0.00.
+    render.deployment_detail(_deployment(total_cost=0.0, currency="USD"))
+    assert "$0.00" in capture.getvalue()
 
 
 def test_detail_workers_dash_when_missing(capture):

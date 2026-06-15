@@ -256,6 +256,9 @@ class Deployment(BaseModel):
     updated_at: datetime | None = None
     workers: Workers = Field(default_factory=Workers)
     queue_depth: int | None = None
+    # Total accrued cost of the deployment so far (compute + storage), in `currency`.
+    total_cost: float = 0.0
+    currency: str = "USD"
 
     @property
     def model(self) -> str | None:
@@ -282,6 +285,8 @@ class DeploymentSummary(BaseModel):
     concurrent_requests: int | None = None
     gpus_per_worker: int | None = None
     error_message: str | None = None
+    total_cost: float = 0.0
+    currency: str = "USD"
 
 
 class DeploymentStatus(BaseModel):
