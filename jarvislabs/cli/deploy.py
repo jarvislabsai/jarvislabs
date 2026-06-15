@@ -214,7 +214,7 @@ def deploy_logs(
     try:
         for kind, text in events:
             if kind == "log":
-                print(text, flush=True)
+                print(text, flush=True)  # noqa: T201 - deployment logs intentionally stream raw lines to stdout.
                 continue
             if text == "no active workers":
                 text = _no_workers_message(deployment.status, deployment_id)

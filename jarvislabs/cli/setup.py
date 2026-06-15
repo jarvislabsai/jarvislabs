@@ -363,9 +363,9 @@ def _show_getting_started() -> None:
 
 @app.command(rich_help_panel="Account")
 def setup(
-    token: Annotated[str, typer.Option("--token", "-t", help="API token (skips interactive prompt).")] = None,
+    token: Annotated[str | None, typer.Option("--token", "-t", help="API token (skips interactive prompt).")] = None,
     agents: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--agents", help="Comma-separated additional agents: claude-code,all (.agents/skills always installed)"
         ),
