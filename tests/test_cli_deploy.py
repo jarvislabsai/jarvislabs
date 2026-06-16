@@ -111,6 +111,24 @@ def test_create_prints_id_then_handoff(monkeypatch):
     assert handoffs == [("https://serverlessn.jarvislabs.net/openai/dep1/v1", "Qwen/Qwen3-0.6B")]
 
 
+def test_create_warns_that_serverless_is_beta(monkeypatch):
+    deployments = SimpleNamespace(
+        create=lambda **kw: "dep1",
+        wait_until_running=lambda dep_id, region=None: _deployment(),
+        openai_base_url=lambda dep_id, region=None: "https://serverlessn.jarvislabs.net/openai/dep1/v1",
+    )
+    _install_client(monkeypatch, deployments)
+
+    warnings: list[str] = []
+    monkeypatch.setattr(deploy.render, "warning", lambda m: warnings.append(m))
+    monkeypatch.setattr(deploy.render, "info", lambda m: None)
+    monkeypatch.setattr(deploy.render, "deployment_running_handoff", lambda *a: None)
+
+    _create_call(None)
+
+    assert warnings == [deploy.BETA_NOTICE]
+
+
 def test_create_detach_does_not_poll(monkeypatch):
     polled = []
     deployments = SimpleNamespace(

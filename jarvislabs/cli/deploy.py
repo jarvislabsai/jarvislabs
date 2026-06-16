@@ -14,8 +14,24 @@ import typer
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
 
-deploy_app = typer.Typer(name="deploy", help="Create and manage serverless model deployments.")
-app.add_typer(deploy_app, rich_help_panel="Workloads")
+BETA_NOTICE_TEXT = (
+    "Serverless is in beta. Limits and behavior may change. "
+    "If you hit issues or have feedback, email support@jarvislabs.ai."
+)
+BETA_NOTICE = f"[bold bright_yellow]{BETA_NOTICE_TEXT}[/bold bright_yellow]"
+BETA_HELP_NOTICE = (
+    "[bold bright_yellow]Serverless is in beta. We're actively improving it and would love early feedback. "
+    "Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]"
+)
+
+deploy_app = typer.Typer(
+    name="deploy",
+    help=(
+        "Create and manage serverless model deployments [bold bright_yellow](beta)[/bold bright_yellow].\n\n"
+        + BETA_HELP_NOTICE
+    ),
+)
+app.add_typer(deploy_app, rich_help_panel="[bold bright_yellow]Serverless (Beta)[/bold bright_yellow]")
 
 RegionHintOption = Annotated[
     str | None, typer.Option("--region", help="Region of the deployment (skips the cross-region search).")
@@ -67,6 +83,8 @@ def deploy_create(
     """Create a serverless deployment and poll until running (unless --detach).
 
     Use --arg to pass extra framework flags as key=value.
+
+    [bold bright_yellow]Serverless is in beta. We're actively improving it and would love early feedback. Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     args = _parse_kv(arg, flag="--arg")
@@ -76,6 +94,7 @@ def deploy_create(
         f"name={name!r}, region={render.region_input_label(region)}, framework={framework}, "
         f"gpu={gpus_per_worker}x {gpu}, workers={min_workers}-{max_workers}, storage={storage}GB"
     )
+    render.warning(BETA_NOTICE)
     if not render.confirm(f"Create deployment ({details})?", skip=state.yes):
         raise typer.Exit()
 
