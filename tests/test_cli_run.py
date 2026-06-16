@@ -1267,7 +1267,7 @@ def test_prepare_support_files_uploads_requirements_and_setup(monkeypatch, tmp_p
 
     monkeypatch.setattr(
         run,
-        "_upload_support_file",
+        "_upload_file_to_instance",
         lambda inst, ssh_parts, source, destination, *, label: uploads.append((label, str(source), destination)),
     )
 

@@ -5,13 +5,13 @@ from __future__ import annotations
 import shlex
 import subprocess
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated
 
-import click
 import typer
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
+from jarvislabs.cli.options import option_was_explicit
 from jarvislabs.constants import DEFAULT_INSTANCE_NAME, DEFAULT_NUM_GPUS, DEFAULT_STORAGE_GB, DEFAULT_TEMPLATE
 from jarvislabs.exceptions import SSHError, ValidationError
 from jarvislabs.ssh import (
@@ -29,17 +29,20 @@ _MACHINE_PANEL = "Machine Management"
 _ACCESS_PANEL = "Remote Access"
 
 
-def option_was_explicit(name: str) -> bool:
-    """Tell validation apart from Typer defaults for options with meaningful defaults."""
-    ctx = click.get_current_context(silent=True)
-    if ctx is None:
-        return False
-    return ctx.get_parameter_source(name) == click.core.ParameterSource.COMMANDLINE
+def _require_running_for_ssh(machine_id: int, status: str) -> None:
+    if status != "Running":
+        if status == "Paused":
+            render.die(f"Instance {machine_id} is paused. Resume it first: jl resume {machine_id}")
+        if status in {"Creating", "Resuming"}:
+            render.die(f"Instance {machine_id} is not ready yet (status: {status}). Wait for it to reach Running.")
+        render.die(f"Instance {machine_id} is not available for SSH (status: {status}).")
 
 
-def value_or_default(value: Any, default: Any) -> Any:
-    """Use normal Python defaults when tests call Typer commands directly."""
-    return default if isinstance(value, typer.models.OptionInfo) else value
+def _ssh_parts_or_die(inst: Instance) -> list[str]:
+    try:
+        return harden_ssh_parts(split_ssh_command(inst.ssh_command))
+    except SSHError:
+        render.die(f"Cannot parse SSH command: {inst.ssh_command}")
 
 
 def _resolve_ssh(machine_id: int) -> tuple[Instance, list[str]]:
@@ -47,23 +50,15 @@ def _resolve_ssh(machine_id: int) -> tuple[Instance, list[str]]:
     with render.spinner("Fetching instance..."):
         inst = client.instances.get(machine_id)
 
-    if inst.status != "Running":
-        if inst.status == "Paused":
-            render.die(f"Instance {machine_id} is paused. Resume it first: jl resume {machine_id}")
-        if inst.status in {"Creating", "Resuming"}:
-            render.die(f"Instance {machine_id} is not ready yet (status: {inst.status}). Wait for it to reach Running.")
-        render.die(f"Instance {machine_id} is not available for SSH (status: {inst.status}).")
+    _require_running_for_ssh(machine_id, inst.status)
 
     if not inst.ssh_command:
         render.die(f"Instance {machine_id} has no SSH command (status: {inst.status}).")
 
-    try:
-        return inst, harden_ssh_parts(split_ssh_command(inst.ssh_command))
-    except SSHError:
-        render.die(f"Cannot parse SSH command: {inst.ssh_command}")
+    return inst, _ssh_parts_or_die(inst)
 
 
-def _remote_home(ssh_command: str | None) -> str:
+def remote_home(ssh_command: str | None) -> str:
     """Derive the remote home/workspace directory from the SSH command.
 
     Containers run as root and use /home as a workspace.
@@ -79,9 +74,9 @@ def _remote_home(ssh_command: str | None) -> str:
     return "/home"
 
 
-def _default_upload_dest(source: Path, ssh_command: str | None = None) -> str:
+def default_upload_dest(source: Path, ssh_command: str | None = None) -> str:
     name = source.name or source.resolve().name
-    return f"{_remote_home(ssh_command)}/{name}"
+    return f"{remote_home(ssh_command)}/{name}"
 
 
 def _default_download_dest(source: str) -> str:
@@ -90,6 +85,27 @@ def _default_download_dest(source: str) -> str:
     if not name:
         raise ValueError(f"Cannot infer a local destination from remote path: {source}")
     return name
+
+
+def _transfer_json(parts: list[str], payload: dict) -> None:
+    """Run a transfer command captured and emit the JSON result. Exits nonzero on failure."""
+    completed = subprocess.run(parts, capture_output=True, text=True, check=False)
+    render.print_json(payload | {"exit_code": completed.returncode})
+    if completed.returncode != 0:
+        raise SystemExit(completed.returncode)
+
+
+def resolve_vm_template(vm: bool, template: str, http_ports: str) -> str:
+    """Validate the --vm/--template/--http-ports combination. VMs use the "vm" template."""
+    if vm:
+        if template != DEFAULT_TEMPLATE:
+            render.die("--vm and --template cannot be used together.")
+        template = "vm"
+        if http_ports:
+            render.die("--http-ports is not supported with --vm. VMs are SSH-only.")
+    if template.strip().lower() == "vm" and not vm:
+        render.die("Use --vm instead of --template vm.")
+    return template
 
 
 @app.command("list", rich_help_panel=_MACHINE_PANEL)
@@ -112,7 +128,7 @@ def instance_list(
 
 @app.command("get", rich_help_panel=_MACHINE_PANEL)
 def instance_get(
-    machine_id: int = typer.Argument(..., help="Instance ID."),
+    machine_id: Annotated[int, typer.Argument(help="Instance ID.")],
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Show details of a specific instance."""
@@ -131,33 +147,30 @@ def instance_get(
 
 @app.command("create", rich_help_panel=_MACHINE_PANEL)
 def instance_create(
-    gpu: str | None = typer.Option(None, "--gpu", "-g", help="GPU type (e.g. H100, A100, L4)."),
-    vm: bool = typer.Option(False, "--vm", help="Create a VM instance (SSH-only, no container)."),
-    cpu: bool = typer.Option(False, "--cpu", help="Create a CPU VM. Requires --vm."),
-    vcpus: int | None = typer.Option(None, "--vcpus", help="CPU VM vCPU count."),
-    ram: int | None = typer.Option(None, "--ram", help="CPU VM RAM in GB."),
-    template: str = typer.Option(
-        DEFAULT_TEMPLATE, "--template", "-t", help="Framework template for container instances."
-    ),
-    storage: int = typer.Option(DEFAULT_STORAGE_GB, "--storage", "-s", help="Storage in GB."),
-    name: str = typer.Option(DEFAULT_INSTANCE_NAME, "--name", "-n", help="Instance name."),
-    num_gpus: int = typer.Option(DEFAULT_NUM_GPUS, "--num-gpus", help="Number of GPUs."),
-    region: str | None = typer.Option(None, "--region", help="Optional region pin (IN1, IN2, EU1)."),
-    http_ports: str = typer.Option("", "--http-ports", help="Comma-separated HTTP ports to expose (e.g. 7860,8080)."),
-    script_id: str | None = typer.Option(None, "--script-id", help="Startup script ID to run on launch."),
-    script_args: str = typer.Option("", "--script-args", help="Arguments passed to startup script."),
-    fs_id: int | None = typer.Option(None, "--fs-id", help="Filesystem ID to attach."),
-    spot: bool = typer.Option(False, "--spot", help="Create a spot GPU container instance."),
+    gpu: Annotated[str | None, typer.Option("--gpu", "-g", help="GPU type (e.g. H100, A100, L4).")] = None,
+    vm: Annotated[bool, typer.Option("--vm", help="Create a VM instance (SSH-only, no container).")] = False,
+    cpu: Annotated[bool, typer.Option("--cpu", help="Create a CPU VM. Requires --vm.")] = False,
+    vcpus: Annotated[int | None, typer.Option("--vcpus", help="CPU VM vCPU count.")] = None,
+    ram: Annotated[int | None, typer.Option("--ram", help="CPU VM RAM in GB.")] = None,
+    template: Annotated[
+        str, typer.Option("--template", "-t", help="Framework template for container instances.")
+    ] = DEFAULT_TEMPLATE,
+    storage: Annotated[int, typer.Option("--storage", "-s", help="Storage in GB.")] = DEFAULT_STORAGE_GB,
+    name: Annotated[str, typer.Option("--name", "-n", help="Instance name.")] = DEFAULT_INSTANCE_NAME,
+    num_gpus: Annotated[int, typer.Option("--num-gpus", help="Number of GPUs.")] = DEFAULT_NUM_GPUS,
+    region: Annotated[str | None, typer.Option("--region", help="Optional region pin (IN1, IN2, EU1).")] = None,
+    http_ports: Annotated[
+        str, typer.Option("--http-ports", help="Comma-separated HTTP ports to expose (e.g. 7860,8080).")
+    ] = "",
+    script_id: Annotated[str | None, typer.Option("--script-id", help="Startup script ID to run on launch.")] = None,
+    script_args: Annotated[str, typer.Option("--script-args", help="Arguments passed to startup script.")] = "",
+    fs_id: Annotated[int | None, typer.Option("--fs-id", help="Filesystem ID to attach.")] = None,
+    spot: Annotated[bool, typer.Option("--spot", help="Create a spot GPU container instance.")] = False,
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Create a new GPU instance (container or VM)."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
-    gpu = value_or_default(gpu, None)
-    cpu = value_or_default(cpu, False)
-    vcpus = value_or_default(vcpus, None)
-    ram = value_or_default(ram, None)
-    spot = value_or_default(spot, False)
 
     if cpu:
         if not vm:
@@ -181,15 +194,7 @@ def instance_create(
         if spot:
             render.die("--spot is not supported with CPU VMs.")
 
-    # Handle --vm flag
-    if vm:
-        if template != DEFAULT_TEMPLATE:
-            render.die("--vm and --template cannot be used together.")
-        template = "vm"
-        if http_ports:
-            render.die("--http-ports is not supported with --vm. VMs are SSH-only.")
-    if template.strip().lower() == "vm" and not vm:
-        render.die("Use --vm instead of --template vm.")
+    template = resolve_vm_template(vm, template, http_ports)
     if not cpu and gpu is None:
         render.die("GPU type is required. Use --gpu <type>, or use --vm --cpu for a CPU VM.")
     if spot and vm:
@@ -262,8 +267,8 @@ def instance_create(
 
 @app.command("rename", rich_help_panel=_MACHINE_PANEL)
 def instance_rename(
-    machine_id: int = typer.Argument(..., help="Instance ID to rename."),
-    name: str = typer.Option(..., "--name", "-n", help="New instance name."),
+    machine_id: Annotated[int, typer.Argument(help="Instance ID to rename.")],
+    name: Annotated[str, typer.Option("--name", "-n", help="New instance name.")],
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -286,7 +291,7 @@ def instance_rename(
 
 @app.command("pause", rich_help_panel=_MACHINE_PANEL)
 def instance_pause(
-    machine_id: int = typer.Argument(..., help="Instance ID to pause."),
+    machine_id: Annotated[int, typer.Argument(help="Instance ID to pause.")],
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -311,26 +316,29 @@ def instance_pause(
 
 @app.command("resume", rich_help_panel=_MACHINE_PANEL)
 def instance_resume(
-    machine_id: int = typer.Argument(..., help="Instance ID to resume."),
-    gpu: str | None = typer.Option(None, "--gpu", "-g", help="Resume with a different GPU type."),
-    num_gpus: int | None = typer.Option(None, "--num-gpus", help="Change number of GPUs."),
-    vcpus: int | None = typer.Option(None, "--vcpus", help="CPU VM vCPU count."),
-    ram: int | None = typer.Option(None, "--ram", help="CPU VM RAM in GB."),
-    storage: int | None = typer.Option(None, "--storage", "-s", help="Expand storage (GB). Can only increase."),
-    name: str | None = typer.Option(None, "--name", "-n", help="Rename instance."),
-    http_ports: str = typer.Option("", "--http-ports", help="Comma-separated HTTP ports to expose (e.g. 7860,8080)."),
-    script_id: str | None = typer.Option(None, "--script-id", help="Startup script ID to use on resume."),
-    script_args: str | None = typer.Option(None, "--script-args", help="Arguments passed to startup script."),
-    fs_id: int | None = typer.Option(None, "--fs-id", help="Filesystem ID to attach."),
-    spot: bool = typer.Option(False, "--spot", help="Resume as a spot GPU container instance."),
+    machine_id: Annotated[int, typer.Argument(help="Instance ID to resume.")],
+    gpu: Annotated[str | None, typer.Option("--gpu", "-g", help="Resume with a different GPU type.")] = None,
+    num_gpus: Annotated[int | None, typer.Option("--num-gpus", help="Change number of GPUs.")] = None,
+    vcpus: Annotated[int | None, typer.Option("--vcpus", help="CPU VM vCPU count.")] = None,
+    ram: Annotated[int | None, typer.Option("--ram", help="CPU VM RAM in GB.")] = None,
+    storage: Annotated[
+        int | None, typer.Option("--storage", "-s", help="Expand storage (GB). Can only increase.")
+    ] = None,
+    name: Annotated[str | None, typer.Option("--name", "-n", help="Rename instance.")] = None,
+    http_ports: Annotated[
+        str, typer.Option("--http-ports", help="Comma-separated HTTP ports to expose (e.g. 7860,8080).")
+    ] = "",
+    script_id: Annotated[str | None, typer.Option("--script-id", help="Startup script ID to use on resume.")] = None,
+    script_args: Annotated[
+        str | None, typer.Option("--script-args", help="Arguments passed to startup script.")
+    ] = None,
+    fs_id: Annotated[int | None, typer.Option("--fs-id", help="Filesystem ID to attach.")] = None,
+    spot: Annotated[bool, typer.Option("--spot", help="Resume as a spot GPU container instance.")] = False,
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Resume a paused instance. Optionally swap GPU, expand storage, or rename."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
-    vcpus = value_or_default(vcpus, None)
-    ram = value_or_default(ram, None)
-    spot = value_or_default(spot, False)
     changes: list[str] = []
     if gpu:
         changes.append(f"gpu={gpu}")
@@ -389,7 +397,7 @@ def instance_resume(
 
 @app.command("destroy", rich_help_panel=_MACHINE_PANEL)
 def instance_destroy(
-    machine_id: int = typer.Argument(..., help="Instance ID to destroy."),
+    machine_id: Annotated[int, typer.Argument(help="Instance ID to destroy.")],
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -417,8 +425,10 @@ def instance_destroy(
 
 @app.command("ssh", rich_help_panel=_ACCESS_PANEL)
 def instance_ssh(
-    machine_id: int = typer.Argument(..., help="Instance ID."),
-    print_command: bool = typer.Option(False, "--print-command", "-p", help="Print SSH command instead of connecting."),
+    machine_id: Annotated[int, typer.Argument(help="Instance ID.")],
+    print_command: Annotated[
+        bool, typer.Option("--print-command", "-p", help="Print SSH command instead of connecting.")
+    ] = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """SSH into a running instance."""
@@ -438,17 +448,9 @@ def instance_ssh(
         render.print_json({"ssh_command": inst.ssh_command})
         return
 
-    if inst.status != "Running":
-        if inst.status == "Paused":
-            render.die(f"Instance {machine_id} is paused. Resume it first: jl resume {machine_id}")
-        if inst.status in {"Creating", "Resuming"}:
-            render.die(f"Instance {machine_id} is not ready yet (status: {inst.status}). Wait for it to reach Running.")
-        render.die(f"Instance {machine_id} is not available for SSH (status: {inst.status}).")
+    _require_running_for_ssh(machine_id, inst.status)
 
-    try:
-        parts = harden_ssh_parts(split_ssh_command(inst.ssh_command))
-    except SSHError:
-        render.die(f"Cannot parse SSH command: {inst.ssh_command}")
+    parts = _ssh_parts_or_die(inst)
 
     render.info(f"Connecting to {machine_id}...")
     raise SystemExit(subprocess.call(parts))
@@ -461,7 +463,7 @@ def instance_ssh(
 )
 def instance_exec(
     ctx: typer.Context,
-    machine_id: int = typer.Argument(..., help="Instance ID."),
+    machine_id: Annotated[int, typer.Argument(help="Instance ID.")],
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Execute a command on a running instance."""
@@ -505,17 +507,19 @@ def instance_exec(
 
 @app.command("upload", rich_help_panel=_ACCESS_PANEL)
 def instance_upload(
-    machine_id: int = typer.Argument(..., help="Instance ID."),
-    source: Path = typer.Argument(
-        ..., exists=True, readable=True, resolve_path=True, help="Local file or directory to upload."
-    ),
-    dest: str | None = typer.Argument(None, help="Remote destination path. Defaults to remote home directory."),
+    machine_id: Annotated[int, typer.Argument(help="Instance ID.")],
+    source: Annotated[
+        Path, typer.Argument(exists=True, readable=True, resolve_path=True, help="Local file or directory to upload.")
+    ],
+    dest: Annotated[
+        str | None, typer.Argument(help="Remote destination path. Defaults to remote home directory.")
+    ] = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Upload a local file or directory to a running instance."""
     cli_options.apply_command_options(json_output=json_output)
     inst, ssh_parts = _resolve_ssh(machine_id)
-    remote_dest = dest or _default_upload_dest(source, inst.ssh_command)
+    remote_dest = dest or default_upload_dest(source, inst.ssh_command)
     recursive = source.is_dir()
 
     if dest is not None:
@@ -539,19 +543,16 @@ def instance_upload(
         render.die(f"Cannot prepare upload command for instance {machine_id}.")
 
     if state.json_output:
-        completed = subprocess.run(parts, capture_output=True, text=True, check=False)
-        render.print_json(
+        _transfer_json(
+            parts,
             {
                 "machine_id": machine_id,
                 "direction": "upload",
                 "source": str(source),
                 "dest": remote_dest,
                 "recursive": recursive,
-                "exit_code": completed.returncode,
-            }
+            },
         )
-        if completed.returncode != 0:
-            raise SystemExit(completed.returncode)
         return
 
     render.info(f"Uploading to {machine_id}: {source} -> {remote_dest}")
@@ -560,10 +561,12 @@ def instance_upload(
 
 @app.command("download", rich_help_panel=_ACCESS_PANEL)
 def instance_download(
-    machine_id: int = typer.Argument(..., help="Instance ID."),
-    source: str = typer.Argument(..., help="Remote file or directory to download."),
-    dest: Path | None = typer.Argument(None, resolve_path=True, help="Local destination path. Defaults to ./<name>."),
-    recursive: bool = typer.Option(False, "--recursive", "-r", help="Download directories recursively."),
+    machine_id: Annotated[int, typer.Argument(help="Instance ID.")],
+    source: Annotated[str, typer.Argument(help="Remote file or directory to download.")],
+    dest: Annotated[
+        Path | None, typer.Argument(resolve_path=True, help="Local destination path. Defaults to ./<name>.")
+    ] = None,
+    recursive: Annotated[bool, typer.Option("--recursive", "-r", help="Download directories recursively.")] = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Download a remote file or directory from a running instance."""
@@ -587,19 +590,16 @@ def instance_download(
         render.die(f"Cannot prepare download command for instance {machine_id}.")
 
     if state.json_output:
-        completed = subprocess.run(parts, capture_output=True, text=True, check=False)
-        render.print_json(
+        _transfer_json(
+            parts,
             {
                 "machine_id": machine_id,
                 "direction": "download",
                 "source": source,
                 "dest": str(local_dest),
                 "recursive": recursive,
-                "exit_code": completed.returncode,
-            }
+            },
         )
-        if completed.returncode != 0:
-            raise SystemExit(completed.returncode)
         return
 
     render.info(f"Downloading from {machine_id}: {source} -> {local_dest}")

@@ -305,6 +305,6 @@ def test_default_upload_dest_uses_resolved_name_for_dot(tmp_path, monkeypatch):
     cwd = Path.cwd()
     monkeypatch.chdir(tmp_path)
     try:
-        assert instance._default_upload_dest(Path(".")) == f"/home/{tmp_path.name}"
+        assert instance.default_upload_dest(Path(".")) == f"/home/{tmp_path.name}"
     finally:
         monkeypatch.chdir(cwd)

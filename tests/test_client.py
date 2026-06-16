@@ -6,21 +6,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from jarvislabs import regions
 from jarvislabs.client import (
     Account,
     Filesystems,
     Instances,
     Scripts,
     SSHKeys,
-    _fetch_instances,
-    _get_instance,
-    _normalize_region_input,
-    _normalize_success,
-    _poll_until_running,
-    _region_url,
-    _resolve_region,
-    _validate_create_region,
-    _validate_europe,
 )
 from jarvislabs.constants import (
     CHENNAI_REGION,
@@ -30,7 +22,15 @@ from jarvislabs.constants import (
     REGION_URLS,
 )
 from jarvislabs.exceptions import APIError, NotFoundError, ValidationError
+from jarvislabs.instances import (
+    _fetch_instances,
+    _get_instance,
+    _poll_until_running,
+    _validate_europe,
+)
 from jarvislabs.models import SSHKey, StatusResponse
+from jarvislabs.responses import _normalize_success
+from jarvislabs.server_meta import _resolve_region, _validate_create_region
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -156,13 +156,13 @@ def test_normalize_success(data, expected):
     ],
 )
 def test_normalize_region_input(region, expected):
-    assert _normalize_region_input(region) == expected
+    assert regions.normalize_region(region) == expected
 
 
 @pytest.mark.parametrize("region", ["XX9", "moon-01", "india-01"])
 def test_normalize_region_input_rejects_unknown(region):
     with pytest.raises(ValidationError, match="Unknown region"):
-        _normalize_region_input(region)
+        regions.normalize_region(region)
 
 
 # ── _validate_europe ─────────────────────────────────────────────────────────
@@ -206,12 +206,12 @@ class TestValidateEurope:
     ids=["chennai", "noida", "europe", "none"],
 )
 def test_region_url(region, expected):
-    assert _region_url(region) == expected
+    assert regions.region_base_url(region) == expected
 
 
 def test_region_url_rejects_unknown_region():
     with pytest.raises(ValidationError, match="Unknown region"):
-        _region_url("unknown-region")
+        regions.region_base_url("unknown-region")
 
 
 # ── _resolve_region ──────────────────────────────────────────────────────────
@@ -225,15 +225,15 @@ class TestResolveRegion:
         mock_transport.request.side_effect = Exception("network error")
         assert _resolve_region(mock_transport, gpu_type="H100", num_gpus=1) == INDIA_NOIDA_REGION
 
-    def test_fallback_h200_goes_to_eu(self, mock_transport):
-        """H200 is EU-exclusive — fallback should be EU."""
+    def test_fallback_h200_goes_to_in2(self, mock_transport):
+        """No hardcoded GPU→region fallback anymore — server_meta down means IN2 for any GPU."""
         mock_transport.request.side_effect = Exception("network error")
-        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1) == EUROPE_REGION
+        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1) == INDIA_NOIDA_REGION
 
-    def test_fallback_rtx_pro6000_goes_to_in1(self, mock_transport):
-        """RTX-PRO6000 is Chennai-exclusive at launch."""
+    def test_fallback_rtx_pro6000_goes_to_in2(self, mock_transport):
+        """No hardcoded GPU→region fallback anymore — server_meta down means IN2 for any GPU."""
         mock_transport.request.side_effect = Exception("network error")
-        assert _resolve_region(mock_transport, gpu_type="RTX-PRO6000", num_gpus=1) == CHENNAI_REGION
+        assert _resolve_region(mock_transport, gpu_type="RTX-PRO6000", num_gpus=1) == INDIA_NOIDA_REGION
 
     def test_fallback_rtx5000_goes_to_in2(self, mock_transport):
         """RTX5000 is no longer in the fallback map — defaults to IN2 when server_meta is down."""
@@ -256,10 +256,10 @@ class TestResolveRegion:
         mock_transport.request.side_effect = Exception("network error")
         assert _resolve_region(mock_transport, gpu_type="L4", num_gpus=1, template="vm") == INDIA_NOIDA_REGION
 
-    def test_vm_fallback_h200_goes_to_eu(self, mock_transport):
-        """H200 VM fallback → EU (EU is in VM_SUPPORTED_REGIONS)."""
+    def test_vm_fallback_h200_goes_to_in2(self, mock_transport):
+        """VM fallback also defaults to IN2 now that the GPU→region map is gone."""
         mock_transport.request.side_effect = Exception("network error")
-        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1, template="vm") == EUROPE_REGION
+        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1, template="vm") == INDIA_NOIDA_REGION
 
     def test_vm_fallback_rtx5000_goes_to_in2(self, mock_transport):
         """RTX5000 is not in the fallback map — VM fallback defaults to IN2."""
@@ -274,11 +274,11 @@ class TestResolveRegion:
 
     def test_empty_candidates_h200(self, mock_transport):
         mock_transport.request.return_value = {"server_meta": []}
-        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1) == EUROPE_REGION
+        assert _resolve_region(mock_transport, gpu_type="H200", num_gpus=1) == INDIA_NOIDA_REGION
 
     def test_empty_candidates_rtx_pro6000(self, mock_transport):
         mock_transport.request.return_value = {"server_meta": []}
-        assert _resolve_region(mock_transport, gpu_type="RTX-PRO6000", num_gpus=1) == CHENNAI_REGION
+        assert _resolve_region(mock_transport, gpu_type="RTX-PRO6000", num_gpus=1) == INDIA_NOIDA_REGION
 
     # ── Priority sorting tests (API works) ──────────────────────────────────
 
@@ -531,7 +531,7 @@ class TestPollUntilRunning:
             NotFoundError("not found"),
             {"status": "Running", "error": None, "code": None},
         ]
-        with patch("jarvislabs.client.time.sleep"):
+        with patch("jarvislabs.instances.time.sleep"):
             _poll_until_running(mock_transport, machine_id=1, region="india-noida-01")
         assert mock_transport.request.call_count == 2
 
@@ -543,8 +543,8 @@ class TestPollUntilRunning:
     def test_timeout_raises(self, mock_transport):
         mock_transport.request.return_value = {"status": "Creating", "error": None, "code": None}
         with (
-            patch("jarvislabs.client.time.monotonic", side_effect=[0, 500, 601]),
-            patch("jarvislabs.client.time.sleep"),
+            patch("jarvislabs.instances.time.monotonic", side_effect=[0, 500, 601]),
+            patch("jarvislabs.instances.time.sleep"),
             pytest.raises(APIError, match=r"Timed out.*jl get 1"),
         ):
             _poll_until_running(mock_transport, machine_id=1, region="india-noida-01")
@@ -552,8 +552,8 @@ class TestPollUntilRunning:
     def test_europe_uses_same_timeout(self, mock_transport):
         mock_transport.request.return_value = {"status": "Creating", "error": None, "code": None}
         with (
-            patch("jarvislabs.client.time.monotonic", side_effect=[0, 500, 601]),
-            patch("jarvislabs.client.time.sleep"),
+            patch("jarvislabs.instances.time.monotonic", side_effect=[0, 500, 601]),
+            patch("jarvislabs.instances.time.sleep"),
             pytest.raises(APIError, match=r"Timed out.*jl get 1"),
         ):
             _poll_until_running(mock_transport, machine_id=1, region=EUROPE_REGION)
@@ -564,14 +564,14 @@ class TestPollUntilRunning:
             APIError(500, "server error"),
             {"status": "Running", "error": None, "code": None},
         ]
-        with patch("jarvislabs.client.time.sleep"):
+        with patch("jarvislabs.instances.time.sleep"):
             _poll_until_running(mock_transport, machine_id=1, region="india-noida-01")
         assert mock_transport.request.call_count == 3
 
     def test_repeated_transient_errors_raises(self, mock_transport):
         mock_transport.request.side_effect = [APIError(502, "bad gateway")] * 5
         with (
-            patch("jarvislabs.client.time.sleep"),
+            patch("jarvislabs.instances.time.sleep"),
             pytest.raises(APIError, match="bad gateway"),
         ):
             _poll_until_running(mock_transport, machine_id=1, region="india-noida-01")
@@ -591,7 +591,7 @@ class TestPollUntilRunning:
             APIError(502, "bad gateway"),
             {"status": "Running", "error": None, "code": None},
         ]
-        with patch("jarvislabs.client.time.sleep"):
+        with patch("jarvislabs.instances.time.sleep"):
             _poll_until_running(mock_transport, machine_id=1, region="india-noida-01")
         assert mock_transport.request.call_count == 6
 
@@ -633,12 +633,12 @@ class TestGetInstance:
 
     def test_retries_success_on_second(self, mock_transport):
         mock_transport.request.side_effect = [NotFoundError("lag"), _INST_RESP]
-        with patch("jarvislabs.client.time.sleep"):
+        with patch("jarvislabs.instances.time.sleep"):
             assert _get_instance(mock_transport, 42, retries=2).machine_id == 42
 
     def test_retries_all_fail(self, mock_transport):
         mock_transport.request.side_effect = NotFoundError("gone")
-        with patch("jarvislabs.client.time.sleep"), pytest.raises(NotFoundError):
+        with patch("jarvislabs.instances.time.sleep"), pytest.raises(NotFoundError):
             _get_instance(mock_transport, 42, retries=2)
         assert mock_transport.request.call_count == 3
 
@@ -733,10 +733,6 @@ class TestFilesystems:
             base_url="https://backendc.jarvislabs.net/",
         )
 
-    def test_create_rejects_eu1(self, mock_transport):
-        with pytest.raises(ValidationError, match="Region EU1 is not available"):
-            _make_filesystems(mock_transport).create("data", 100, region="EU1")
-
     def test_create_rejects_unknown_region(self, mock_transport):
         with pytest.raises(ValidationError, match="Unknown region"):
             _make_filesystems(mock_transport).create("data", 100, region="XX9")
@@ -815,8 +811,8 @@ class TestFilesystems:
 
 
 class TestCreatePayload:
-    @patch("jarvislabs.client._get_instance")
-    @patch("jarvislabs.client._poll_until_running")
+    @patch("jarvislabs.instances._get_instance")
+    @patch("jarvislabs.instances._poll_until_running")
     def test_all_params(self, _poll, mock_get, mock_transport):
         mock_transport.request.side_effect = [
             {"server_meta": []},
@@ -851,10 +847,10 @@ class TestCreatePayload:
         assert payload["fs_id"] == 7
         assert payload["arguments"] == "--arg"
 
-    @patch("jarvislabs.client._check_gpu_in_region")
-    @patch("jarvislabs.client._get_instance")
-    @patch("jarvislabs.client._poll_until_running")
-    @patch("jarvislabs.client._resolve_region")
+    @patch("jarvislabs.server_meta._check_gpu_in_region")
+    @patch("jarvislabs.instances._get_instance")
+    @patch("jarvislabs.instances._poll_until_running")
+    @patch("jarvislabs.instances._resolve_region")
     def test_explicit_region_code_is_normalized(self, _resolve, _poll, mock_get, mock_check_region, mock_transport):
         mock_transport.request.return_value = {"machine_id": 1}
         mock_get.return_value = MagicMock(machine_id=1)
@@ -862,12 +858,14 @@ class TestCreatePayload:
         _make_instances(mock_transport).create(gpu_type="RTX5000", region="IN2")
 
         _resolve.assert_not_called()
-        mock_check_region.assert_called_once_with(mock_transport, "RTX5000", 1, "india-noida-01", template="pytorch")
+        mock_check_region.assert_called_once_with(
+            mock_transport, "RTX5000", 1, "india-noida-01", template="pytorch", require_spot=False
+        )
         assert mock_transport.request.call_args.kwargs["json"]["region"] == "india-noida-01"
         assert mock_transport.request.call_args.kwargs["base_url"] == REGION_URLS["india-noida-01"]
 
-    @patch("jarvislabs.client._get_instance")
-    @patch("jarvislabs.client._poll_until_running")
+    @patch("jarvislabs.instances._get_instance")
+    @patch("jarvislabs.instances._poll_until_running")
     def test_create_spot_sends_is_spot(self, _poll, mock_get, mock_transport):
         mock_transport.request.side_effect = [
             {
@@ -891,8 +889,8 @@ class TestCreatePayload:
         assert payload["is_spot"] is True
         assert "is_reserved" not in payload
 
-    @patch("jarvislabs.client._get_instance")
-    @patch("jarvislabs.client._poll_until_running")
+    @patch("jarvislabs.instances._get_instance")
+    @patch("jarvislabs.instances._poll_until_running")
     def test_cpu_vm_create_uses_cpu_endpoint_and_backend_plans(self, _poll, mock_get, mock_transport):
         mock_transport.request.side_effect = [
             [_DUMMY_KEY.model_dump()],
@@ -950,8 +948,8 @@ class TestCreatePayload:
                 num_gpus=1,
             )
 
-    @patch("jarvislabs.client._get_instance")
-    @patch("jarvislabs.client._poll_until_running")
+    @patch("jarvislabs.instances._get_instance")
+    @patch("jarvislabs.instances._poll_until_running")
     def test_instances_create_with_in1_region_routes_to_chennai(self, _poll, mock_get, mock_transport):
         mock_transport.request.side_effect = [
             {
@@ -973,22 +971,7 @@ class TestCreatePayload:
         assert mock_transport.request.call_args.kwargs["json"]["region"] == CHENNAI_REGION
         assert mock_transport.request.call_args.kwargs["base_url"] == REGION_URLS[CHENNAI_REGION]
 
-    def test_in1_non_pytorch_template_is_rejected(self, mock_transport):
-        mock_transport.request.return_value = {
-            "server_meta": [
-                {
-                    "gpu_type": "RTX-PRO6000",
-                    "region": CHENNAI_REGION,
-                    "num_free_devices": 6,
-                    "workload_type": "container",
-                },
-            ]
-        }
-
-        with pytest.raises(ValidationError, match="Template 'tensorflow' is not yet available in IN1"):
-            _make_instances(mock_transport).create(gpu_type="RTX-PRO6000", region="IN1", template="tensorflow")
-
-    @patch("jarvislabs.client._check_gpu_in_region")
+    @patch("jarvislabs.server_meta._check_gpu_in_region")
     def test_create_region_uses_generic_unavailable_message(self, mock_check, mock_transport):
         mock_check.side_effect = ValidationError("RTX5000 is not available in EU1.")
 
@@ -1051,7 +1034,7 @@ class TestCreatePayload:
             ]
         }
 
-        with patch("jarvislabs.client._get_instance") as mock_get:
+        with patch("jarvislabs.instances._get_instance") as mock_get:
             existing = _mock_existing_instance()
             existing.gpu_type = "L4"
             existing.region = "india-noida-01"
@@ -1060,7 +1043,7 @@ class TestCreatePayload:
             with pytest.raises(ValidationError, match="Paused instances can only resume in their original region"):
                 _make_instances(mock_transport).resume(10, gpu_type="RTX5000")
 
-    @patch("jarvislabs.client._resolve_region", return_value="india-noida-01")
+    @patch("jarvislabs.instances._resolve_region", return_value="india-noida-01")
     def test_invalid_fs_id_raises(self, _region, mock_transport):
         mock_transport.request.return_value = [{"fs_id": 7}]
 
@@ -1069,8 +1052,8 @@ class TestCreatePayload:
 
         mock_transport.request.assert_called_once_with("GET", "filesystem/list")
 
-    @patch("jarvislabs.client._get_instance")
-    @patch("jarvislabs.client._poll_until_running")
+    @patch("jarvislabs.instances._get_instance")
+    @patch("jarvislabs.instances._poll_until_running")
     def test_europe_keeps_explicit_storage(self, _poll, mock_get, mock_transport):
         mock_transport.request.return_value = {"machine_id": 1}
         mock_get.return_value = MagicMock(machine_id=1)
@@ -1078,9 +1061,9 @@ class TestCreatePayload:
         _make_instances(mock_transport).create(gpu_type="H200", storage=20)
         assert mock_transport.request.call_args.kwargs["json"]["hdd"] == 20
 
-    @patch("jarvislabs.client._resolve_region", return_value="india-noida-01")
-    @patch("jarvislabs.client._get_instance")
-    @patch("jarvislabs.client._poll_until_running")
+    @patch("jarvislabs.instances._resolve_region", return_value="india-noida-01")
+    @patch("jarvislabs.instances._get_instance")
+    @patch("jarvislabs.instances._poll_until_running")
     def test_vm_create_l4_keeps_explicit_storage(self, _poll, mock_get, _region, mock_transport):
         mock_transport.request.side_effect = [
             [_DUMMY_KEY.model_dump()],
@@ -1093,9 +1076,9 @@ class TestCreatePayload:
         assert payload["hdd"] == 40
         assert payload["gpu_type"] == "L4"
 
-    @patch("jarvislabs.client._resolve_region", return_value="india-noida-01")
-    @patch("jarvislabs.client._get_instance")
-    @patch("jarvislabs.client._poll_until_running")
+    @patch("jarvislabs.instances._resolve_region", return_value="india-noida-01")
+    @patch("jarvislabs.instances._get_instance")
+    @patch("jarvislabs.instances._poll_until_running")
     def test_vm_create_a100_keeps_explicit_storage(self, _poll, mock_get, _region, mock_transport):
         mock_transport.request.side_effect = [
             [_DUMMY_KEY.model_dump()],
@@ -1115,8 +1098,8 @@ class TestCreatePayload:
 class TestResumePayload:
     def _setup_resume(self, mock_transport):
         existing = _mock_existing_instance()
-        mock_get = patch("jarvislabs.client._get_instance").start()
-        patch("jarvislabs.client._poll_until_running").start()
+        mock_get = patch("jarvislabs.instances._get_instance").start()
+        patch("jarvislabs.instances._poll_until_running").start()
         mock_get.side_effect = [existing, MagicMock(machine_id=11)]
         mock_transport.request.return_value = {"machine_id": 11}
         return _make_instances(mock_transport)
@@ -1146,7 +1129,7 @@ class TestResumePayload:
         assert payload["is_spot"] is False
         assert "is_reserved" not in payload
 
-    @patch("jarvislabs.client._check_gpu_in_region")
+    @patch("jarvislabs.instances._check_gpu_in_region")
     def test_resume_spot_sends_is_spot(self, mock_check, mock_transport):
         instances = self._setup_resume(mock_transport)
         instances.resume(10, is_spot=True)
@@ -1179,8 +1162,8 @@ class TestResumePayload:
         existing = _mock_existing_instance()
         existing.template = "vm"
         existing.region = "india-noida-01"
-        mock_get = patch("jarvislabs.client._get_instance").start()
-        patch("jarvislabs.client._poll_until_running").start()
+        mock_get = patch("jarvislabs.instances._get_instance").start()
+        patch("jarvislabs.instances._poll_until_running").start()
         mock_get.side_effect = [existing, MagicMock(machine_id=11)]
         mock_transport.request.side_effect = [
             [_DUMMY_KEY.model_dump()],
@@ -1192,7 +1175,7 @@ class TestResumePayload:
         assert mock_transport.request.call_args_list[1].args == ("POST", "templates/vm/resume")
 
     def test_resume_non_paused_raises(self, mock_transport):
-        mock_get = patch("jarvislabs.client._get_instance").start()
+        mock_get = patch("jarvislabs.instances._get_instance").start()
         running = MagicMock(status="Running")
         mock_get.return_value = running
         with pytest.raises(ValidationError, match="Paused"):
@@ -1211,7 +1194,7 @@ class TestResumePayload:
         existing = _mock_existing_instance()
         existing.template = "vm"
         existing.region = "india-noida-01"
-        mock_get = patch("jarvislabs.client._get_instance").start()
+        mock_get = patch("jarvislabs.instances._get_instance").start()
         mock_get.return_value = existing
 
         with pytest.raises(ValidationError, match="SSH key"):
@@ -1223,8 +1206,8 @@ class TestResumePayload:
         existing.region = "india-noida-01"
         existing.gpu_type = "A100"
         existing.storage_gb = 40
-        mock_get = patch("jarvislabs.client._get_instance").start()
-        patch("jarvislabs.client._poll_until_running").start()
+        mock_get = patch("jarvislabs.instances._get_instance").start()
+        patch("jarvislabs.instances._poll_until_running").start()
         mock_get.side_effect = [existing, MagicMock(machine_id=11)]
         mock_transport.request.side_effect = [
             [_DUMMY_KEY.model_dump()],
@@ -1256,8 +1239,8 @@ class TestResumePayload:
         ]
 
         with (
-            patch("jarvislabs.client._get_instance", side_effect=[existing, MagicMock(machine_id=11)]),
-            patch("jarvislabs.client._poll_until_running"),
+            patch("jarvislabs.instances._get_instance", side_effect=[existing, MagicMock(machine_id=11)]),
+            patch("jarvislabs.instances._poll_until_running"),
         ):
             _make_instances(mock_transport).resume(10)
 
@@ -1270,7 +1253,7 @@ class TestResumePayload:
 class TestLifecycleRouting:
     def test_pause_vm_uses_vm_endpoint(self, mock_transport):
         instance = MagicMock(template="vm", region="india-noida-01")
-        with patch("jarvislabs.client._get_instance", return_value=instance):
+        with patch("jarvislabs.instances._get_instance", return_value=instance):
             mock_transport.request.return_value = {"success": True}
             _make_instances(mock_transport).pause(10)
 
@@ -1283,7 +1266,7 @@ class TestLifecycleRouting:
 
     def test_pause_cpu_vm_uses_cpu_endpoint(self, mock_transport):
         instance = MagicMock(template="vm", gpu_type="CPU", region="india-noida-01")
-        with patch("jarvislabs.client._get_instance", return_value=instance):
+        with patch("jarvislabs.instances._get_instance", return_value=instance):
             mock_transport.request.return_value = {"success": True}
             _make_instances(mock_transport).pause(10)
 
@@ -1296,7 +1279,7 @@ class TestLifecycleRouting:
 
     def test_destroy_vm_uses_vm_endpoint(self, mock_transport):
         instance = MagicMock(template="vm", region="india-noida-01")
-        with patch("jarvislabs.client._get_instance", return_value=instance):
+        with patch("jarvislabs.instances._get_instance", return_value=instance):
             mock_transport.request.return_value = {"success": True}
             _make_instances(mock_transport).destroy(10)
 
@@ -1309,7 +1292,7 @@ class TestLifecycleRouting:
 
     def test_destroy_cpu_vm_uses_cpu_endpoint(self, mock_transport):
         instance = MagicMock(template="vm", gpu_type="CPU", region="india-noida-01")
-        with patch("jarvislabs.client._get_instance", return_value=instance):
+        with patch("jarvislabs.instances._get_instance", return_value=instance):
             mock_transport.request.return_value = {"success": True}
             _make_instances(mock_transport).destroy(10)
 
@@ -1322,7 +1305,7 @@ class TestLifecycleRouting:
 
     def test_destroy_treats_missing_instance_as_success_after_error_payload(self, mock_transport):
         instance = MagicMock(template="pytorch", region="india-noida-01")
-        with patch("jarvislabs.client._get_instance") as mock_get:
+        with patch("jarvislabs.instances._get_instance") as mock_get:
             mock_get.side_effect = [
                 instance,
                 NotFoundError("Instance 10 not found"),
@@ -1334,7 +1317,7 @@ class TestLifecycleRouting:
     def test_destroy_treats_destroying_instance_as_success_after_error_payload(self, mock_transport):
         instance = MagicMock(template="pytorch", region="india-noida-01")
         destroying = MagicMock(status="Destroying")
-        with patch("jarvislabs.client._get_instance") as mock_get:
+        with patch("jarvislabs.instances._get_instance") as mock_get:
             mock_get.side_effect = [
                 instance,
                 destroying,
@@ -1345,7 +1328,7 @@ class TestLifecycleRouting:
 
     def test_destroy_treats_missing_instance_as_success_after_api_error(self, mock_transport):
         instance = MagicMock(template="pytorch", region="india-noida-01")
-        with patch("jarvislabs.client._get_instance") as mock_get:
+        with patch("jarvislabs.instances._get_instance") as mock_get:
             mock_get.side_effect = [
                 instance,
                 NotFoundError("Instance 10 not found"),
@@ -1357,8 +1340,8 @@ class TestLifecycleRouting:
     def test_destroy_raises_when_instance_still_exists_after_error_payload(self, mock_transport):
         instance = MagicMock(template="pytorch", region="india-noida-01")
         with (
-            patch("jarvislabs.client._get_instance", return_value=instance),
-            patch("jarvislabs.client.time.sleep"),
+            patch("jarvislabs.instances._get_instance", return_value=instance),
+            patch("jarvislabs.instances.time.sleep"),
             pytest.raises(APIError, match="Failed to destroy instance: Unknown error"),
         ):
             mock_transport.request.return_value = {"error": "Unknown error"}

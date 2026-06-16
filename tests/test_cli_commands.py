@@ -115,3 +115,73 @@ def test_resources_non_json_renders_without_error(monkeypatch):
     assert "GPU Containers" in output
     assert "CPU VMs" in output
     assert "● available" in output
+
+
+def test_cpus_json_sanitizes_cpu_meta_regions(monkeypatch):
+    captured: dict = {}
+    meta = SimpleNamespace(
+        cpu_meta={
+            "region": "india-01",
+            "combinations": [
+                {
+                    "vcpus": 8,
+                    "ram_gb": 32,
+                    "price_per_hour": 0.20,
+                    "regions": {"india-noida-01": True, "india-01": False},
+                }
+            ],
+        },
+    )
+    mock_client = SimpleNamespace(
+        account=SimpleNamespace(
+            resources=lambda: meta,
+            currency=lambda: "USD",
+        )
+    )
+
+    monkeypatch.setattr(commands, "get_client", lambda: mock_client)
+    monkeypatch.setattr(commands.render, "spinner", lambda *args, **kwargs: nullcontext())
+    monkeypatch.setattr(commands.render, "print_json", lambda data: captured.update(data))
+
+    commands.cpus(json_output=True)
+
+    assert "region" not in captured
+    assert captured["combinations"][0]["regions"] == {"IN2": True}
+
+
+def test_cpus_non_json_renders_cpu_table(monkeypatch):
+    from io import StringIO
+
+    from rich.console import Console
+
+    meta = SimpleNamespace(
+        cpu_meta={
+            "combinations": [
+                {"vcpus": 4, "ram_gb": 16, "price_per_hour": 0.10, "regions": {"india-noida-01": True}},
+                {"vcpus": 8, "ram_gb": 32, "price_per_hour": 0.20, "regions": {"india-noida-01": False}},
+            ]
+        },
+    )
+    mock_client = SimpleNamespace(
+        account=SimpleNamespace(
+            resources=lambda: meta,
+            currency=lambda: "USD",
+        )
+    )
+    monkeypatch.setattr(commands, "get_client", lambda: mock_client)
+    monkeypatch.setattr(commands.render, "spinner", lambda *args, **kwargs: nullcontext())
+
+    buf = StringIO()
+    old_console = commands.render.stdout_console
+    commands.render.stdout_console = Console(file=buf, force_terminal=False, color_system=None, width=120)
+    try:
+        commands.cpus(json_output=False)
+    finally:
+        commands.render.stdout_console = old_console
+    output = buf.getvalue()
+
+    assert "CPU VMs" in output
+    assert "4" in output
+    assert "16GB" in output
+    assert "$0.10" in output
+    assert "● available" in output

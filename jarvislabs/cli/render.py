@@ -4,15 +4,20 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any
+from contextlib import nullcontext
+from typing import Any, NoReturn
 
 from pydantic import BaseModel
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 from rich.theme import Theme
 
+from jarvislabs.cli import state
 from jarvislabs.constants import EUROPE_REGION, REGION_CODE_TO_REGION, REGION_DISPLAY_CODES
+from jarvislabs.instances import is_cpu_vm
+from jarvislabs.regions import region_code
 
 TABLE_BOX = box.ROUNDED
 HEADER_STYLE = "bold"
@@ -99,12 +104,23 @@ def _table(title: str | None = None, **kwargs) -> Table:
     )
 
 
+def _print_detail_table(rows: list[tuple[str, str]]) -> None:
+    """Print a borderless field/value detail view (shared by instance and deployment detail)."""
+    table = Table(show_header=False, box=None, padding=(0, 2), border_style=BORDER_STYLE)
+    table.add_column("Field", style="dim")
+    # Avoid cutting off long values like notebook URLs with auth tokens.
+    table.add_column("Value", overflow="fold")
+    for field, value in rows:
+        table.add_row(field, value)
+    stdout_console.print(table)
+
+
 def instances_table(instances: list, currency: str = "USD") -> None:
     if not instances:
         info("No instances found.")
         return
 
-    sym = "₹" if currency == "INR" else "$"
+    sym = currency_symbol(currency)
 
     table = _table("Instances", show_lines=True)
     table.add_column("ID", style="cyan", no_wrap=True)
@@ -162,12 +178,7 @@ def _service_url_rows(inst) -> list[tuple[str, str]]:
 
 
 def instance_detail(inst, currency: str = "USD") -> None:
-    sym = "₹" if currency == "INR" else "$"
-    table = Table(show_header=False, box=None, padding=(0, 2), border_style=BORDER_STYLE)
-    table.add_column("Field", style="dim")
-    # Avoid cutting off long values like notebook URLs with auth tokens.
-    table.add_column("Value", overflow="fold")
-
+    sym = currency_symbol(currency)
     status_style = _status_style(inst.status)
 
     cost_label = "Storage cost" if inst.status == "Paused" else "Session cost"
@@ -195,11 +206,7 @@ def instance_detail(inst, currency: str = "USD") -> None:
         rows.append(("HTTP Ports", inst.http_ports or "—"))
 
     rows.extend(_service_url_rows(inst))
-
-    for field, value in rows:
-        table.add_row(field, value)
-
-    stdout_console.print(table)
+    _print_detail_table(rows)
 
 
 def ssh_keys_table(keys: list) -> None:
@@ -268,6 +275,193 @@ def filesystems_table(filesystems: list) -> None:
     stdout_console.print(table)
 
 
+def runs_table(rows: list) -> None:
+    """Render managed runs. Rows are (run_id, machine, kind, state, lifecycle, started) strings."""
+    table = _table("Managed Runs")
+    table.add_column("Run ID", style="cyan")
+    table.add_column("Machine", style="bold")
+    table.add_column("Kind")
+    table.add_column("State")
+    table.add_column("Lifecycle")
+    table.add_column("Started")
+    for row in rows:
+        table.add_row(*row)
+    stdout_console.print(table)
+
+
+# ── Deployments ────────────────────────────────────────────────────────────────
+
+
+def _deployment_status_style(status: str) -> str:
+    """Map a (lowercase) deployment status to a Rich color."""
+    return {
+        "running": "green",
+        "starting": "blue",
+        "filesystem_created": "blue",
+        "downloading_model": "blue",
+        "model_downloaded": "blue",
+        "failed": "red",
+        "cleaning": "red",
+        "deleting": "yellow",
+        "deleted": "dim",
+    }.get(status, "white")
+
+
+def _gpu_label(gpus_to_use: dict | None) -> str:
+    """Render the GPU type from a {'gpus': [type]} payload."""
+    gpus = (gpus_to_use or {}).get("gpus") or []
+    return ", ".join(str(g) for g in gpus) if gpus else "—"
+
+
+def _workers_label(summary) -> str:
+    lo, hi = summary.min_workers, summary.max_workers
+    if lo is None and hi is None:
+        return "—"
+    return f"{lo if lo is not None else '—'}-{hi if hi is not None else '—'}"
+
+
+def _started_label(start_time) -> str:
+    return start_time.strftime("%Y-%m-%d %H:%M") if start_time else "—"
+
+
+def _deployment_cost_cell(dep) -> str:
+    """Total accrued cost for a deployment; dim when nothing has accrued yet."""
+    sym = currency_symbol(dep.currency)
+    style = "green" if dep.total_cost > 0 else "dim"
+    return f"[{style}]{sym}{dep.total_cost:.2f}[/{style}]"
+
+
+def deployments_table(result, *, wide: bool = False) -> None:
+    """Render the deployments list, newest first.
+
+    The default view shows the columns most useful at a glance; ``wide`` adds
+    the configuration columns (framework, workers, concurrency). The full
+    record is always one ``jl deploy get <id>`` (or ``--json``) away.
+    """
+    for region_error in result.region_errors:
+        warning(f"Could not reach {region_label(region_error.region)}: {region_error.error}")
+
+    if not result.deployments:
+        info("No deployments.")
+        return
+
+    table = _table("Deployments", show_lines=True)
+    table.add_column("ID", no_wrap=True)  # full id stays intact so it's copy-pasteable
+    table.add_column("Name", no_wrap=True)
+    table.add_column("Region", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+    if wide:
+        table.add_column("Framework", no_wrap=True)
+    table.add_column("GPU", no_wrap=True)
+    if wide:
+        table.add_column("Workers", justify="right")
+        table.add_column("Concurrent", justify="right")
+    table.add_column("Started", no_wrap=True)
+    table.add_column("Cost", justify="right", no_wrap=True)
+
+    for dep in result.deployments:
+        style = _deployment_status_style(dep.status)
+        row = [
+            escape(dep.deployment_id),
+            escape(dep.name or "—"),
+            region_label(dep.region),
+            f"[{style}]{escape(dep.status)}[/{style}]",
+        ]
+        if wide:
+            row.append(escape(dep.framework or "—"))
+        row.append(escape(_gpu_label(dep.gpus_to_use)))
+        if wide:
+            row.append(_workers_label(dep))
+            row.append(str(dep.concurrent_requests) if dep.concurrent_requests is not None else "—")
+        row.append(_started_label(dep.start_time))
+        row.append(_deployment_cost_cell(dep))
+        table.add_row(*row)
+
+    stdout_console.print(table)
+    if not wide:
+        info("Tip: run 'jl deploy get <ID>' for full details · --wide for all columns")
+
+
+def deployment_detail(dep, *, base_url: str | None = None) -> None:
+    """Full detail view including worker info (folds the would-be `health` command)."""
+    style = _deployment_status_style(dep.status)
+    rows = [
+        ("ID", f"[cyan]{escape(dep.deployment_id)}[/cyan]"),
+        ("Name", f"[bold]{escape(dep.name or '—')}[/bold]"),
+        ("Status", f"[{style}]{escape(dep.status)}[/{style}]"),
+        ("Region", region_label(dep.region)),
+        ("Framework", escape(dep.framework or "—")),
+        ("GPU", f"{escape(_gpu_label(dep.gpus_to_use))} ({dep.gpus_per_worker or '—'}/worker)"),
+        ("Workers", f"{_workers_label(dep)} (min-max)"),
+        ("Concurrent", str(dep.concurrent_requests) if dep.concurrent_requests is not None else "—"),
+        ("Idle timeout", f"{dep.idle_timeout}s" if dep.idle_timeout is not None else "—"),
+        ("Wait time", f"{dep.wait_time}s" if dep.wait_time is not None else "—"),
+        ("Storage", f"{dep.storage}GB" if dep.storage is not None else "—"),
+        ("Model", escape(dep.model or "—")),
+    ]
+
+    other_args = {k: v for k, v in (dep.args or {}).items() if k != "model"}
+    if other_args:
+        rows.append(("Args", _kv_label(other_args)))
+
+    if dep.env:
+        rows.append(("Env", _kv_label(dep.env)))
+
+    workers = dep.workers
+    rows.append(("Queue depth", str(dep.queue_depth) if dep.queue_depth is not None else "—"))
+    rows.append(
+        ("Workers (live)", f"{workers.total} total · {workers.healthy} healthy · {workers.provisioning} provisioning")
+    )
+    rows.extend(
+        (
+            f"  worker {w.worker_id if w.worker_id is not None else i}",
+            f"{escape(str(w.status))} (last used: {escape(str(w.last_used or '—'))})",
+        )
+        for i, w in enumerate(workers.list, start=1)
+    )
+
+    rows.append(("Total cost", _deployment_cost_cell(dep)))
+    rows.append(("Created", _started_label(dep.created_at)))
+    rows.append(("Updated", _started_label(dep.updated_at)))
+    if dep.error_message:
+        rows.append(("Error", f"[red]{escape(dep.error_message)}[/red]"))
+    if base_url:
+        rows.append(("Base URL", _link_value(base_url)))
+
+    _print_detail_table(rows)
+
+
+def _kv_label(data: dict) -> str:
+    return ", ".join(f"{escape(str(key))}={escape(str(value))}" for key, value in data.items())
+
+
+def deployment_status_line(status) -> None:
+    """One-line status: `IN2 · <id> · running` (status colored)."""
+    style = _deployment_status_style(status.status)
+    region = region_label(status.region)
+    stdout_console.print(f"{region} · {escape(status.deployment_id)} · [{style}]{escape(status.status)}[/{style}]")
+
+
+def deployment_running_handoff(base_url: str, model: str | None) -> None:
+    """Print the base URL, a paste-ready OpenAI snippet, and a first-request note.
+    Printed markup-safe so brackets/braces are not mangled."""
+    stdout_console.print(f"Base URL: {base_url}", markup=False, soft_wrap=True)
+    snippet = (
+        "from openai import OpenAI\n"
+        f'client = OpenAI(base_url="{base_url}", api_key="<YOUR_JL_API_KEY>")\n'
+        "resp = client.chat.completions.create(\n"
+        f'    model="{model or "<model>"}",\n'
+        '    messages=[{"role": "user", "content": "Hello"}],\n'
+        ")\n"
+        "print(resp.choices[0].message.content)"
+    )
+    stdout_console.print(snippet, markup=False, soft_wrap=True)
+    stdout_console.print(
+        "Note: the first request may be slow while a worker starts up.",
+        markup=False,
+    )
+
+
 def resource_label(inst) -> str:
     """Return the compact resource text shown in list/detail views."""
     if is_cpu_vm(inst):
@@ -275,11 +469,6 @@ def resource_label(inst) -> str:
         ram = f"{inst.ram}GB" if inst.ram is not None else "—"
         return f"{cores} vCPU / {ram} RAM"
     return f"{inst.num_gpus or 1}x {inst.gpu_type or '—'}"
-
-
-def is_cpu_vm(inst) -> bool:
-    """Return True when an instance should be displayed as a CPU VM."""
-    return getattr(inst, "template", None) == "vm" and getattr(inst, "gpu_type", None) == "CPU"
 
 
 def instance_type(inst) -> str:
@@ -297,7 +486,7 @@ def gpu_table(gpus: list, currency: str = "USD", *, show_legend: bool = True) ->
         info("No GPU data available.")
         return
 
-    sym = "₹" if currency == "INR" else "$"
+    sym = currency_symbol(currency)
     container_gpus = [g for g in gpus if g.workload_type in ("container", None)]
     vm_gpus = [g for g in gpus if g.workload_type in ("vm", None)]
 
@@ -392,11 +581,11 @@ def cpu_vm_table(cpu_meta: dict, currency: str = "USD", *, show_legend: bool = T
         info("No CPU VM data available.")
         return
 
-    sym = "₹" if currency == "INR" else "$"
+    sym = currency_symbol(currency)
     rows = []
     for combo in combinations:
-        regions = combo.get("regions") or {}
-        for region, available in regions.items():
+        region_availability = combo.get("regions") or {}
+        for region, available in region_availability.items():
             rows.append(
                 (
                     int(combo.get("vcpus") or 0),
@@ -438,36 +627,48 @@ def cpu_vm_table(cpu_meta: dict, currency: str = "USD", *, show_legend: bool = T
         availability_legend()
 
 
+def jsonable_cpu_meta(cpu_meta: dict) -> dict:
+    """Return CPU metadata with CLI display region codes and no legacy top-level region."""
+    sanitized = dict(cpu_meta)
+    sanitized.pop("region", None)
+    combinations = []
+    for combo in sanitized.get("combinations", []):
+        item = dict(combo)
+        regions = item.get("regions")
+        if isinstance(regions, dict):
+            item["regions"] = {
+                REGION_DISPLAY_CODES[region]: available
+                for region, available in regions.items()
+                if region in REGION_DISPLAY_CODES
+            }
+        combinations.append(item)
+    if combinations:
+        sanitized["combinations"] = combinations
+    return sanitized
+
+
 # ── Messages ─────────────────────────────────────────────────────────────────
 
 
 def success(msg: str) -> None:
-    from jarvislabs.cli import state
-
     if state.json_output:
         return
     console.print(f"[green]✓[/green] {msg}")
 
 
 def error(msg: str) -> None:
-    from jarvislabs.cli import state
-
     if state.json_output:
         return
     console.print(f"[red]✗[/red] {msg}", style="red")
 
 
 def info(msg: str) -> None:
-    from jarvislabs.cli import state
-
     if state.json_output:
         return
     console.print(f"[dim]{msg}[/dim]")
 
 
 def warning(msg: str) -> None:
-    from jarvislabs.cli import state
-
     if state.json_output:
         return
     console.print(f"[yellow]![/yellow] {msg}")
@@ -477,9 +678,15 @@ def warning(msg: str) -> None:
 
 
 def confirm(msg: str, *, skip: bool = False) -> bool:
-    """Ask for confirmation. Returns True if confirmed or skip=True (--yes flag)."""
+    """Ask for confirmation. Returns True if confirmed or skip=True (--yes flag).
+
+    In --json mode confirmation cannot be prompted, so a missing --yes is a
+    hard error — never a silent decline a script would read as success.
+    """
     if skip:
         return True
+    if state.json_output:
+        die("--json requires --yes")
     try:
         response = console.input(f"[yellow]?[/yellow] {msg} [dim]\\[y/N][/dim] ")
         return response.strip().lower() in ("y", "yes")
@@ -493,16 +700,16 @@ def confirm(msg: str, *, skip: bool = False) -> bool:
 
 def spinner(msg: str):
     """Rich spinner context manager for wrapping API calls. Suppressed in --json mode."""
-    from contextlib import nullcontext
-
-    from jarvislabs.cli import state
-
     if state.json_output:
         return nullcontext()
     return console.status(f"[bold]{msg}[/bold]", spinner="dots")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
+
+def currency_symbol(currency: str) -> str:
+    return "₹" if currency == "INR" else "$"
 
 
 def _cost_cell(inst, sym: str) -> str:
@@ -516,7 +723,7 @@ def region_label(region: str | None) -> str:
     """Convert backend region IDs to short CLI labels like IN2 and EU1."""
     if not region:
         return "—"
-    return REGION_DISPLAY_CODES.get(region, region)
+    return region_code(region)
 
 
 def region_input_label(region: str | None, *, default: str | None = None) -> str:
@@ -541,10 +748,8 @@ def _status_style(status: str) -> str:
     }.get(status, "white")
 
 
-def die(msg: str, code: int = 1) -> None:
+def die(msg: str, code: int = 1) -> NoReturn:
     """Print error and exit. Emits JSON to stdout when --json is active."""
-    from jarvislabs.cli import state
-
     if state.json_output:
         print_json({"error": msg})
     else:

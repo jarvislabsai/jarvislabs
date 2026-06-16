@@ -60,6 +60,10 @@ unfixable = ["T201"]
 [tool.ruff.lint.flake8-bugbear]
 extend-immutable-calls = ["typer.Argument", "typer.Option"]
 
+[tool.ruff.lint.flake8-type-checking]
+# Pydantic evaluates model annotations at runtime, so they must stay importable.
+runtime-evaluated-base-classes = ["pydantic.BaseModel"]
+
 [tool.ruff.lint.isort]
 combine-as-imports = true
 known-first-party = ["jarvislabs"]

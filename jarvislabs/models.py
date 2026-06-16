@@ -6,12 +6,20 @@ for outbound data. Validation lives as simple if-checks in the client layer.
 
 from __future__ import annotations
 
+import builtins
 import re
-from typing import Any
+from datetime import datetime
+from typing import Annotated, Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
-from jarvislabs.constants import REGION_DISPLAY_CODES
+from jarvislabs.regions import region_code
+
+# Region fields serialize their internal id to a display code (IN1/IN2/EU1) in
+# model dumps, while the attribute keeps the raw id. Two variants preserve each
+# field's required/optional contract.
+RegionCode = Annotated[str, PlainSerializer(region_code)]
+OptionalRegionCode = Annotated[str | None, PlainSerializer(region_code)]
 
 # ── Account ──────────────────────────────────────────────────────────────────
 
@@ -68,13 +76,7 @@ class Filesystem(BaseModel):
     fs_id: int
     fs_name: str | None = None
     storage: int | None = None
-    region: str | None = None
-
-    @field_serializer("region")
-    def _display_region(self, v: str | None) -> str | None:
-        if v is None:
-            return None
-        return REGION_DISPLAY_CODES.get(v, v)
+    region: OptionalRegionCode = None
 
 
 # ── Templates ─────────────────────────────────────────────────────────────────
@@ -97,7 +99,7 @@ class ServerMetaGPU(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     gpu_type: str
-    region: str
+    region: RegionCode
     num_free_devices: int = 0
     effective_num_free_devices: int | None = None
     price_per_hour: float | None = None
@@ -107,10 +109,6 @@ class ServerMetaGPU(BaseModel):
     cpus_per_gpu: int | None = None
     ram_per_gpu: int | None = None
     workload_type: str | None = None
-
-    @field_serializer("region")
-    def _display_region(self, v: str) -> str:
-        return REGION_DISPLAY_CODES.get(v, v)
 
     @field_validator("num_free_devices", "effective_num_free_devices", mode="before")
     @classmethod
@@ -160,13 +158,7 @@ class Instance(BaseModel):
     disk_type: str | None = None
     public_ip: str | None = None
     http_ports: str | None = None
-    region: str | None = None
-
-    @field_serializer("region")
-    def _display_region(self, v: str | None) -> str | None:
-        if v is None:
-            return None
-        return REGION_DISPLAY_CODES.get(v, v)
+    region: OptionalRegionCode = None
 
     @field_validator("ram", "storage_gb", "cores", mode="before")
     @classmethod
@@ -215,3 +207,101 @@ class StatusResponse(BaseModel):
                 return None
             return raw
         return v
+
+
+# ── Deployments ──────────────────────────────────────────────────────────────
+
+
+class WorkerInfo(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    # worker_id can be null for a worker that is still being set up.
+    worker_id: int | None = None
+    status: str
+    last_used: str | None = None
+
+
+class Workers(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    total: int = 0
+    healthy: int = 0
+    provisioning: int = 0
+    # Named `list` to match the API; use builtins.list for the annotation.
+    list: builtins.list[WorkerInfo] = Field(default_factory=list)
+
+
+class Deployment(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    deployment_id: str
+    name: str | None = None
+    status: str
+    error_message: str | None = None
+    region: OptionalRegionCode = None
+    framework: str | None = None
+    gpus_to_use: dict | None = None
+    gpus_per_worker: int | None = None
+    min_workers: int | None = None
+    max_workers: int | None = None
+    concurrent_requests: int | None = None
+    idle_timeout: int | None = None
+    wait_time: int | None = None
+    storage: int | None = None
+    args: dict | None = None
+    env: dict | None = None
+    start_time: datetime | None = None
+    end_time: datetime | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    workers: Workers = Field(default_factory=Workers)
+    queue_depth: int | None = None
+    # Total accrued cost of the deployment so far (compute + storage), in `currency`.
+    total_cost: float = 0.0
+    currency: str = "USD"
+
+    @property
+    def model(self) -> str | None:
+        return (self.args or {}).get("model")
+
+    @property
+    def served_model(self) -> str | None:
+        """Model name inference clients must use: the served-model-name arg when set, else the model id."""
+        return (self.args or {}).get("served-model-name") or self.model
+
+
+class DeploymentSummary(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    deployment_id: str
+    name: str | None = None
+    status: str
+    region: OptionalRegionCode = None
+    start_time: datetime | None = None
+    framework: str | None = None
+    min_workers: int | None = None
+    max_workers: int | None = None
+    gpus_to_use: dict | None = None
+    concurrent_requests: int | None = None
+    gpus_per_worker: int | None = None
+    error_message: str | None = None
+    total_cost: float = 0.0
+    currency: str = "USD"
+
+
+class DeploymentStatus(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    deployment_id: str
+    region: OptionalRegionCode = None
+    status: str
+
+
+class RegionError(BaseModel):
+    region: RegionCode
+    error: str
+
+
+class DeploymentListResult(BaseModel):
+    deployments: list[DeploymentSummary] = Field(default_factory=list)
+    region_errors: list[RegionError] = Field(default_factory=list)
