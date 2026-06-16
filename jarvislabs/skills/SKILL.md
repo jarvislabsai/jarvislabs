@@ -1,6 +1,6 @@
 ---
 name: jarvislabs
-description: Agent guide for running and monitoring GPU experiments with the jl CLI on JarvisLabs.ai.
+description: Agent guide for running GPU experiments and serverless model deployments with the jl CLI on JarvisLabs.ai.
 ---
 
 # JarvisLabs GPU CLI (`jl`) — Agent Guide
@@ -9,13 +9,14 @@ description: Agent guide for running and monitoring GPU experiments with the jl 
 
 Verify auth with `jl status --json` before doing anything. If not logged in, use `jl setup --token <token> --yes`. You can also authenticate via `export JL_API_KEY="..."`.
 
-Use `--help` on any command to discover flags (e.g., `jl run --help`, `jl create --help`). If something goes wrong, use `jl run logs`, `jl run status`, and `jl exec` to diagnose — don't guess.
+Use `--help` on any command to discover flags (e.g., `jl run --help`, `jl create --help`). If something goes wrong, diagnose with `jl run logs`/`jl run status`/`jl exec` for managed runs, or `jl deploy get`/`jl deploy logs` for deployments — don't guess.
 
 ## Mental Model
 
 - Machine commands (`jl create/list/get/pause/resume/destroy/rename/ssh/exec/upload/download`) = GPU instance lifecycle and access.
 - `jl run` = managed job on an instance. Uploads code, sets up a Python environment, runs your script in the background with log tracking.
 - `jl exec` = run any command on an instance. Use for system checks (nvidia-smi, ps, df), debugging failed runs, inspecting files, or any raw shell access. No environment setup, no tracking. This is your escape hatch when `jl run` doesn't cover your use case.
+- `jl deploy` (beta) = serverless model serving — an OpenAI-compatible endpoint with autoscaling workers, no instance to manage. Separate from instances and runs.
 
 ## Instances
 
@@ -56,9 +57,9 @@ Valid region codes for new instances: `IN1`, `IN2`, `EU1`.
 
 If `--region` is omitted, the CLI picks a region based on GPU availability.
 
-Use `jl resources --json` as the source of truth for GPU, region, and workload availability. VM instances require at least one SSH key and a matching `workload_type="vm"` row.
+Use `jl resources --json` as the source of truth for GPU, region, and workload availability. VM instances require at least one SSH key and a matching VM-capable row (`workload_type="vm"` or `null`).
 
-Container template availability is not exposed in `jl resources --json`. Current CLI policy allows IN1 container creates only with `--template pytorch`; other IN1 container templates fail before launch until backend/product support is confirmed.
+Template availability is enforced by the backend, not the CLI. If a template isn't available in your chosen region, the create fails server-side — pick another region or template.
 
 Run `jl gpus` to check GPU availability and pricing. Output shows **GPU Containers** and **GPU VMs** tables with separate availability for each. Spot prices are shown only for GPU containers.
 
@@ -81,7 +82,7 @@ Container instances expose default HTTP ports (each gets its own HTTPS URL):
 
 | Port | Service |
 |---|---|
-| 8889 | JupyterLab (`url` field) |
+| 8889 | JupyterLab (`url` field, shown as "URL" in `jl get`) |
 | 7007 | IDE (`vs_url` field) |
 | 6006 | Available on generic templates like pytorch (`endpoints[0]`) |
 
@@ -168,7 +169,7 @@ jl run . --script train.py --gpu L4 --keep --json --yes
 jl run . --script train.py --gpu L4 --spot --keep --json --yes
 ```
 
-Creates a new instance, uploads code, runs the script. Additional flags: `--spot` (fresh GPU containers only), `--vm` (VM instead of container, disallows `--template` and `--http-ports`), `--template` (default: pytorch; run `jl templates --json` to list available), `--storage` (default: 100GB), `--num-gpus` (default: 1), `--region`, `--http-ports`.
+Creates a new instance, uploads code, runs the script. Additional flags: `--spot` (fresh GPU containers only), `--vm` (VM instead of container, disallows `--template` and `--http-ports`), `--template` (default: pytorch; run `jl templates --json` to list available), `--storage` (default: 100GB), `--num-gpus` (default: 1), `--name`/`-n` (default: jl-run), `--region` (IN1/IN2/EU1), `--http-ports`.
 
 **Lifecycle rules for fresh instances:**
 
@@ -197,18 +198,20 @@ The output includes a **header** and **footer** with run state (in non-follow, n
 step=100 loss=2.31
 step=200 loss=2.11
 
---- still running | log: /home/jl-runs/r_abc/output.log ---
+--- still running | log: <home>/jl-runs/r_abc/output.log ---
 ```
 
 When done, the footer shows the final state:
 ```
---- succeeded | exit code: 0 | log: /home/jl-runs/r_abc/output.log ---
+--- succeeded | exit code: 0 | log: <home>/jl-runs/r_abc/output.log ---
 ```
 
 Or on failure:
 ```
---- failed | exit code: 1 | log: /home/jl-runs/r_abc/output.log ---
+--- failed | exit code: 1 | log: <home>/jl-runs/r_abc/output.log ---
 ```
+
+The log path is `<home>/jl-runs/<run_id>/output.log` (`<home>` = `/home/` on containers, `/home/<user>/` on VMs).
 
 If the instance is paused, missing, or SSH is unavailable, `jl run logs` fails before printing any output. Use `jl run status <run_id> --json` to check those states.
 
@@ -231,7 +234,7 @@ Cadence: 60-120s (short experiments), 180-300s (long training), 300-600s (very l
 jl run status <run_id> --json
 ```
 
-Returns run state, machine_id, exit_code, lifecycle_policy, launch_command, and more. Without `--refresh`, `jl run list` shows state as `"saved"` (a sentinel, not a real run state). Use `--refresh` or `--status` to get live state.
+Returns run state, machine_id, exit_code, lifecycle_policy, launch_command, and more — always live, no flags needed. Separately, `jl run list` shows state as `"saved"` until you pass `--refresh` (or `--status`).
 
 ### Stopping a run
 
@@ -271,19 +274,14 @@ Default destinations: upload without dest → remote home directory. Download wi
 
 ### What persists across pause/resume
 
-The remote home directory (`/home/` on containers, `/home/<user>/` on VMs) persists. Everything else is ephemeral.
+The remote home directory (`/home/` on containers, `/home/<user>/` on VMs) persists across pause/resume:
 
-**Persists:**
 - Files and directories under the home directory
-- `$HOME/.venv` (shared venv for file runs) and `<project>/.venv` (per-project venv for directory runs)
+- `$HOME/.venv` (file runs) and `<project>/.venv` (directory runs)
 - Attached filesystems (mounted at `/home/jl_fs/`)
 - Run metadata under `<home>/jl-runs/<run_id>/`
 
-**Lost on pause:**
-- System-level installs (`apt-get`, global pip packages outside the home directory)
-- Files outside the home directory (`/tmp`, `/root`, etc.)
-
-Use `--setup` for system-level reinstalls (e.g., `apt-get`). Python packages in the venv persist across pause/resume. For recurring system setup, use startup scripts (`jl scripts add`).
+On **containers**, anything outside the home directory is ephemeral — system installs (`apt-get`, global pip) and files in `/tmp`, `/root`, etc. are lost on pause. VMs are full machines and keep their whole disk. To re-run system installs on each container launch, pass `--setup "<cmd>"` to `jl run`, or attach a startup script (`jl scripts add` + `--script-id`). Venv packages persist either way.
 
 ### Remote file paths
 
@@ -306,13 +304,59 @@ jl ssh-key list --json                 # list registered SSH keys
 jl ssh-key add <pubkey-file> --name x  # add SSH key (required for VMs)
 jl scripts list --json                 # list startup scripts
 jl filesystem list --json              # list filesystems
-jl filesystem create --name x --storage 100 --json  # create filesystem
+jl filesystem create --name x --storage 100 --yes --json  # create filesystem
 ```
 
 **Filesystem caveats:**
 - **Region-bound:** A filesystem can only attach to instances in the same region.
 - **ID changes on edit:** Expanding a filesystem (`jl filesystem edit`) may return a new `fs_id`. Always use the returned ID.
 - The CLI validates that `fs_id` exists and belongs to the same region before creating/resuming.
+
+## Serverless Deployments (Beta)
+
+`jl deploy` = beta serverless model serving: an OpenAI-compatible endpoint with autoscaling workers, **no instance to manage** (no SSH/exec, no pause/resume). You create, call the endpoint, and `delete` the deployment when done.
+
+Subcommands: `create`, `list`, `get`, `status`, `logs`, `update`, `delete`. Run `jl deploy <cmd> --help` for exact flags.
+
+**Regions:** serverless is `IN1`/`IN2` only (not `EU1`). `create` requires `--region`. Per-id commands (`get`/`status`/`logs`/`update`/`delete`) search both regions if `--region` is omitted — pass it to skip the search.
+
+### Creating
+
+```bash
+jl deploy create \
+  --name qwen --region IN2 --framework vllm --gpu L4 \
+  --gpus-per-worker 1 --min-workers 0 --max-workers 2 \
+  --idle-timeout 600 --wait-time 60 --storage 50 \
+  --model Qwen/Qwen3-0.6B \
+  --detach --yes --json
+```
+
+- **Async.** Without `--detach`, `create` blocks and polls until `running`. **For agents, pass `--detach`** to get the id immediately, then poll `jl deploy status <id> --json`. The id prints as soon as it's assigned; once printed, Ctrl-C only detaches from the wait — the deployment keeps building.
+- Repeatable `--arg key=value` (framework args, e.g. `--arg max-model-len=8192`) and `--env KEY=value` (e.g. `--env HF_TOKEN=...`).
+- `--json` requires `--yes`.
+
+### OpenAI-compatible inference
+
+A running deployment exposes an OpenAI-compatible base URL (`openai_base_url` from `jl deploy get <id> --json`, present only when `running`), authed with your JarvisLabs API key. **Use the served model name** — if you set `--arg served-model-name=<x>`, that is the `model` field, not the `--model` id. `create` prints a paste-ready snippet; `get` shows the base URL.
+
+Once `running`, send a real inference request to confirm the model responds as expected before relying on the endpoint. With `--min-workers 0`, the first request may be slow while a worker starts; use a generous first-call timeout.
+
+### Inspecting & managing
+
+```bash
+jl deploy status <id> --json            # lightweight lifecycle status (poll this)
+jl deploy list                          # compact table with cost
+jl deploy list --wide                   # + framework, workers, concurrency
+jl deploy get <id> --json               # full detail: workers, cost, error, base URL
+jl deploy logs <id> --tail 100 --no-follow
+jl deploy update <id> --idle-timeout 900 --json
+jl deploy delete <id> --yes --json
+```
+
+- Poll until `status` is `running`; `failed`/`cleaning`/`deleting` are terminal. On failure with no live workers, read the reason from `jl deploy get <id>`.
+- **`jl deploy logs` defaults to `--follow` (blocks) and rejects `--json`** — pass `--no-follow` for a one-shot read. Logs stream live from workers and are not stored.
+- `jl deploy update` only changes `name`/`idle-timeout`/`wait-time`, and only while running. To change GPU/model/workers/storage, recreate.
+- Deployments accrue cost while active (compute + storage), so `delete` when done.
 
 ## Agent Workflow (End-to-End)
 
@@ -350,6 +394,8 @@ jl pause <machine_id> --yes --json
 
 When `--json` is active, CLI validation and API failures are emitted as `{"error": "..."}` to stdout.
 
+**Confirm-gated commands require `--yes` with `--json`.** Commands that prompt for confirmation (`create`, `pause`, `resume`, `destroy`, `rename`, `filesystem` mutations, `deploy create`/`delete`, fresh-instance `jl run`) cannot prompt in `--json` mode — a missing `--yes` is a hard error (`{"error": "--json requires --yes"}`, exit 1), not a silent skip. Always pair `--yes` with `--json` on these.
+
 Not all non-zero exits use that shape. `jl exec --json` returns its own structured payload with `stdout`, `stderr`, and `exit_code` fields.
 
 Agent rule:
@@ -359,7 +405,8 @@ Agent rule:
 
 ## Anti-Patterns
 
-- Do not use `jl run logs --follow` — blocks forever, will timeout. `--json` is also incompatible with `--follow`.
+- Avoid `jl run logs --follow` for agent polling — it blocks. Use bounded `--tail N` polling instead (humans can use `--follow` interactively). `--json` is incompatible with `--follow`.
+- `jl deploy logs` defaults to `--follow` (blocks) and rejects `--json` — pass `--no-follow` for a one-shot read.
 - Always use `--json` when starting runs — it returns immediately. Without `--json`, the CLI streams logs and blocks.
 - Do not read full logs without `--tail N` — can return megabytes of output.
 - Do not poll every few seconds — use 60-600s intervals based on expected run duration.
@@ -377,4 +424,5 @@ Every command supports `--help` for full flag details:
 ```bash
 jl create --help       jl run --help       jl ssh-key --help
 jl resume --help       jl run logs --help  jl filesystem --help
+jl deploy --help       jl deploy create --help
 ```
