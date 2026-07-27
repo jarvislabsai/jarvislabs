@@ -136,3 +136,4 @@ research/
 .claude/
 docs.md
 benchmarks/
+.agents/
