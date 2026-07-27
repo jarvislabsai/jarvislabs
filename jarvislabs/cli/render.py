@@ -193,13 +193,19 @@ def instance_detail(inst, currency: str = "USD") -> None:
         ("Storage", f"{inst.storage_gb}GB" if inst.storage_gb else "—"),
         ("Region", region_label(inst.region)),
         (cost_label, f"[green]{sym}{inst.cost:.2f}[/green]"),
-        ("SSH", f"[cyan]{inst.ssh_command}[/cyan]" if inst.ssh_command else "—"),
     ]
 
-    # Public IP for running VMs only (paused VMs have stale, released IPs)
-    _ip = (inst.public_ip or "").strip()
-    if inst.template == "vm" and inst.status == "Running" and _ip:
-        rows.append(("Public IP", f"[cyan]{_ip}[/cyan]"))
+    if inst.ssh_command:
+        rows.append(("SSH", f"[cyan]{inst.ssh_command}[/cyan]"))
+
+    if inst.public_ip:
+        rows.append(("Public IP", f"[cyan]{inst.public_ip}[/cyan]"))
+
+    if inst.private_ip:
+        rows.append(("Private IP", f"[cyan]{inst.private_ip}[/cyan]"))
+
+    if inst.vpc_id:
+        rows.append(("VPC", f"[cyan]{inst.vpc_id}[/cyan]"))
 
     # VMs are SSH-only, skip the always-empty HTTP Ports row for them
     if inst.template != "vm":

@@ -70,7 +70,13 @@ def _mock_existing_instance():
 
 _INST_RESP = {
     "success": True,
-    "instance": {"machine_id": 42, "status": "Running", "template": "pytorch"},
+    "instance": {
+        "machine_id": 42,
+        "status": "Running",
+        "template": "pytorch",
+        "private_ip": "10.11.2.10",
+        "vpc_id": None,
+    },
 }
 
 _DUMMY_KEY = SSHKey(ssh_key="ssh-ed25519 AAA", key_name="test", key_id="k1")
@@ -605,13 +611,25 @@ class TestFetchInstances:
             "success": True,
             "instances": [
                 {"machine_id": 1, "status": "Running", "template": "pytorch"},
-                {"machine_id": 2, "status": "Paused", "template": "fastai"},
+                {
+                    "machine_id": 2,
+                    "status": "Paused",
+                    "template": "vm",
+                    "public_ip": "203.0.113.10",
+                    "private_ip": "10.0.0.2",
+                    "vpc_id": "vpc-abc123",
+                    "ssh_command": "ssh root@203.0.113.10",
+                },
             ],
         }
         result = _fetch_instances(mock_transport)
         assert len(result) == 2
         assert result[0].machine_id == 1
         assert result[1].status == "Paused"
+        assert result[1].public_ip is None
+        assert result[1].private_ip == "10.0.0.2"
+        assert result[1].vpc_id == "vpc-abc123"
+        assert result[1].ssh_command is None
 
     def test_empty(self, mock_transport):
         mock_transport.request.return_value = {"success": True, "instances": []}
@@ -624,7 +642,10 @@ class TestFetchInstances:
 class TestGetInstance:
     def test_success(self, mock_transport):
         mock_transport.request.return_value = _INST_RESP
-        assert _get_instance(mock_transport, 42).machine_id == 42
+        instance = _get_instance(mock_transport, 42)
+        assert instance.machine_id == 42
+        assert instance.private_ip == "10.11.2.10"
+        assert instance.vpc_id is None
 
     def test_not_found(self, mock_transport):
         mock_transport.request.return_value = {"success": False}
@@ -1410,3 +1431,55 @@ class TestModelSerialization:
 
         inst = Instance(machine_id=1, status="Running", template="pytorch", region=None)
         assert inst.model_dump()["region"] is None
+
+    def test_running_instance_preserves_connection_details(self):
+        from jarvislabs.models import Instance
+
+        inst = Instance(
+            machine_id=1,
+            status="Running",
+            template="vm",
+            public_ip="203.0.113.10",
+            private_ip="10.0.0.2",
+            vpc_id="vpc-abc123",
+            ssh_command="ssh root@203.0.113.10",
+        )
+
+        assert inst.public_ip == "203.0.113.10"
+        assert inst.private_ip == "10.0.0.2"
+        assert inst.vpc_id == "vpc-abc123"
+        assert inst.ssh_command == "ssh root@203.0.113.10"
+
+    def test_paused_container_clears_released_connection_details(self):
+        from jarvislabs.models import Instance
+
+        inst = Instance(
+            machine_id=1,
+            status="Paused",
+            template="pytorch",
+            public_ip="203.0.113.10",
+            private_ip="10.11.2.10",
+            ssh_command="ssh root@203.0.113.10",
+        )
+
+        assert inst.public_ip is None
+        assert inst.private_ip is None
+        assert inst.ssh_command is None
+
+    def test_paused_vpc_vm_preserves_private_network_details(self):
+        from jarvislabs.models import Instance
+
+        inst = Instance(
+            machine_id=1,
+            status="Paused",
+            template="vm",
+            public_ip="203.0.113.10",
+            private_ip="10.0.0.2",
+            vpc_id="vpc-abc123",
+            ssh_command="ssh root@203.0.113.10",
+        )
+
+        assert inst.public_ip is None
+        assert inst.private_ip == "10.0.0.2"
+        assert inst.vpc_id == "vpc-abc123"
+        assert inst.ssh_command is None
