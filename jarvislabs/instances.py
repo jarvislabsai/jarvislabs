@@ -30,6 +30,7 @@ from jarvislabs.server_meta import (
     _validate_create_region,
     choose_cpu_vm_plan,
 )
+from jarvislabs.vpcs import Vpcs
 
 if TYPE_CHECKING:
     from jarvislabs.ssh_keys import SSHKeys
@@ -48,6 +49,23 @@ def _validate_instance_name(name: str) -> None:
             f"Instance name contains unsupported characters: {name!r}. "
             "Only letters, numbers, spaces, hyphens, and underscores are allowed."
         )
+
+
+def _validate_vpc_template(vpc_id: str | None, template: str) -> None:
+    if vpc_id is not None and template != "vm":
+        raise ValidationError("VPCs are only supported for VM instances — containers cannot join a VPC.")
+
+
+def _resolve_vpc_region(transport: Transport, vpc_id: str, region: str | None) -> str:
+    """Return the VPC's region, validating any requested region against it."""
+    vpc = Vpcs(transport).get(vpc_id)
+    if region and region != vpc.region:
+        raise ValidationError(
+            f"VPC {vpc_id} is in {region_code(vpc.region)}, "
+            f"but the instance region is {region_code(region)}. "
+            "A VM and its VPC must be in the same region."
+        )
+    return vpc.region
 
 
 def _validate_europe(gpu_type: str, num_gpus: int) -> None:
@@ -147,6 +165,7 @@ class Instances:
         arguments: str = "",
         region: str | None = None,
         is_spot: bool = False,
+        vpc_id: str | None = None,
     ) -> Instance:
         """Create a GPU instance by default, or a CPU VM when cpu=True.
 
@@ -154,6 +173,7 @@ class Instances:
         use a different backend endpoint, so cpu=True explicitly routes into
         the CPU VM flow after rejecting options that only apply to GPU creates.
         """
+        _validate_vpc_template(vpc_id, template)
         if cpu:
             if template != "vm":
                 raise ValidationError("CPU instances must be created as VMs. Use: jl create --vm --cpu")
@@ -179,6 +199,7 @@ class Instances:
                 storage=storage,
                 name=name,
                 region=region,
+                vpc_id=vpc_id,
             )
 
         if not gpu_type:
@@ -189,6 +210,8 @@ class Instances:
             _validate_instance_name(name)
 
         region = normalize_region(region)
+        if vpc_id is not None:
+            region = _resolve_vpc_region(self._t, vpc_id, region)
         if region is None:
             region = _resolve_region(self._t, gpu_type=gpu_type, num_gpus=num_gpus, template=template, is_spot=is_spot)
         else:
@@ -224,6 +247,8 @@ class Instances:
             "fs_id": fs_id,
             "arguments": arguments,
         }
+        if vpc_id is not None:
+            payload["vpc_id"] = vpc_id
 
         base_url = region_base_url(region)
         resp = self._t.request(
@@ -249,6 +274,7 @@ class Instances:
         storage: int,
         name: str,
         region: str | None,
+        vpc_id: str | None = None,
     ) -> Instance:
         """Create a CPU VM through the dedicated backend endpoint.
 
@@ -264,6 +290,8 @@ class Instances:
         self._require_ssh_key()
 
         normalized_region = normalize_region(region)
+        if vpc_id is not None:
+            normalized_region = _resolve_vpc_region(self._t, vpc_id, normalized_region)
         selected_vcpus, selected_ram, selected_region = choose_cpu_vm_plan(
             self._t,
             vcpus=vcpus,
@@ -281,6 +309,8 @@ class Instances:
             "duration": "hour",
             "disk_type": "ssd",
         }
+        if vpc_id is not None:
+            payload["vpc_id"] = vpc_id
 
         resp = self._t.request(
             "POST",
@@ -326,12 +356,16 @@ class Instances:
         vcpus: int | None = None,
         ram: int | None = None,
         is_spot: bool = False,
+        vpc_id: str | None = None,
     ) -> Instance:
         instance = _get_instance(self._t, machine_id)
         if instance.status != "Paused":
             raise ValidationError(f"Can only resume a Paused instance (current status: {instance.status})")
         if name:
             _validate_instance_name(name)
+        _validate_vpc_template(vpc_id, instance.template)
+        if vpc_id is not None:
+            _resolve_vpc_region(self._t, vpc_id, instance.region or DEFAULT_REGION)
         # Resume is region-locked — backend always uses instance's original region
         region = instance.region or DEFAULT_REGION
         base_url = region_base_url(region)
@@ -357,6 +391,7 @@ class Instances:
                 name=name,
                 vcpus=vcpus,
                 ram=ram,
+                vpc_id=vpc_id,
             )
 
         if vcpus is not None or ram is not None:
@@ -411,6 +446,9 @@ class Instances:
             "fs_id": fs_id if fs_id is not None else instance.fs_id,
             "arguments": "",
         }
+        # Omitted vpc_id keeps the VM's current VPC.
+        if vpc_id is not None:
+            payload["vpc_id"] = vpc_id
 
         resp = self._t.request(
             "POST",
@@ -435,6 +473,7 @@ class Instances:
         name: str | None,
         vcpus: int | None,
         ram: int | None,
+        vpc_id: str | None = None,
     ) -> Instance:
         """Resume a paused CPU VM through the CPU VM backend endpoint."""
         if (vcpus is None) != (ram is None):
@@ -454,6 +493,8 @@ class Instances:
         if vcpus is not None and ram is not None:
             payload["vcpus"] = vcpus
             payload["ram_gb"] = ram
+        if vpc_id is not None:
+            payload["vpc_id"] = vpc_id
 
         region = instance.region or DEFAULT_REGION
         resp = self._t.request(

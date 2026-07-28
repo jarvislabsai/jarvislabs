@@ -79,6 +79,29 @@ class Filesystem(BaseModel):
     region: OptionalRegionCode = None
 
 
+# ── VPCs ─────────────────────────────────────────────────────────────────────
+
+
+class Vpc(BaseModel):
+    vpc_id: str
+    name: str | None = None
+    region: RegionCode
+    cidr: str | None = None
+    gateway_ip: str | None = None
+    is_default: bool = False
+    status: str | None = None
+
+
+class VpcIP(BaseModel):
+    """A private IP allocated in a VPC, and the machine holding it."""
+
+    private_ip: str
+    machine_id: int | None = None
+    status: str | None = None
+    mac_address: str | None = None
+    lsp_name: str | None = None
+
+
 # ── Templates ─────────────────────────────────────────────────────────────────
 
 
@@ -177,7 +200,8 @@ class Instance(BaseModel):
         if self.status == "Running":
             return self
 
-        # Hide public IP and SSH while paused because the IP may be reassigned.
+        # Public IP and SSH are only trustworthy while Running; for any other
+        # status the IP may be released or reassigned, so hide them.
         self.public_ip = None
         self.ssh_command = None
 

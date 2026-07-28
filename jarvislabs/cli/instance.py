@@ -166,6 +166,10 @@ def instance_create(
     script_args: Annotated[str, typer.Option("--script-args", help="Arguments passed to startup script.")] = "",
     fs_id: Annotated[int | None, typer.Option("--fs-id", help="Filesystem ID to attach.")] = None,
     spot: Annotated[bool, typer.Option("--spot", help="Create a spot GPU container instance.")] = False,
+    vpc_id: Annotated[
+        str | None,
+        typer.Option("--vpc-id", help="VPC to place the VM in. Defaults to the region's default VPC."),
+    ] = None,
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -199,10 +203,16 @@ def instance_create(
         render.die("GPU type is required. Use --gpu <type>, or use --vm --cpu for a CPU VM.")
     if spot and vm:
         render.die("--spot is only supported for GPU container instances.")
+    if vpc_id and not vm:
+        render.die("--vpc-id requires --vm. Containers cannot join a VPC.")
 
     client = get_client() if cpu else None
     resolved_cpu_region: str | None = None
     if cpu:
+        # A VM and its VPC share a region, so the VPC decides before plan resolution.
+        if vpc_id and region is None:
+            with render.spinner("Resolving VPC..."):
+                region = client.vpcs.get(vpc_id).region
         with render.spinner("Resolving CPU VM plan..."):
             vcpus, ram, resolved_cpu_region = client.instances.resolve_cpu_vm_plan(
                 vcpus=vcpus,
@@ -232,6 +242,8 @@ def instance_create(
         details.append(f"script_args={script_args!r}")
     if fs_id is not None:
         details.append(f"fs_id={fs_id}")
+    if vpc_id:
+        details.append(f"vpc={vpc_id}")
     noun = "CPU VM" if cpu else ("VM" if template == "vm" else "instance")
     prompt = f"Create {noun} ({', '.join(details)})?"
     if not render.confirm(prompt, skip=state.yes):
@@ -255,6 +267,7 @@ def instance_create(
             script_args=script_args,
             fs_id=fs_id,
             is_spot=spot,
+            vpc_id=vpc_id,
         )
 
     if state.json_output:
@@ -334,6 +347,10 @@ def instance_resume(
     ] = None,
     fs_id: Annotated[int | None, typer.Option("--fs-id", help="Filesystem ID to attach.")] = None,
     spot: Annotated[bool, typer.Option("--spot", help="Resume as a spot GPU container instance.")] = False,
+    vpc_id: Annotated[
+        str | None,
+        typer.Option("--vpc-id", help="Move the VM into this VPC on resume. Omit to keep its current VPC."),
+    ] = None,
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -362,6 +379,8 @@ def instance_resume(
         changes.append(f"fs_id={fs_id}")
     if spot:
         changes.append("spot=true")
+    if vpc_id:
+        changes.append(f"vpc={vpc_id}")
 
     details = ", ".join(changes) if changes else "current configuration"
     if not render.confirm(f"Resume instance {machine_id} with {details}?", skip=state.yes):
@@ -382,6 +401,7 @@ def instance_resume(
             script_args=script_args,
             fs_id=fs_id,
             is_spot=spot,
+            vpc_id=vpc_id,
         )
 
     if inst.machine_id != machine_id:

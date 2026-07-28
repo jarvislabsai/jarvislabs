@@ -121,6 +121,7 @@ jl download <id> /home/results.csv  # Download files
 jl ssh-key add ~/.ssh/id_ed25519.pub --name "my-key"
 jl scripts add ./setup.sh --name "install-deps"
 jl filesystem create --name "datasets" --storage 200
+jl vpc create my-net --cidr 10.50.0.0/24 --region IN1
 jl get <id>                  # Shows Jupyter + exposed port URLs
 ```
 
@@ -157,6 +158,33 @@ with Client() as client:
 
     # Manage startup scripts
     client.scripts.add(script="#!/bin/bash\npip install wandb", name="setup")
+```
+
+### VPCs (private networking for VMs)
+
+VMs in supported regions get a private IP inside a VPC, so they can talk to
+each other privately. A VM and its VPC must be in the same region. Containers
+do not support VPCs.
+
+```bash
+jl vpc list                                        # All your VPCs (every region)
+jl vpc create my-net --cidr 10.50.0.0/24 --region IN1
+jl vpc ips <vpc-id>                                # Private IPs and the machines holding them
+jl create --gpu A100-80GB --vm --vpc-id <vpc-id>   # Launch a VM into a VPC
+jl resume <machine-id> --vpc-id <vpc-id>           # Move a paused VM into another VPC
+jl vpc delete <vpc-id>                             # Delete an empty VPC
+```
+
+```python
+from jarvislabs import Client
+
+with Client() as client:
+    vpc = client.vpcs.create(name="my-net", cidr="10.50.0.0/24", region="IN1")
+    vm = client.instances.create(gpu_type="A100-80GB", template="vm", vpc_id=vpc.vpc_id)
+    print(vm.private_ip)
+
+    for ip in client.vpcs.ips(vpc.vpc_id):
+        print(ip.private_ip, ip.machine_id)
 ```
 
 ## Development

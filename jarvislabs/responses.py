@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 
-def _backend_msg(resp: dict) -> str:
-    """Extract a human-readable error from an API response dict."""
-    for key in ("message", "error", "detail"):
-        if resp.get(key):
-            return str(resp[key])
+def _backend_msg(resp: object) -> str:
+    """Extract a human-readable error from an API response."""
+    if isinstance(resp, dict):
+        for key in ("message", "error", "detail"):
+            if resp.get(key):
+                return str(resp[key])
     return "unexpected error"
 
 

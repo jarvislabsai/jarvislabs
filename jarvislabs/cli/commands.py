@@ -154,6 +154,9 @@ app.add_typer(scripts_app, rich_help_panel="Infrastructure")
 filesystem_app = typer.Typer(name="filesystem", help="Manage persistent filesystems.")
 app.add_typer(filesystem_app, rich_help_panel="Infrastructure")
 
+vpc_app = typer.Typer(name="vpc", help="Manage VPCs (private networks for VMs).")
+app.add_typer(vpc_app, rich_help_panel="Infrastructure")
+
 
 @ssh_key_app.command("list")
 def ssh_key_list(
@@ -185,7 +188,8 @@ def ssh_key_add(
         render.die("Public key file is empty.")
 
     client = get_client()
-    client.ssh_keys.add(ssh_key=key_content, key_name=name)
+    with render.spinner("Adding SSH key..."):
+        client.ssh_keys.add(ssh_key=key_content, key_name=name)
     if state.json_output:
         render.print_json({"success": True, "name": name})
         return
@@ -204,7 +208,8 @@ def ssh_key_remove(
         raise typer.Exit()
 
     client = get_client()
-    client.ssh_keys.remove(key_id)
+    with render.spinner("Removing SSH key..."):
+        client.ssh_keys.remove(key_id)
     if state.json_output:
         render.print_json({"success": True, "key_id": key_id})
         return
@@ -240,8 +245,7 @@ def scripts_add(
     if not content.strip():
         render.die("Script file is empty.")
 
-    default_name = Path(script_file.name).stem
-    script_name = name.strip() if name else default_name
+    script_name = (name or "").strip() or Path(script_file.name).stem
     client = get_client()
     with render.spinner("Adding startup script..."):
         client.scripts.add(content, script_name)
@@ -386,3 +390,104 @@ def filesystem_remove(
         return
 
     render.success(f"Filesystem {fs_id} removed.")
+
+
+@vpc_app.command("list")
+def vpc_list(
+    json_output: cli_options.JsonOption = False,
+) -> None:
+    """List VPCs across all regions."""
+    cli_options.apply_command_options(json_output=json_output)
+    client = get_client()
+    with render.spinner("Fetching VPCs..."):
+        vpcs = client.vpcs.list()
+
+    if state.json_output:
+        render.print_json(vpcs)
+        return
+
+    render.vpcs_table(vpcs)
+
+
+@vpc_app.command("get")
+def vpc_get(
+    vpc_id: Annotated[str, typer.Argument(help="VPC ID.")],
+    json_output: cli_options.JsonOption = False,
+) -> None:
+    """Show details of a VPC."""
+    cli_options.apply_command_options(json_output=json_output)
+    client = get_client()
+    with render.spinner("Fetching VPC..."):
+        vpc = client.vpcs.get(vpc_id)
+
+    if state.json_output:
+        render.print_json(vpc)
+        return
+
+    render.vpc_detail(vpc)
+
+
+@vpc_app.command("ips")
+def vpc_ips(
+    vpc_id: Annotated[str, typer.Argument(help="VPC ID.")],
+    json_output: cli_options.JsonOption = False,
+) -> None:
+    """List private IPs allocated in a VPC and the machines holding them."""
+    cli_options.apply_command_options(json_output=json_output)
+    client = get_client()
+    with render.spinner("Fetching VPC IPs..."):
+        ips = client.vpcs.ips(vpc_id)
+
+    if state.json_output:
+        render.print_json(ips)
+        return
+
+    render.vpc_ips_table(ips)
+
+
+@vpc_app.command("create")
+def vpc_create(
+    name: Annotated[str, typer.Argument(help="VPC name.")],
+    cidr: Annotated[str, typer.Option("--cidr", help="IPv4 CIDR block (e.g. 10.50.0.0/24).")],
+    region: Annotated[str, typer.Option("--region", help="Region (IN1 or IN2).")],
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
+) -> None:
+    """Create a VPC (a private network for VMs)."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
+    region_display = render.region_input_label(region)
+    if not render.confirm(f"Create VPC (name={name!r}, cidr={cidr}, region={region_display})?", skip=state.yes):
+        raise typer.Exit()
+
+    client = get_client()
+    with render.spinner("Creating VPC..."):
+        vpc = client.vpcs.create(name=name, cidr=cidr, region=region)
+
+    if state.json_output:
+        render.print_json(vpc)
+        return
+
+    render.success(f"VPC {vpc.vpc_id} created.")
+    render.vpc_detail(vpc)
+
+
+@vpc_app.command("delete")
+def vpc_delete(
+    vpc_id: Annotated[str, typer.Argument(help="VPC ID to delete.")],
+    yes: cli_options.YesOption = False,
+    json_output: cli_options.JsonOption = False,
+) -> None:
+    """Delete an empty VPC. VPCs with machines in them cannot be deleted."""
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
+    if not render.confirm(f"Delete VPC {vpc_id}?", skip=state.yes):
+        raise typer.Exit()
+
+    client = get_client()
+    with render.spinner("Deleting VPC..."):
+        client.vpcs.delete(vpc_id)
+
+    if state.json_output:
+        render.print_json({"success": True, "vpc_id": vpc_id})
+        return
+
+    render.success(f"VPC {vpc_id} deleted.")
