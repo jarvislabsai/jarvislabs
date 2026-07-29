@@ -14,6 +14,7 @@ Use `--help` on any command to discover flags (e.g., `jl run --help`, `jl create
 ## Mental Model
 
 - Machine commands (`jl create/list/get/pause/resume/destroy/rename/ssh/exec/upload/download`) = GPU instance lifecycle and access.
+- `jl vpc` = private networks for VM instances. Run `jl vpc --help` to discover available commands.
 - `jl run` = managed job on an instance. Uploads code, sets up a Python environment, runs your script in the background with log tracking.
 - `jl exec` = run any command on an instance. Use for system checks (nvidia-smi, ps, df), debugging failed runs, inspecting files, or any raw shell access. No environment setup, no tracking. This is your escape hatch when `jl run` doesn't cover your use case.
 - `jl deploy` (beta) = serverless model serving — an OpenAI-compatible endpoint with autoscaling workers, no instance to manage. Separate from instances and runs.
