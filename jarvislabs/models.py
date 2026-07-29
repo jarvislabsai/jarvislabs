@@ -200,10 +200,12 @@ class Instance(BaseModel):
         if self.status == "Running":
             return self
 
-        # Public IP and SSH are only trustworthy while Running; for any other
-        # status the IP may be released or reassigned, so hide them.
+        # Hide connection details while the instance is unavailable.
         self.public_ip = None
         self.ssh_command = None
+        self.url = None
+        self.vs_url = None
+        self.endpoints = None
 
         # VPC private IPs remain reserved across pause/resume. Private IPs for
         # containers and non-VPC VMs are released, so their stale values are hidden.
