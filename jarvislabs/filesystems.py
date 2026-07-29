@@ -37,7 +37,7 @@ class Filesystems:
         resp = self._t.request("POST", "filesystem/create", json=payload, base_url=base_url)
         fs_id = resp.get("fs_id") if isinstance(resp, dict) else None
         if fs_id is None:
-            raise APIError(0, f"Failed to create filesystem: {_backend_msg(resp if isinstance(resp, dict) else {})}")
+            raise APIError(0, f"Failed to create filesystem: {_backend_msg(resp)}")
         return int(fs_id)
 
     def edit(self, fs_id: int, storage: int) -> int:
@@ -46,7 +46,7 @@ class Filesystems:
         resp = self._t.request("POST", "filesystem/edit", json={"fs_id": fs_id, "storage": storage}, base_url=base_url)
         edited_fs_id = resp.get("fs_id") if isinstance(resp, dict) else None
         if edited_fs_id is None:
-            raise APIError(0, f"Failed to edit filesystem: {_backend_msg(resp if isinstance(resp, dict) else {})}")
+            raise APIError(0, f"Failed to edit filesystem: {_backend_msg(resp)}")
         return int(edited_fs_id)
 
     def remove(self, fs_id: int) -> bool:

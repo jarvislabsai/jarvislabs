@@ -11,7 +11,7 @@ import re
 from datetime import datetime
 from typing import Annotated, Any
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator, model_validator
 
 from jarvislabs.regions import region_code
 
@@ -77,6 +77,29 @@ class Filesystem(BaseModel):
     fs_name: str | None = None
     storage: int | None = None
     region: OptionalRegionCode = None
+
+
+# ── VPCs ─────────────────────────────────────────────────────────────────────
+
+
+class Vpc(BaseModel):
+    vpc_id: str
+    name: str | None = None
+    region: RegionCode
+    cidr: str | None = None
+    gateway_ip: str | None = None
+    is_default: bool = False
+    status: str | None = None
+
+
+class VpcIP(BaseModel):
+    """A private IP allocated in a VPC, and the machine holding it."""
+
+    private_ip: str
+    machine_id: int | None = None
+    status: str | None = None
+    mac_address: str | None = None
+    lsp_name: str | None = None
 
 
 # ── Templates ─────────────────────────────────────────────────────────────────
@@ -157,6 +180,8 @@ class Instance(BaseModel):
     user_id: str | None = None
     disk_type: str | None = None
     public_ip: str | None = None
+    private_ip: str | None = None
+    vpc_id: str | None = None
     http_ports: str | None = None
     region: OptionalRegionCode = None
 
@@ -169,6 +194,23 @@ class Instance(BaseModel):
             v = re.sub(r"[a-zA-Z]+$", "", v.strip())
             return int(v) if v else None
         return int(v)
+
+    @model_validator(mode="after")
+    def normalize_connection_details(self) -> Instance:
+        if self.status == "Running":
+            return self
+
+        # Public IP and SSH are only trustworthy while Running; for any other
+        # status the IP may be released or reassigned, so hide them.
+        self.public_ip = None
+        self.ssh_command = None
+
+        # VPC private IPs remain reserved across pause/resume. Private IPs for
+        # containers and non-VPC VMs are released, so their stale values are hidden.
+        if not self.vpc_id:
+            self.private_ip = None
+
+        return self
 
 
 # ── Response wrappers ────────────────────────────────────────────────────────

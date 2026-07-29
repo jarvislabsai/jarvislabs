@@ -65,6 +65,8 @@ def _make_inst(**overrides):
         "cost": 0.50,
         "ssh_command": "ssh root@1.2.3.4 -p 22",
         "public_ip": "1.2.3.4",
+        "private_ip": None,
+        "vpc_id": None,
         "http_ports": "",
         "url": None,
         "vs_url": None,
@@ -74,32 +76,85 @@ def _make_inst(**overrides):
     return SimpleNamespace(**defaults)
 
 
-# ── instance_detail(): Public IP display ─────────────────────────────────────
+# ── instance_detail(): Connection details ────────────────────────────────────
+
+
+def test_instance_detail_shows_ssh_command_when_available():
+    inst = _make_inst(ssh_command="ssh root@1.2.3.4")
+    output = _capture_detail(inst)
+    assert "SSH" in output
+    assert "ssh root@1.2.3.4" in output
+
+
+def test_instance_detail_hides_ssh_command_when_unavailable():
+    inst = _make_inst(status="Paused", ssh_command=None)
+    output = _capture_detail(inst)
+    assert "SSH" not in output
 
 
 def test_instance_detail_shows_public_ip_for_running_vm():
-    inst = _make_inst(template="vm", status="Running", public_ip="217.18.55.33")
+    inst = _make_inst(template="vm", status="Running", public_ip="203.0.113.10")
     output = _capture_detail(inst)
     assert "Public IP" in output
-    assert "217.18.55.33" in output
+    assert "203.0.113.10" in output
 
 
-def test_instance_detail_hides_public_ip_for_paused_vm():
-    inst = _make_inst(template="vm", status="Paused", public_ip="217.18.55.33")
+def test_instance_detail_hides_public_ip_when_unavailable():
+    inst = _make_inst(template="vm", status="Paused", public_ip=None)
     output = _capture_detail(inst)
     assert "Public IP" not in output
 
 
-def test_instance_detail_hides_public_ip_for_running_container():
+def test_instance_detail_shows_public_ip_for_running_container():
     inst = _make_inst(template="pytorch", status="Running", public_ip="5.6.7.8")
     output = _capture_detail(inst)
-    assert "Public IP" not in output
+    assert "Public IP" in output
+    assert "5.6.7.8" in output
 
 
 def test_instance_detail_hides_public_ip_for_vm_with_no_ip():
     inst = _make_inst(template="vm", status="Running", public_ip=None)
     output = _capture_detail(inst)
     assert "Public IP" not in output
+
+
+# ── instance_detail(): Private IP and VPC display ──────────────────────────────────────
+
+
+def test_instance_detail_shows_private_ip_for_running_container():
+    inst = _make_inst(template="pytorch", status="Running", private_ip="10.11.2.10")
+    output = _capture_detail(inst)
+    assert "Private IP" in output
+    assert "10.11.2.10" in output
+
+
+def test_instance_detail_hides_private_ip_when_unavailable():
+    inst = _make_inst(template="pytorch", status="Paused", private_ip=None)
+    output = _capture_detail(inst)
+    assert "Private IP" not in output
+
+
+def test_instance_detail_shows_private_ip_and_vpc_for_paused_vpc_vm():
+    inst = _make_inst(
+        template="vm",
+        status="Paused",
+        public_ip=None,
+        private_ip="10.0.0.2",
+        vpc_id="vpc-abc123",
+        ssh_command=None,
+    )
+    output = _capture_detail(inst)
+    assert "Private IP" in output
+    assert "10.0.0.2" in output
+    assert "VPC" in output
+    assert "vpc-abc123" in output
+
+
+def test_instance_detail_hides_private_ip_for_paused_non_vpc_vm():
+    inst = _make_inst(template="vm", status="Paused", public_ip=None, private_ip=None, ssh_command=None)
+    output = _capture_detail(inst)
+    assert "Private IP" not in output
+    assert "VPC" not in output
 
 
 # ── instance_detail(): HTTP Ports hidden for VMs ─────────────────────────────

@@ -193,13 +193,19 @@ def instance_detail(inst, currency: str = "USD") -> None:
         ("Storage", f"{inst.storage_gb}GB" if inst.storage_gb else "—"),
         ("Region", region_label(inst.region)),
         (cost_label, f"[green]{sym}{inst.cost:.2f}[/green]"),
-        ("SSH", f"[cyan]{inst.ssh_command}[/cyan]" if inst.ssh_command else "—"),
     ]
 
-    # Public IP for running VMs only (paused VMs have stale, released IPs)
-    _ip = (inst.public_ip or "").strip()
-    if inst.template == "vm" and inst.status == "Running" and _ip:
-        rows.append(("Public IP", f"[cyan]{_ip}[/cyan]"))
+    if inst.ssh_command:
+        rows.append(("SSH", f"[cyan]{inst.ssh_command}[/cyan]"))
+
+    if inst.public_ip:
+        rows.append(("Public IP", f"[cyan]{inst.public_ip}[/cyan]"))
+
+    if inst.private_ip:
+        rows.append(("Private IP", f"[cyan]{inst.private_ip}[/cyan]"))
+
+    if inst.vpc_id:
+        rows.append(("VPC", f"[cyan]{inst.vpc_id}[/cyan]"))
 
     # VMs are SSH-only, skip the always-empty HTTP Ports row for them
     if inst.template != "vm":
@@ -271,6 +277,69 @@ def filesystems_table(filesystems: list) -> None:
     for filesystem in filesystems:
         storage = f"{filesystem.storage}GB" if filesystem.storage is not None else "—"
         table.add_row(str(filesystem.fs_id), filesystem.fs_name or "—", storage, region_label(filesystem.region))
+
+    stdout_console.print(table)
+
+
+def vpcs_table(vpcs: list) -> None:
+    if not vpcs:
+        info("No VPCs found.")
+        return
+
+    # Status is omitted — listed VPCs are always active; --json includes it.
+    table = _table("VPCs")
+    table.add_column("ID", style="cyan", no_wrap=True)
+    table.add_column("Name", style="bold")
+    table.add_column("Region", no_wrap=True)
+    table.add_column("CIDR", no_wrap=True)
+    table.add_column("Gateway", no_wrap=True)
+    table.add_column("Default", justify="center")
+
+    for vpc in vpcs:
+        table.add_row(
+            vpc.vpc_id,
+            escape(vpc.name) if vpc.name else "—",
+            region_label(vpc.region),
+            vpc.cidr or "—",
+            vpc.gateway_ip or "—",
+            "✓" if vpc.is_default else "—",
+        )
+
+    stdout_console.print(table)
+
+
+def vpc_detail(vpc) -> None:
+    rows = [
+        ("ID", f"[cyan]{vpc.vpc_id}[/cyan]"),
+        ("Name", f"[bold]{escape(vpc.name) if vpc.name else '—'}[/bold]"),
+        ("Region", region_label(vpc.region)),
+        ("CIDR", vpc.cidr or "—"),
+        ("Gateway", vpc.gateway_ip or "—"),
+        ("Default", "yes" if vpc.is_default else "no"),
+        ("Status", vpc.status or "—"),
+    ]
+    _print_detail_table(rows)
+
+
+def vpc_ips_table(ips: list) -> None:
+    if not ips:
+        info("No IPs allocated in this VPC.")
+        return
+
+    table = _table("VPC IPs")
+    table.add_column("Private IP", style="cyan", no_wrap=True)
+    table.add_column("Machine ID", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+    table.add_column("MAC", style="dim", no_wrap=True)
+
+    for ip in ips:
+        style = "green" if ip.status == "attached" else "yellow"
+        table.add_row(
+            ip.private_ip,
+            str(ip.machine_id) if ip.machine_id is not None else "—",
+            f"[{style}]{ip.status}[/{style}]" if ip.status else "—",
+            ip.mac_address or "—",
+        )
 
     stdout_console.print(table)
 
