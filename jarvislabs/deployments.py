@@ -26,11 +26,14 @@ from jarvislabs.models import (
     DeploymentListResult,
     DeploymentStatus,
     DeploymentSummary,
+    ManagedModel,
+    ManagedModelListResult,
     RegionError,
 )
 from jarvislabs.regions import normalize_serverless_region, region_code, serverless_region_url
 
 if TYPE_CHECKING:
+    import builtins
     from collections.abc import Iterator
 
     from jarvislabs.transport import Transport
@@ -92,10 +95,7 @@ class Deployments:
 
         base_url = serverless_region_url(internal_region)
         resp = self._t.request("POST", "management/create", json=payload, base_url=base_url)
-        deployment_id = resp.get("deployment_id")
-        if not deployment_id:
-            raise JarvislabsError("Failed to create deployment: no deployment_id returned.")
-        return deployment_id
+        return _require_deployment_id(resp)
 
     def list(self) -> DeploymentListResult:
         """List deployments across all serverless regions, newest first.
@@ -103,25 +103,12 @@ class Deployments:
         Regions that can't be reached are reported in ``region_errors`` rather
         than hiding the rest; if no region answers at all, raise.
         """
-        deployments: list[DeploymentSummary] = []
-        region_errors: list[RegionError] = []
-        answered = False
-
-        for region in sorted(SERVERLESS_REGIONS):
-            try:
-                resp = self._t.request("GET", "management/list", base_url=serverless_region_url(region))
-            except APIError as exc:
-                if exc.status_code not in DEPLOYMENT_TRANSIENT_STATUS:
-                    raise
-                region_errors.append(RegionError(region=region, error=str(exc)))
-                continue
-            answered = True
-            for item in resp.get("deployments", []):
-                deployments.append(DeploymentSummary(**{**item, "region": region}))
-
-        if not answered and region_errors:
-            raise JarvislabsError("; ".join(f"{region_code(e.region)}: {e.error}" for e in region_errors))
-
+        responses, region_errors = self._fetch_all_regions("management/list")
+        deployments = [
+            DeploymentSummary(**{**item, "region": region})
+            for region, resp in responses
+            for item in resp.get("deployments", [])
+        ]
         deployments.sort(key=_newest_first_key, reverse=True)
         return DeploymentListResult(deployments=deployments, region_errors=region_errors)
 
@@ -349,6 +336,71 @@ class Deployments:
         except NotFoundError:
             return "reason unavailable"
 
+    def list_managed_models(self) -> ManagedModelListResult:
+        """List the managed-model catalog across all serverless regions.
+
+        Each region serves its own catalog, so the same model can appear once
+        per region it's available in.
+        """
+        responses, region_errors = self._fetch_all_regions("managed-models")
+        models = [
+            ManagedModel(**{**item, "region": region}) for region, resp in responses for item in resp.get("models", [])
+        ]
+        models.sort(key=lambda m: (m.model_slug, m.region or ""))
+        return ManagedModelListResult(models=models, region_errors=region_errors)
+
+    def create_managed(
+        self,
+        model_slug: str,
+        *,
+        name: str,
+        region: str,
+        min_workers: int,
+        max_workers: int,
+        idle_timeout: int,
+        concurrent: int | None = None,
+    ) -> str:
+        """Create a deployment from a managed model and return its id.
+
+        The model's recipe sets the GPU, framework, and engine settings; only
+        scaling and concurrency are yours to choose. Poll with ``wait_until_running``.
+        """
+        internal_region = normalize_serverless_region(region)
+        payload: dict = {
+            "name": name,
+            "min_workers": min_workers,
+            "max_workers": max_workers,
+            "idle_timeout": idle_timeout,
+        }
+        if concurrent is not None:
+            payload["concurrent_requests"] = concurrent
+
+        base_url = serverless_region_url(internal_region)
+        resp = self._t.request(
+            "POST", f"management/managed-models/{model_slug}/create", json=payload, base_url=base_url
+        )
+        return _require_deployment_id(resp)
+
+    def _fetch_all_regions(self, path: str) -> tuple[builtins.list[tuple[str, dict]], builtins.list[RegionError]]:
+        """GET ``path`` from every serverless region; return (region, response) pairs.
+
+        Regions that can't be reached are reported in the errors list rather
+        than hiding the rest; if no region answers at all, raise.
+        """
+        responses: builtins.list[tuple[str, dict]] = []
+        region_errors: builtins.list[RegionError] = []
+        for region in sorted(SERVERLESS_REGIONS):
+            try:
+                responses.append((region, self._t.request("GET", path, base_url=serverless_region_url(region))))
+            except APIError as exc:
+                if exc.status_code not in DEPLOYMENT_TRANSIENT_STATUS:
+                    raise
+                region_errors.append(RegionError(region=region, error=str(exc)))
+
+        if not responses and region_errors:
+            raise JarvislabsError("; ".join(f"{region_code(e.region)}: {e.error}" for e in region_errors))
+        return responses, region_errors
+
 
 def _newest_first_key(summary: DeploymentSummary) -> tuple[bool, datetime]:
     """Sort key: newest start_time first, rows without one last.
@@ -360,3 +412,11 @@ def _newest_first_key(summary: DeploymentSummary) -> tuple[bool, datetime]:
     if start is not None and start.tzinfo is not None:
         start = start.replace(tzinfo=None)
     return (start is not None, start or datetime.min)
+
+
+def _require_deployment_id(resp: dict) -> str:
+    """The new deployment's id from a create response; raise if it's missing."""
+    deployment_id = resp.get("deployment_id")
+    if not deployment_id:
+        raise JarvislabsError("Failed to create deployment: no deployment_id returned.")
+    return deployment_id

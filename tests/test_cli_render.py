@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import StringIO
 from types import SimpleNamespace
 
+import pytest
 from rich.console import Console
 
 from jarvislabs.cli import render
@@ -285,3 +286,86 @@ def test_gpu_table_empty(capsys):
     render.gpu_table([], "USD")
     assert "No GPU data available" in capsys.readouterr().err
     assert "GPU Containers" not in capsys.readouterr().out
+
+
+# ── Interactive prompts ──────────────────────────────────────────────────────
+
+HEADINGS = ("NAME", "SLUG", "REGION")
+COLORS = ("bold", "fg:ansicyan", "fg:ansiyellow")
+
+
+def test_table_choices_columns_line_up_with_long_values():
+    rows = [("GLM-5.2", "glm-5.2", "IN2"), ("Nemotron 3.5 Lightning", "nemotron-3.5-lightning-30b-a3b-bf16", "IN1")]
+    heading, *choices = render._table_choices(HEADINGS, COLORS, rows, ["a", "b"])
+    lines = ["".join(text for _, text in choice.title) for choice in choices]
+    # Every column starts at the same position in the heading and in each row.
+    assert lines[0].index("glm-5.2") == heading.title.index("SLUG")
+    assert lines[0].index("IN2") == lines[1].index("IN1") == heading.title.index("REGION")
+    assert [choice.value for choice in choices] == ["a", "b"]
+
+
+def test_highlight_shades_only_the_current_row():
+    rows = [("A", "a", "IN2"), ("B", "b", "IN2"), ("C", "c", "IN2")]
+    question = render.questionary.select("Pick", choices=render._table_choices(HEADINGS, COLORS, rows, ["a", "b", "c"]))
+    render._highlight_current_row(question)
+    control = next(
+        window.content
+        for window in question.application.layout.find_all_windows()
+        if isinstance(window.content, render.InquirerControl)
+    )
+
+    def shaded_rows():
+        question.application.before_render.fire()
+        return [
+            choice.value
+            for choice in control.choices
+            if not isinstance(choice, render.questionary.Separator)
+            and all("class:current-row" in style for style, _ in choice.title)
+        ]
+
+    assert shaded_rows() == ["a"]  # the pointer starts on the first row, not the heading
+    control.pointed_at = 3
+    assert shaded_rows() == ["c"]  # moving the pointer moves the shading
+    # Column colors are kept under the shading.
+    assert control.choices[3].title[1][0].startswith("fg:ansicyan")
+
+
+def _capture_validators(monkeypatch):
+    validators = []
+    monkeypatch.setattr(
+        render.questionary,
+        "text",
+        lambda message, default, validate, **k: validators.append(validate) or SimpleNamespace(ask=lambda: default),
+    )
+    return validators
+
+
+@pytest.mark.parametrize(
+    ("low", "high", "text", "ok"),
+    [
+        (0, 100, "0", True),
+        (0, 100, " 100 ", True),
+        (0, 100, "101", False),
+        (1, 100, "0", False),
+        (0, 100, "-1", False),
+        (0, 100, "abc", False),
+        (0, 100, "", False),
+    ],
+)
+def test_ask_value_number_validation(monkeypatch, low, high, text, ok):
+    validators = _capture_validators(monkeypatch)
+    assert render.ask_value("min_workers", "Min workers:", low, low=low, high=high) == low
+    assert (validators[0](text) is True) == ok
+
+
+def test_ask_value_text_rejects_empty(monkeypatch):
+    validators = _capture_validators(monkeypatch)
+    assert render.ask_value("name", "Deployment name:", "glm") == "glm"
+    assert validators[0]("  ") is not True
+    assert validators[0]("mine") is True
+
+
+def test_ask_value_keeps_flag_given_on_command_line(monkeypatch):
+    monkeypatch.setattr(render.cli_options, "option_was_explicit", lambda param: True)
+    monkeypatch.setattr(render.questionary, "text", lambda *a, **k: pytest.fail("should not prompt"))
+    assert render.ask_value("max_workers", "Max workers:", 1, low=3, high=100) == 1  # not raised to the range

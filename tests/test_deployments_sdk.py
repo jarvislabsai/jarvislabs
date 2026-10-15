@@ -618,3 +618,88 @@ def test_all_ops_hit_only_management_paths(monkeypatch, mock_transport):
         path = call.args[1]
         assert path.startswith("management/"), f"unexpected path: {path}"
         assert "/openai/" not in path
+
+
+# ── managed models ──────────────────────────────────────────────────────────────
+
+
+def _managed_item(slug, **overrides):
+    item = {
+        "model_slug": slug,
+        "display_name": slug.upper(),
+        "api_model_name": f"org/{slug}",
+        "context_length": 131072,
+        "gpu_type": "H100",
+        "gpus_per_worker": 8,
+        "concurrent_requests": 32,
+    }
+    item.update(overrides)
+    return item
+
+
+def test_list_managed_models_merges_regions_and_sorts(mock_transport):
+    mock_transport.request.side_effect = [
+        {"models": [_managed_item("zeta")]},  # Chennai
+        {"models": [_managed_item("alpha"), _managed_item("zeta")]},  # Noida
+    ]
+    result = _deps(mock_transport).list_managed_models()
+    # Sorted by slug, then region; the host region wins over the payload's.
+    assert [(m.model_slug, m.model_dump()["region"]) for m in result.models] == [
+        ("alpha", "IN2"),
+        ("zeta", "IN1"),
+        ("zeta", "IN2"),
+    ]
+    assert mock_transport.request.call_args_list[0].args == ("GET", "managed-models")
+    assert result.region_errors == []
+
+
+def test_list_managed_models_partial_failure_records_region_error(mock_transport):
+    mock_transport.request.side_effect = [
+        APIError(503, "down"),  # Chennai down
+        {"models": [_managed_item("alpha")]},  # Noida fine
+    ]
+    result = _deps(mock_transport).list_managed_models()
+    assert [m.model_slug for m in result.models] == ["alpha"]
+    assert result.region_errors[0].model_dump() == {"region": "IN1", "error": "down"}
+
+
+def test_list_managed_models_all_regions_down_hard_fails(mock_transport):
+    mock_transport.request.side_effect = APIError(503, "down")
+    with pytest.raises(JarvislabsError) as exc:
+        _deps(mock_transport).list_managed_models()
+    assert "IN1: down" in str(exc.value) and "IN2: down" in str(exc.value)
+
+
+def _create_managed_kwargs(**overrides):
+    kwargs = {"name": "glm", "region": "IN2", "min_workers": 0, "max_workers": 2, "idle_timeout": 600}
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_create_managed_payload_endpoint_and_base_url(mock_transport):
+    mock_transport.request.return_value = {"deployment_id": "dep1", "region": INDIA_NOIDA_REGION}
+    dep_id = _deps(mock_transport).create_managed("glm-5.2", **_create_managed_kwargs())
+    assert dep_id == "dep1"
+    args, kwargs = mock_transport.request.call_args
+    assert args == ("POST", "management/managed-models/glm-5.2/create")
+    assert kwargs["base_url"] == NOIDA_URL
+    # Only the customer-owned settings are sent; concurrent_requests is omitted when None.
+    assert kwargs["json"] == {"name": "glm", "min_workers": 0, "max_workers": 2, "idle_timeout": 600}
+
+
+def test_create_managed_sends_concurrent_when_set(mock_transport):
+    mock_transport.request.return_value = {"deployment_id": "dep1"}
+    _deps(mock_transport).create_managed("glm-5.2", **_create_managed_kwargs(concurrent=16))
+    assert mock_transport.request.call_args.kwargs["json"]["concurrent_requests"] == 16
+
+
+def test_create_managed_invalid_region_raises_before_network(mock_transport):
+    with pytest.raises(ValidationError):
+        _deps(mock_transport).create_managed("glm-5.2", **_create_managed_kwargs(region="EU1"))
+    mock_transport.request.assert_not_called()
+
+
+def test_create_managed_missing_id_raises(mock_transport):
+    mock_transport.request.return_value = {}
+    with pytest.raises(JarvislabsError):
+        _deps(mock_transport).create_managed("glm-5.2", **_create_managed_kwargs())

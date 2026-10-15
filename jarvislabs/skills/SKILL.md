@@ -317,7 +317,7 @@ jl filesystem create --name x --storage 100 --yes --json  # create filesystem
 
 `jl deploy` = beta serverless model serving: an OpenAI-compatible endpoint with autoscaling workers, **no instance to manage** (no SSH/exec, no pause/resume). You create, call the endpoint, and `delete` the deployment when done.
 
-Subcommands: `create`, `list`, `get`, `status`, `logs`, `update`, `delete`. Run `jl deploy <cmd> --help` for exact flags.
+Subcommands: `create`, `list`, `get`, `status`, `logs`, `update`, `delete`, plus `managed-models list` / `managed-models create` for ready-made models. Run `jl deploy <cmd> --help` for exact flags.
 
 **Regions:** serverless is `IN1`/`IN2` only (not `EU1`). `create` requires `--region`. Per-id commands (`get`/`status`/`logs`/`update`/`delete`) search both regions if `--region` is omitted — pass it to skip the search.
 
@@ -336,9 +336,26 @@ jl deploy create \
 - Repeatable `--arg key=value` (framework args, e.g. `--arg max-model-len=8192`) and `--env KEY=value` (e.g. `--env HF_TOKEN=...`).
 - `--json` requires `--yes`.
 
+### Managed models
+
+Managed models are ready-made deployments: JarvisLabs sets the GPU, framework, engine args, and storage; you only choose scaling. Prefer them when the user wants a common model and doesn't need custom settings.
+
+```bash
+jl deploy managed-models list --json    # catalog: model_slug, region, gpu_type, gpus_per_worker, context_length
+jl deploy managed-models create <model_slug> \
+  --name my-model --min-workers 0 --max-workers 1 --idle-timeout 300 \
+  --detach --yes --json
+```
+
+- **Always pass the slug.** Without it, `create` opens an interactive picker, which needs a terminal; in scripts or with `--json` it exits with an error instead.
+- `--region` is optional: it's taken from the catalog. If the same slug is offered in more than one region, pass `--region`.
+- Defaults: name = the slug, `--min-workers 0`, `--max-workers 1`, `--idle-timeout 300`, `--concurrent` = the model's tested value. Names must be unique among your managed deployments, so pass `--name` when creating the same model twice.
+- Check the GPU in the catalog before creating: some models use 8 GPUs per worker, which is expensive.
+- Poll and manage it like any deployment (`jl deploy status/get/logs/delete`). `jl deploy update` can't change `--wait-time` for managed deployments.
+
 ### OpenAI-compatible inference
 
-A running deployment exposes an OpenAI-compatible base URL (`openai_base_url` from `jl deploy get <id> --json`, present only when `running`), authed with your JarvisLabs API key. **Use the served model name** — if you set `--arg served-model-name=<x>`, that is the `model` field, not the `--model` id. `create` prints a paste-ready snippet; `get` shows the base URL.
+A running deployment exposes an OpenAI-compatible base URL (`openai_base_url` from `jl deploy get <id> --json`, present only when `running`), authed with your JarvisLabs API key. **Use the served model name** — if you set `--arg served-model-name=<x>`, that is the `model` field, not the `--model` id. For a managed deployment, the `model` field is `managed_model.api_model_name` from `jl deploy get <id> --json`. `create` prints a paste-ready snippet; `get` shows the base URL.
 
 Once `running`, send a real inference request to confirm the model responds as expected before relying on the endpoint. With `--min-workers 0`, the first request may be slow while a worker starts; use a generous first-call timeout.
 

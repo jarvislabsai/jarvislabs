@@ -108,6 +108,27 @@ jl run status <run_id>
 jl run stop <run_id>
 ```
 
+### Serverless Managed Models (Beta)
+
+Deploy a ready-made model as an OpenAI-compatible endpoint with autoscaling workers. JarvisLabs picks the GPU, framework, and engine settings; you choose scaling.
+
+```bash
+# See the available models
+jl deploy managed-models list
+
+# Pick a model from a list, then set or accept the settings
+jl deploy managed-models create
+
+# Or deploy a specific model directly (defaults: 0-1 workers, 300s idle timeout)
+jl deploy managed-models create qwen-3.5-4b --name my-qwen --max-workers 2
+
+# Get the base URL and the model name to use in requests
+jl deploy get <deployment_id>
+
+# Delete when done
+jl deploy delete <deployment_id>
+```
+
 ### More Commands
 
 ```bash

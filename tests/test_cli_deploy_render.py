@@ -13,6 +13,8 @@ from jarvislabs.models import (
     DeploymentListResult,
     DeploymentStatus,
     DeploymentSummary,
+    ManagedModel,
+    ManagedModelListResult,
     RegionError,
 )
 
@@ -269,3 +271,65 @@ def test_confirm_json_mode_skip_still_wins(monkeypatch):
 
     monkeypatch.setattr(state, "json_output", True)
     assert render.confirm("Delete?", skip=True) is True
+
+
+# ── managed models ──────────────────────────────────────────────────────────────
+
+
+def test_managed_models_table_renders_rows(capture):
+    model = ManagedModel(
+        model_slug="glm-5.2",
+        display_name="GLM 5.2",
+        region="india-noida-01",
+        gpu_type="H100",
+        gpus_per_worker=8,
+        context_length=131072,
+        concurrent_requests=32,
+    )
+    render.managed_models_table(ManagedModelListResult(models=[model]))
+    out = capture.getvalue()
+    assert "glm-5.2" in out
+    assert "GLM 5.2" in out
+    assert "IN2" in out
+    assert "8x H100" in out
+    assert "131,072" in out
+
+
+def test_managed_models_table_empty(capture, monkeypatch):
+    infos: list[str] = []
+    monkeypatch.setattr(render, "info", lambda m: infos.append(m))
+    render.managed_models_table(ManagedModelListResult())
+    assert capture.getvalue() == ""
+    assert infos == ["No managed models available."]
+
+
+def test_managed_models_table_warns_on_region_errors(capture, monkeypatch):
+    warnings: list[str] = []
+    monkeypatch.setattr(render, "warning", lambda m: warnings.append(m))
+    result = ManagedModelListResult(region_errors=[RegionError(region="india-chennai-01", error="timeout")])
+    render.managed_models_table(result)
+    assert any("IN1" in w and "timeout" in w for w in warnings)
+
+
+def test_detail_managed_shows_model_and_api_name(capture):
+    managed = {"model_slug": "glm-5.2", "display_name": "GLM 5.2", "api_model_name": "zai-org/GLM-5.2"}
+    render.deployment_detail(_deployment(args=None, env=None, managed_model=managed))
+    out = capture.getvalue()
+    assert "GLM 5.2 (glm-5.2, managed)" in out
+    assert "zai-org/GLM-5.2" in out
+    assert "Args" not in out
+
+
+def test_table_wide_shows_managed_slug(capture):
+    result = DeploymentListResult(
+        deployments=[_summary(managed_model={"model_slug": "glm-5.2"}), _summary(deployment_id="dep2")]
+    )
+    render.deployments_table(result, wide=True)
+    out = capture.getvalue()
+    assert "Managed" in out
+    assert "glm-5.2" in out
+
+
+def test_table_default_hides_managed_column(capture):
+    render.deployments_table(DeploymentListResult(deployments=[_summary(managed_model={"model_slug": "glm-5.2"})]))
+    assert "Managed" not in capture.getvalue()

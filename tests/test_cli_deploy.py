@@ -17,6 +17,8 @@ from jarvislabs.models import (
     DeploymentListResult,
     DeploymentStatus,
     DeploymentSummary,
+    ManagedModel,
+    ManagedModelListResult,
 )
 
 
@@ -553,3 +555,363 @@ def test_delete_json_with_yes(monkeypatch):
     monkeypatch.setattr(deploy.render, "print_json", lambda data: printed.update(data))
     deploy.deploy_delete("dep1", yes=True, region=None, json_output=True)
     assert printed == {"success": True, "deployment_id": "dep1"}
+
+
+# ── managed models ──────────────────────────────────────────────────────────────
+
+
+def test_managed_models_list_renders_table(monkeypatch):
+    result = ManagedModelListResult(models=[ManagedModel(model_slug="glm-5.2")])
+    _install_client(monkeypatch, SimpleNamespace(list_managed_models=lambda: result))
+    rendered = []
+    monkeypatch.setattr(deploy.render, "managed_models_table", lambda r: rendered.append(r))
+    deploy.managed_models_list(json_output=False)
+    assert rendered == [result]
+
+
+def test_managed_models_list_json(monkeypatch):
+    result = ManagedModelListResult(models=[ManagedModel(model_slug="glm-5.2")])
+    _install_client(monkeypatch, SimpleNamespace(list_managed_models=lambda: result))
+    printed = []
+    monkeypatch.setattr(deploy.render, "print_json", lambda data: printed.append(data))
+    deploy.managed_models_list(json_output=True)
+    assert printed == [result]
+
+
+def _catalog(*rows):
+    """A catalog with one ManagedModel per (slug, region) row."""
+    return ManagedModelListResult(
+        models=[
+            ManagedModel(
+                model_slug=slug,
+                display_name=slug.upper(),
+                region=region,
+                gpu_type="H200",
+                gpus_per_worker=8,
+                concurrent_requests=32,
+            )
+            for slug, region in rows
+        ]
+    )
+
+
+def _install_managed_client(monkeypatch, catalog, **extra):
+    """Fake client whose create_managed records its arguments into the returned dict."""
+    created = {}
+    deployments = SimpleNamespace(
+        list_managed_models=lambda: catalog,
+        create_managed=lambda slug, **kw: created.update(slug=slug, **kw) or "dep1",
+        **extra,
+    )
+    _install_client(monkeypatch, deployments)
+    monkeypatch.setattr(deploy.render, "info", lambda m: None)
+    return created
+
+
+def _managed_create_call(**overrides):
+    kwargs = {
+        "model_slug": "glm-5.2",
+        "name": "glm",
+        "region": "IN2",
+        "min_workers": 0,
+        "max_workers": 2,
+        "idle_timeout": 600,
+        "detach": False,
+        "yes": True,
+        "json_output": False,
+    }
+    kwargs.update(overrides)
+    deploy.managed_models_create(**kwargs)
+
+
+def _die_raises(monkeypatch):
+    def fake_die(msg, code=1):
+        raise SystemExit(msg)
+
+    monkeypatch.setattr(deploy.render, "die", fake_die)
+
+
+def test_managed_create_passes_settings_and_hands_off_api_model(monkeypatch):
+    managed = {"model_slug": "glm-5.2", "api_model_name": "zai-org/GLM-5.2"}
+    created = _install_managed_client(
+        monkeypatch,
+        _catalog(("glm-5.2", "india-noida-01")),
+        wait_until_running=lambda dep_id, region=None: _deployment(args=None, env=None, managed_model=managed),
+        openai_base_url=lambda dep_id, region=None: "https://serverlessn.jarvislabs.net/openai/dep1/v1",
+    )
+    handoffs: list[tuple] = []
+    monkeypatch.setattr(deploy.render, "deployment_running_handoff", lambda url, model: handoffs.append((url, model)))
+
+    _managed_create_call(concurrent=16)
+
+    assert created == {
+        "slug": "glm-5.2",
+        "name": "glm",
+        "region": "india-noida-01",
+        "min_workers": 0,
+        "max_workers": 2,
+        "idle_timeout": 600,
+        "concurrent": 16,
+    }
+    # The snippet uses the managed model's API name, not a (missing) model arg.
+    assert handoffs == [("https://serverlessn.jarvislabs.net/openai/dep1/v1", "zai-org/GLM-5.2")]
+
+
+def test_managed_create_warns_that_serverless_is_beta(monkeypatch):
+    _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
+    warnings: list[str] = []
+    monkeypatch.setattr(deploy.render, "warning", lambda m: warnings.append(m))
+    _managed_create_call(detach=True)
+    assert warnings == [deploy.BETA_NOTICE]
+
+
+def test_managed_create_confirm_shows_gpu_and_declined_creates_nothing(monkeypatch):
+    created = _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
+    prompts: list[str] = []
+    monkeypatch.setattr(deploy.render, "confirm", lambda msg, **k: prompts.append(msg) and False)
+    with pytest.raises(typer.Exit):
+        _managed_create_call(yes=False)
+    assert "gpu=8x H200/worker" in prompts[0]
+    assert "concurrent=32" in prompts[0]  # the model's tested value when --concurrent isn't set
+    assert created == {}
+
+
+def test_managed_create_detach_json_emits_id_and_region(monkeypatch):
+    polled = []
+    _install_managed_client(
+        monkeypatch, _catalog(("glm-5.2", "india-noida-01")), wait_until_running=lambda *a, **k: polled.append(1)
+    )
+    printed = {}
+    monkeypatch.setattr(deploy.render, "print_json", lambda data: printed.update(data))
+    _managed_create_call(detach=True, json_output=True)
+    assert printed == {"deployment_id": "dep1", "region": "IN2"}
+    assert polled == []
+
+
+def test_managed_create_uses_defaults_and_slug_as_name(monkeypatch):
+    created = _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
+    deploy.managed_models_create("glm-5.2", detach=True, yes=True)
+    assert created == {
+        "slug": "glm-5.2",
+        "name": "glm-5.2",
+        "region": "india-noida-01",
+        "min_workers": 0,
+        "max_workers": 1,
+        "idle_timeout": 300,
+        "concurrent": None,
+    }
+
+
+def test_managed_create_unknown_slug_dies(monkeypatch):
+    _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
+    _die_raises(monkeypatch)
+    with pytest.raises(SystemExit) as exc:
+        _managed_create_call(model_slug="nope", region=None)
+    assert "No matching managed model" in str(exc.value)
+
+
+def test_managed_create_bare_command_without_terminal_exits_nonzero(monkeypatch):
+    # CliRunner has no real terminal, so the picker must not open.
+    created = _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
+    result = CliRunner().invoke(app, ["deploy", "managed-models", "create"])
+    assert result.exit_code != 0
+    assert created == {}
+
+
+# ── managed models: picker ──────────────────────────────────────────────────────
+
+
+def _stub_select(monkeypatch, pick):
+    """Replace questionary.select; ``pick(choices)`` returns the chosen value (None = Ctrl+C)."""
+    shown = []
+
+    def fake_select(message, choices, **kwargs):
+        # The first entry is the heading row; the rest are the models.
+        assert isinstance(choices[0], deploy.render.questionary.Separator)
+        models = choices[1:]
+        shown.append([c.value for c in models])
+        return SimpleNamespace(ask=lambda: pick(models))
+
+    monkeypatch.setattr(deploy.render, "can_prompt", lambda: True)
+    monkeypatch.setattr(deploy.render.questionary, "select", fake_select)
+    monkeypatch.setattr(deploy.render, "_highlight_current_row", lambda question: None)
+    return shown
+
+
+def _stub_text(monkeypatch, answers=None):
+    """Replace questionary.text; answers by prompt message, else accept the prefilled default.
+
+    Returns the list of prompt messages asked, in order.
+    """
+    asked = []
+
+    def fake_text(message, default, validate, **kwargs):
+        asked.append(message)
+        answer = (answers or {}).get(message, default)
+        if answer is not None:
+            assert validate(answer) is True, f"{message} rejected {answer!r}"
+        return SimpleNamespace(ask=lambda: answer)
+
+    monkeypatch.setattr(deploy.render.questionary, "text", fake_text)
+    return asked
+
+
+SETTING_PROMPTS = [
+    "Deployment name:",
+    "Min workers:",
+    "Max workers:",
+    "Idle timeout (seconds):",
+    "Concurrent requests per worker:",
+]
+
+
+def test_managed_create_without_slug_picks_model_then_asks_settings(monkeypatch):
+    created = _install_managed_client(
+        monkeypatch, _catalog(("glm-5.2", "india-noida-01"), ("qwen3", "india-chennai-01"))
+    )
+    shown = _stub_select(monkeypatch, lambda choices: choices[1].value)
+    asked = _stub_text(monkeypatch)
+
+    deploy.managed_models_create(detach=True, yes=True)
+
+    assert len(shown[0]) == 2
+    assert asked == SETTING_PROMPTS
+    # Region comes from the picked row; accepted defaults: slug as name, 0-1 workers, the model's concurrency.
+    assert created == {
+        "slug": "qwen3",
+        "name": "qwen3",
+        "region": "india-chennai-01",
+        "min_workers": 0,
+        "max_workers": 1,
+        "idle_timeout": 300,
+        "concurrent": 32,
+    }
+
+
+def test_managed_create_settings_answers_are_used(monkeypatch):
+    created = _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
+    _stub_select(monkeypatch, lambda choices: choices[0].value)
+    _stub_text(
+        monkeypatch,
+        {
+            "Deployment name:": "mine",
+            "Min workers:": "2",
+            "Max workers:": "5",
+            "Idle timeout (seconds):": "60",
+            "Concurrent requests per worker:": "8",
+        },
+    )
+
+    deploy.managed_models_create(detach=True, yes=True)
+
+    assert {k: created[k] for k in ("name", "min_workers", "max_workers", "idle_timeout", "concurrent")} == {
+        "name": "mine",
+        "min_workers": 2,
+        "max_workers": 5,
+        "idle_timeout": 60,
+        "concurrent": 8,
+    }
+
+
+def test_managed_create_settings_skip_flags_given_on_command_line(monkeypatch):
+    created = _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
+    _stub_select(monkeypatch, lambda choices: choices[0].value)
+    asked = _stub_text(monkeypatch)
+    monkeypatch.setattr(deploy.cli_options, "option_was_explicit", lambda param: param in {"name", "idle_timeout"})
+
+    deploy.managed_models_create(name="given", idle_timeout=900, detach=True, yes=True)
+
+    assert asked == ["Min workers:", "Max workers:", "Concurrent requests per worker:"]
+    assert created["name"] == "given"
+    assert created["idle_timeout"] == 900
+
+
+def test_managed_create_max_workers_prefill_follows_min(monkeypatch):
+    created = _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
+    _stub_select(monkeypatch, lambda choices: choices[0].value)
+    _stub_text(monkeypatch, {"Min workers:": "3"})
+
+    deploy.managed_models_create(detach=True, yes=True)
+
+    # The default max (1) would be below the new min, so the prefill rises to 3.
+    assert created["min_workers"] == 3
+    assert created["max_workers"] == 3
+
+
+def test_managed_create_ctrl_c_in_settings_creates_nothing(monkeypatch):
+    created = _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
+    _stub_select(monkeypatch, lambda choices: choices[0].value)
+    _stub_text(monkeypatch, {"Max workers:": None})
+
+    with pytest.raises(typer.Exit):
+        deploy.managed_models_create(detach=True, yes=True)
+    assert created == {}
+
+
+def test_managed_create_picker_filters_by_region(monkeypatch):
+    _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01"), ("qwen3", "india-chennai-01")))
+    shown = _stub_select(monkeypatch, lambda choices: choices[0].value)
+    _stub_text(monkeypatch)
+
+    _managed_create_call(model_slug=None, region="IN2", detach=True)
+
+    assert [m.model_slug for m in shown[0]] == ["glm-5.2"]
+
+
+def test_managed_create_slug_in_one_region_needs_no_prompt(monkeypatch):
+    created = _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
+    shown = _stub_select(monkeypatch, lambda choices: pytest.fail("should not prompt"))
+    asked = _stub_text(monkeypatch)
+
+    _managed_create_call(region=None, detach=True)
+
+    assert shown == [] and asked == []
+    assert created["region"] == "india-noida-01"
+
+
+def test_managed_create_slug_in_many_regions_prompts_for_region(monkeypatch):
+    created = _install_managed_client(
+        monkeypatch, _catalog(("glm-5.2", "india-chennai-01"), ("glm-5.2", "india-noida-01"), ("qwen3", "x"))
+    )
+    shown = _stub_select(monkeypatch, lambda choices: choices[1].value)
+    _stub_text(monkeypatch)
+
+    _managed_create_call(region=None, detach=True)
+
+    assert [(m.model_slug, m.region) for m in shown[0]] == [
+        ("glm-5.2", "india-chennai-01"),
+        ("glm-5.2", "india-noida-01"),
+    ]
+    assert created["region"] == "india-noida-01"
+
+
+def test_managed_create_picker_ctrl_c_creates_nothing(monkeypatch):
+    created = _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
+    _stub_select(monkeypatch, lambda choices: None)
+
+    with pytest.raises(typer.Exit):
+        _managed_create_call(model_slug=None, region=None)
+    assert created == {}
+
+
+@pytest.mark.parametrize("json_output", [False, True])
+def test_managed_create_without_slug_never_prompts_non_interactive(monkeypatch, json_output):
+    created = _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
+    monkeypatch.setattr(deploy.render, "can_prompt", lambda: False)
+    monkeypatch.setattr(deploy.render.questionary, "select", lambda *a, **k: pytest.fail("should not prompt"))
+    _die_raises(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc:
+        _managed_create_call(model_slug=None, region=None, json_output=json_output)
+    assert str(exc.value) == "Pass a model slug. See: jl deploy managed-models list"
+    assert created == {}
+
+
+def test_managed_create_slug_in_many_regions_non_interactive_asks_for_region(monkeypatch):
+    _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-chennai-01"), ("glm-5.2", "india-noida-01")))
+    monkeypatch.setattr(deploy.render, "can_prompt", lambda: False)
+    _die_raises(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc:
+        _managed_create_call(region=None)
+    assert str(exc.value) == "glm-5.2 is available in IN1, IN2. Pass --region."

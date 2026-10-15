@@ -294,6 +294,8 @@ class Deployment(BaseModel):
     storage: int | None = None
     args: dict | None = None
     env: dict | None = None
+    # Set for managed deployments; the API then omits args and env.
+    managed_model: ManagedModel | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
     created_at: datetime | None = None
@@ -310,7 +312,10 @@ class Deployment(BaseModel):
 
     @property
     def served_model(self) -> str | None:
-        """Model name inference clients must use: the served-model-name arg when set, else the model id."""
+        """Model name inference clients must use: the managed model's API name, else the
+        served-model-name arg when set, else the model id."""
+        if self.managed_model:
+            return self.managed_model.api_model_name
         return (self.args or {}).get("served-model-name") or self.model
 
 
@@ -329,6 +334,7 @@ class DeploymentSummary(BaseModel):
     concurrent_requests: int | None = None
     gpus_per_worker: int | None = None
     error_message: str | None = None
+    managed_model: ManagedModel | None = None
     total_cost: float = 0.0
     currency: str = "USD"
 
@@ -348,4 +354,23 @@ class RegionError(BaseModel):
 
 class DeploymentListResult(BaseModel):
     deployments: list[DeploymentSummary] = Field(default_factory=list)
+    region_errors: list[RegionError] = Field(default_factory=list)
+
+
+class ManagedModel(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    model_slug: str
+    display_name: str | None = None
+    description: str | None = None
+    api_model_name: str | None = None
+    context_length: int | None = None
+    model_card_url: str | None = None
+    region: OptionalRegionCode = None
+    gpu_type: str | None = None
+    gpus_per_worker: int | None = None
+    concurrent_requests: int | None = None
+
+
+class ManagedModelListResult(BaseModel):
+    models: list[ManagedModel] = Field(default_factory=list)
     region_errors: list[RegionError] = Field(default_factory=list)
