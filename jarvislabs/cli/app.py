@@ -64,7 +64,7 @@ def get_client() -> Client:
 def main() -> None:
     """Entry point for `jl` command (wired via pyproject.toml [project.scripts])."""
     # Command modules import `app` from this module, so they can only load after it exists.
-    from jarvislabs.cli import commands, deploy, instance, run, setup  # noqa: F401
+    from jarvislabs.cli import commands, deploy, instance, models, run, setup  # noqa: F401
     from jarvislabs.cli.update_check import finish_update_check, start_update_check
 
     start_update_check()

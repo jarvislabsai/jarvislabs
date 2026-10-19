@@ -17,6 +17,7 @@ from jarvislabs.filesystems import Filesystems
 from jarvislabs.instances import Instances
 from jarvislabs.scripts import Scripts
 from jarvislabs.ssh_keys import SSHKeys
+from jarvislabs.token_factory import Models
 from jarvislabs.transport import Transport
 from jarvislabs.vpcs import Vpcs
 
@@ -36,6 +37,7 @@ class Client:
         self.vpcs = Vpcs(self._transport)
         self.instances = Instances(self._transport, self.ssh_keys)
         self.deployments = Deployments(self._transport)
+        self.models = Models(self._transport)
 
     def close(self) -> None:
         self._transport.close()

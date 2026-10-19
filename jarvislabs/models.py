@@ -374,3 +374,20 @@ class ManagedModel(BaseModel):
 class ManagedModelListResult(BaseModel):
     models: list[ManagedModel] = Field(default_factory=list)
     region_errors: list[RegionError] = Field(default_factory=list)
+
+
+class ModelPricing(BaseModel):
+    currency: str
+    input_per_million_tokens: float
+    cached_input_per_million_tokens: float
+    output_per_million_tokens: float
+
+
+class ModelInfo(BaseModel):
+    id: str
+    name: str | None = None
+    description: str | None = None
+    context_length: int | None = None
+    model_card_url: str | None = None
+    thinking: dict | None = None
+    pricing: ModelPricing

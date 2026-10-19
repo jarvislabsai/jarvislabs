@@ -75,3 +75,8 @@ DEPLOYMENT_WAIT_TIMEOUT_S = 4500
 # Statuses treated as a transient/unreachable region rather than a missing
 # deployment (retryable HTTP statuses plus 0 for connection/timeout).
 DEPLOYMENT_TRANSIENT_STATUS: frozenset[int] = RETRY_STATUS_CODES | frozenset({0})
+
+# ── Token factory ────────────────────────────────────────────────────────────
+
+# Pay-per-token model APIs; OpenAI-compatible, authed with the same API key.
+MODELS_API_URL = "https://models.jarvislabs.net/v1"

@@ -86,7 +86,10 @@ def extract_message(payload: dict | list) -> str:
             else:
                 msgs.append(msg)
         return "; ".join(msgs)
-    return payload.get("message") or payload.get("error") or detail or "Unknown error"
+    error = payload.get("error")
+    if isinstance(error, dict):  # Models API: {"error": {"message": ...}}
+        error = error.get("message")
+    return payload.get("message") or error or detail or "Unknown error"
 
 
 def error_from_response(status_code: int, payload: dict | list) -> JarvislabsError:
@@ -94,8 +97,8 @@ def error_from_response(status_code: int, payload: dict | list) -> JarvislabsErr
     message = extract_message(payload) or f"HTTP {status_code}"
     if status_code == 401:
         return AuthError(message)
-    # No machine-readable code exists, so balance is detected from the message.
-    if status_code == 403 and "balance" in message.lower():
+    # No machine-readable code exists (except the models API's 402), so balance is detected from the message.
+    if status_code == 402 or (status_code == 403 and "balance" in message.lower()):
         return InsufficientBalanceError(message)
     if status_code == 404:
         return NotFoundError(message)

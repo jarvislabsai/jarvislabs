@@ -14,6 +14,9 @@ from questionary.prompts.common import InquirerControl
 from rich import box
 from rich.console import Console
 from rich.markup import escape
+from rich.padding import Padding
+from rich.rule import Rule
+from rich.syntax import Syntax
 from rich.table import Table
 from rich.theme import Theme
 
@@ -521,20 +524,146 @@ def deployment_running_handoff(base_url: str, model: str | None) -> None:
     """Print the base URL, a paste-ready OpenAI snippet, and a first-request note.
     Printed markup-safe so brackets/braces are not mangled."""
     stdout_console.print(f"Base URL: {base_url}", markup=False, soft_wrap=True)
-    snippet = (
-        "from openai import OpenAI\n"
-        f'client = OpenAI(base_url="{base_url}", api_key="<YOUR_JL_API_KEY>")\n'
-        "resp = client.chat.completions.create(\n"
-        f'    model="{model or "<model>"}",\n'
-        '    messages=[{"role": "user", "content": "Hello"}],\n'
-        ")\n"
-        "print(resp.choices[0].message.content)"
-    )
-    stdout_console.print(snippet, markup=False, soft_wrap=True)
+    stdout_console.print(_openai_snippet(base_url, model or "<model>"), markup=False, soft_wrap=True)
     stdout_console.print(
         "Note: the first request may be slow while a worker starts up.",
         markup=False,
     )
+
+
+def _openai_snippet(base_url: str, model: str) -> str:
+    return (
+        "from openai import OpenAI\n"
+        f'client = OpenAI(base_url="{base_url}", api_key="<YOUR_JL_API_KEY>")\n'
+        "resp = client.chat.completions.create(\n"
+        f'    model="{model}",\n'
+        '    messages=[{"role": "user", "content": "Hello"}],\n'
+        ")\n"
+        "print(resp.choices[0].message.content)"
+    )
+
+
+# ── Token factory ────────────────────────────────────────────────────────────
+
+
+def _price(value: float, currency: str) -> str:
+    return f"{currency_symbol(currency)}{value:.2f}"
+
+
+def _context_label(tokens: int | None) -> str:
+    if not tokens:
+        return "—"
+    if tokens >= 1_000_000:
+        return f"{tokens / 1_000_000:.2f}".rstrip("0").rstrip(".") + "M"
+    return f"{round(tokens / 1000)}K"
+
+
+def _prices(pricing) -> dict[str, str]:
+    return {
+        "Input": _price(pricing.input_per_million_tokens, pricing.currency),
+        "Cached": _price(pricing.cached_input_per_million_tokens, pricing.currency),
+        "Output": _price(pricing.output_per_million_tokens, pricing.currency),
+    }
+
+
+def models_table(models: list) -> None:
+    table = _table("Models · price per 1M tokens")
+    table.add_column("ID", style="cyan", no_wrap=True)
+    for heading in ("Context", "Input", "Cached", "Output"):
+        table.add_column(heading, justify="right", no_wrap=True)
+    for model in models:
+        table.add_row(escape(model.id), _context_label(model.context_length), *_prices(model.pricing).values())
+    stdout_console.print(table)
+    info("Tip: run 'jl models get <ID>' for details and ready-to-use code")
+
+
+def select_model(models: list):
+    rows = []
+    for model in models:
+        prices = _prices(model.pricing)
+        rows.append((model.id, _context_label(model.context_length), prices["Input"], prices["Output"]))
+    headings = ("MODEL", "CONTEXT", "INPUT/1M", "OUTPUT/1M")
+    colors = ("fg:ansicyan", "fg:ansibrightblack", "fg:ansigreen", "fg:ansigreen")
+    return select_row("Select a model:", headings, colors, rows, models)
+
+
+def _thinking_lines(thinking: dict | None) -> str:
+    if not thinking or not thinking.get("supported"):
+        return "[dim]Not supported[/dim]"
+    keys = thinking.get("template_parameters", {})
+    options = []
+    if "toggle" in keys:
+        options.append((keys["toggle"], "true | false"))
+    if "effort" in keys:
+        options.append((keys["effort"], " | ".join(thinking["supported_efforts"])))
+    if not options:
+        return "[green]Supported[/green]"
+    width = max(len(key) for key, _ in options)
+    lines = [f"[yellow]{key:<{width}}[/yellow]   {values}" for key, values in options]
+    return "\n".join(["[green]Supported[/green]   [dim]set in chat_template_kwargs[/dim]", *lines])
+
+
+def model_detail(model, base_url: str) -> None:
+    header = f"[bold]{escape(model.name or model.id)}[/bold]   [cyan]{escape(model.id)}[/cyan]"
+    if model.description:
+        header += f"\n[dim]{escape(model.description)}[/dim]"
+    prices = _prices(model.pricing)
+    width = max(len(price) for price in prices.values())
+    pricing = "\n".join(f"{name:<8}[green]{price:>{width}}[/green]" for name, price in prices.items())
+
+    stdout_console.print()
+    stdout_console.print(Padding(header, (0, 0, 1, 2)))
+    _print_detail_table(
+        [
+            ("Context", f"{model.context_length:,} tokens" if model.context_length else "—"),
+            ("Price per 1M", pricing),
+            ("Thinking", _thinking_lines(model.thinking)),
+            ("Model card", _link_value(model.model_card_url)),
+            ("Base URL", _link_value(base_url)),
+        ]
+    )
+
+
+def model_snippets(model_id: str, base_url: str) -> None:
+    body = json.dumps({"model": model_id, "messages": [{"role": "user", "content": "Hello"}]})
+    curl = (
+        f"curl {base_url}/chat/completions \\\n"
+        '  -H "Authorization: Bearer $JL_API_KEY" \\\n'
+        '  -H "Content-Type: application/json" \\\n'
+        f"  -d '{body}'"
+    )
+    for title, code, lexer in (("Python", _openai_snippet(base_url, model_id), "python"), ("curl", curl, "bash")):
+        stdout_console.print()
+        stdout_console.print(Rule(f"[bold]{title}[/bold]", align="left", style="dim"))
+        stdout_console.print()
+        stdout_console.print(Syntax(code, lexer, theme="ansi_dark", background_color="default", word_wrap=True))
+    stdout_console.print()
+
+
+def chat_text(text: str) -> None:
+    stdout_console.print(text, end="", markup=False, highlight=False, soft_wrap=True)
+
+
+def chat_thinking(text: str) -> None:
+    console.print(text, end="", style="dim italic", markup=False, highlight=False, soft_wrap=True)
+
+
+def chat_prompt() -> str:
+    console.print()
+    return console.input("[bold cyan]>[/bold cyan] ")
+
+
+def chat_usage(usage: dict | None, pricing) -> None:
+    if not usage:
+        return
+    tokens_in, tokens_out = usage["prompt_tokens"], usage["completion_tokens"]
+    cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+    cost = (
+        (tokens_in - cached) * pricing.input_per_million_tokens
+        + cached * pricing.cached_input_per_million_tokens
+        + tokens_out * pricing.output_per_million_tokens
+    ) / 1_000_000
+    info(f"\n{tokens_in:,} in · {tokens_out:,} out · {currency_symbol(pricing.currency)}{cost:.6f}")
 
 
 def resource_label(inst) -> str:

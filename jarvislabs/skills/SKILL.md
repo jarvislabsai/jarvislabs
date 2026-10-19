@@ -1,6 +1,6 @@
 ---
 name: jarvislabs
-description: Agent guide for running GPU experiments and serverless model deployments with the jl CLI on JarvisLabs.ai.
+description: Agent guide for running GPU experiments, serverless model deployments, and pay-per-token model APIs with the jl CLI on JarvisLabs.ai.
 ---
 
 # JarvisLabs GPU CLI (`jl`) — Agent Guide
@@ -18,6 +18,7 @@ Use `--help` on any command to discover flags (e.g., `jl run --help`, `jl create
 - `jl run` = managed job on an instance. Uploads code, sets up a Python environment, runs your script in the background with log tracking.
 - `jl exec` = run any command on an instance. Use for system checks (nvidia-smi, ps, df), debugging failed runs, inspecting files, or any raw shell access. No environment setup, no tracking. This is your escape hatch when `jl run` doesn't cover your use case.
 - `jl deploy` (beta) = serverless model serving — an OpenAI-compatible endpoint with autoscaling workers, no instance to manage. Separate from instances and runs.
+- `jl models` = token factory — hosted models you call per token through an OpenAI-compatible API. Nothing to create or delete.
 
 ## Instances
 
@@ -376,6 +377,27 @@ jl deploy delete <id> --yes --json
 - `jl deploy update` only changes `name`/`idle-timeout`/`wait-time`, and only while running. To change GPU/model/workers/storage, recreate.
 - Deployments accrue cost while active (compute + storage), so `delete` when done.
 
+## Token Factory (Pay-per-token models)
+
+`jl models` = hosted models called per token through an OpenAI-compatible API. Billed from the account balance for the tokens used; nothing runs or costs money between calls.
+
+**`jl models` vs `jl deploy managed-models`:**
+- `jl models` — default when the user just wants to call a model: no setup, no idle cost, pay per token.
+- `jl deploy managed-models` — a dedicated endpoint on its own GPUs, for steady high traffic, isolation, or control over scaling. Costs while workers run, and must be deleted when done.
+
+```bash
+jl models list --json                               # id, context_length, pricing (per 1M tokens, account currency), thinking
+jl models get <id> --json                           # one model, plus base_url
+jl models chat <id> "prompt" --max-tokens 500       # streamed reply: answer on stdout, thinking + usage on stderr
+jl models chat <id> "prompt" --json                 # full OpenAI response, including usage
+cat file.txt | jl models chat <id> "Summarize this" # piped text is added to the prompt
+```
+
+- **Always pass the model ID and a prompt.** Without them, `get`/`chat` open an interactive picker or chat, which needs a terminal; in scripts or with `--json` they exit with an error.
+- `--thinking/--no-thinking` and `--effort <level>` work only on models that support them; check `thinking` in `jl models get <id> --json`.
+- Other options: `--system "<prompt>"`, `--max-tokens N`. Every call costs money, so cap output with `--max-tokens`. An empty balance fails with an insufficient-balance error.
+- From code: base URL `https://models.jarvislabs.net/v1`, API key = the JarvisLabs API key, `model` = the model ID. `jl models get <id>` prints Python and curl snippets.
+
 ## Agent Workflow (End-to-End)
 
 ```bash
@@ -443,4 +465,5 @@ Every command supports `--help` for full flag details:
 jl create --help       jl run --help       jl ssh-key --help
 jl resume --help       jl run logs --help  jl filesystem --help
 jl deploy --help       jl deploy create --help
+jl models --help       jl models chat --help
 ```

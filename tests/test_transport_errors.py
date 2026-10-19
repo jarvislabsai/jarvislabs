@@ -179,3 +179,22 @@ def test_stream_lines_wraps_timeouts():
     t = _stream_transport(handler)
     with pytest.raises(APIError, match="Stream timed out"):
         list(t.stream_lines("management/dep1/logs", base_url="https://example.test"))
+
+
+def test_nested_error_object_uses_its_message():
+    payload = {"error": {"code": "model_not_found", "message": "Unknown model.", "request_id": "r1"}}
+    assert extract_message(payload) == "Unknown model."
+
+
+def test_stream_lines_posts_json():
+    seen = {}
+
+    def handler(request):
+        seen["method"] = request.method
+        seen["body"] = request.content
+        return httpx.Response(200, content=b"data: [DONE]\n")
+
+    t = _stream_transport(handler)
+    lines = list(t.stream_lines("chat/completions", method="POST", json={"a": 1}, base_url="https://example.test"))
+    assert lines == ["data: [DONE]"]
+    assert seen == {"method": "POST", "body": b'{"a":1}'}

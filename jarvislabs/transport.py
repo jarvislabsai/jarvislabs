@@ -89,22 +89,30 @@ class Transport:
         # keeps the type checker happy.
         raise AssertionError("unreachable")
 
-    def stream_lines(self, path: str, *, params: dict | None = None, base_url: str | None = None) -> Iterator[str]:
-        """Open a streaming GET and yield response lines as they arrive.
+    def stream_lines(
+        self,
+        path: str,
+        *,
+        method: str = "GET",
+        json: dict | None = None,
+        params: dict | None = None,
+        base_url: str | None = None,
+    ) -> Iterator[str]:
+        """Open a streaming request and yield response lines as they arrive.
 
         No retries: a stream is long-lived and replaying it would repeat
         lines. The connection closes when the caller stops iterating.
         """
         url = (base_url or self._base_url).rstrip("/") + "/" + path.lstrip("/")
         try:
-            with self._client.stream("GET", url, params=params) as resp:
+            with self._client.stream(method, url, json=json, params=params) as resp:
                 if not resp.is_success:
                     resp.read()  # streamed bodies aren't loaded until asked
                     raise _api_error(resp)
                 yield from resp.iter_lines()
         except httpx.HTTPError as exc:
             label = "timed out" if isinstance(exc, httpx.TimeoutException) else "failed"
-            raise APIError(0, f"Stream {label}: GET {path}") from exc
+            raise APIError(0, f"Stream {label}: {method} {path}") from exc
 
     def close(self) -> None:
         self._client.close()

@@ -70,7 +70,7 @@ def _parse_kv(pairs: list[str] | None, *, flag: str, redact: bool = False) -> di
 
 def _finish_create(client, deployment_id: str, region: str, *, detach: bool) -> None:
     """After a create: wait until running (unless detached), then print how to call it."""
-    
+
     render.info(f"Deployment {deployment_id} created.")
     followup = f"Check: jl deploy get {deployment_id} · Delete: jl deploy delete {deployment_id}"
 
@@ -96,6 +96,7 @@ def _finish_create(client, deployment_id: str, region: str, *, detach: bool) -> 
         render.print_json({**deployment.model_dump(), "openai_base_url": base_url})
         return
     render.deployment_running_handoff(base_url, deployment.served_model)
+
 
 def _resolve_managed_model(client, model_slug: str | None, region: str | None) -> tuple[ManagedModel, bool]:
     """Find the catalog entry to deploy. Returns (model, picked_from_list)."""
@@ -132,17 +133,18 @@ def _resolve_managed_model(client, model_slug: str | None, region: str | None) -
     ]
     return render.select_row("Select a managed model:", _PICKER_HEADINGS, _PICKER_COLORS, rows, options), True
 
+
 def _ask_create_settings(model: ManagedModel, name, min_workers, max_workers, idle_timeout, concurrent):
     """Ask for the deployment settings after a model is picked from the list."""
 
-    name         = render.ask_value("name", "Deployment name:", name)
-    min_workers  = render.ask_value("min_workers", "Min workers:", min_workers, low=0, high=100)
-    max_workers  = render.ask_value("max_workers", "Max workers:", max_workers, low=max(min_workers, 1), high=100)
+    name = render.ask_value("name", "Deployment name:", name)
+    min_workers = render.ask_value("min_workers", "Min workers:", min_workers, low=0, high=100)
+    max_workers = render.ask_value("max_workers", "Max workers:", max_workers, low=max(min_workers, 1), high=100)
     idle_timeout = render.ask_value("idle_timeout", "Idle timeout (seconds):", idle_timeout, low=0, high=86400)
-    concurrent   = render.ask_value(
-                        "concurrent", "Concurrent requests per worker:", concurrent or model.concurrent_requests or 1, low=1, high=1000
-                    )
-    
+    concurrent = render.ask_value(
+        "concurrent", "Concurrent requests per worker:", concurrent or model.concurrent_requests or 1, low=1, high=1000
+    )
+
     return name, min_workers, max_workers, idle_timeout, concurrent
 
 

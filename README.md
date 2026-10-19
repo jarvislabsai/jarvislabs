@@ -129,6 +129,24 @@ jl deploy get <deployment_id>
 jl deploy delete <deployment_id>
 ```
 
+### Token Factory (Pay-per-token models)
+
+Call hosted models directly through an OpenAI-compatible API. Nothing to deploy; you pay only for the tokens you use.
+
+```bash
+# See the models and their price per 1M tokens
+jl models list
+
+# Model details plus ready-to-use Python and curl code (omit the ID to pick from a list)
+jl models get <model_id>
+
+# Ask once, or omit the prompt for an interactive chat
+jl models chat <model_id> "Explain KV cache in two lines"
+cat notes.txt | jl models chat <model_id> "Summarize this"
+```
+
+From your own code, use any OpenAI client with base URL `https://models.jarvislabs.net/v1` and your JarvisLabs API key.
+
 ### More Commands
 
 ```bash
