@@ -734,7 +734,6 @@ def _stub_select(monkeypatch, pick):
 
     monkeypatch.setattr(deploy.render, "can_prompt", lambda: True)
     monkeypatch.setattr(deploy.render.questionary, "select", fake_select)
-    monkeypatch.setattr(deploy.render, "_highlight_current_row", lambda question: None)
     return shown
 
 

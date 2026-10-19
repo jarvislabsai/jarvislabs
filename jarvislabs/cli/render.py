@@ -10,7 +10,6 @@ from typing import Any, NoReturn
 import questionary
 import typer
 from pydantic import BaseModel
-from questionary.prompts.common import InquirerControl
 from rich import box
 from rich.console import Console
 from rich.markup import escape
@@ -421,12 +420,11 @@ def deployments_table(result, *, wide: bool = False) -> None:
 
     table = _table("Deployments", show_lines=True)
     table.add_column("ID", no_wrap=True)  # full id stays intact so it's copy-pasteable
-    table.add_column("Name", no_wrap=True)
+    table.add_column("Name", overflow="fold")  # the one column that wraps, so the others stay readable
     table.add_column("Region", no_wrap=True)
     table.add_column("Status", no_wrap=True)
     if wide:
         table.add_column("Framework", no_wrap=True)
-        table.add_column("Managed", no_wrap=True)
     table.add_column("GPU", no_wrap=True)
     if wide:
         table.add_column("Workers", justify="right")
@@ -444,7 +442,6 @@ def deployments_table(result, *, wide: bool = False) -> None:
         ]
         if wide:
             row.append(escape(dep.framework or "—"))
-            row.append(escape(dep.managed_model.model_slug) if dep.managed_model else "—")
         row.append(escape(_gpu_label(dep.gpus_to_use)))
         if wide:
             row.append(_workers_label(dep))
@@ -962,134 +959,102 @@ def die(msg: str, code: int = 1) -> NoReturn:
 
 
 def managed_models_table(result) -> None:
-    """Render the managed-model catalog, one row per model per region."""
     warn_region_errors(result.region_errors)
-
-    if not result.models:
-        info("No managed models available.")
-        return
-
-    table = _table("Managed Models")
+    table = _table("Managed Models · GPUs per worker")
     table.add_column("Slug", style="cyan", no_wrap=True)
-    table.add_column("Name", style="bold")
     table.add_column("Region", no_wrap=True)
-    table.add_column("GPU / worker", no_wrap=True)
+    table.add_column("GPU", no_wrap=True)
     table.add_column("Context", justify="right")
     table.add_column("Concurrent", justify="right")
-
     for model in result.models:
         table.add_row(
             escape(model.model_slug),
-            escape(model.display_name or "—"),
             region_label(model.region),
-            f"{model.gpus_per_worker or '—'}x {escape(model.gpu_type or '—')}",
-            f"{model.context_length:,}" if model.context_length else "—",
-            str(model.concurrent_requests) if model.concurrent_requests is not None else "—",
+            _managed_gpu_label(model),
+            _context_label(model.context_length),
+            str(model.concurrent_requests or "—"),
         )
-
     stdout_console.print(table)
     info("Deploy one: jl deploy managed-models create <SLUG>, or leave out <SLUG> to pick from a list")
 
 
+def select_managed_model(models: list):
+    rows = [
+        (
+            model.display_name or model.model_slug,
+            model.model_slug,
+            region_label(model.region),
+            _managed_gpu_label(model),
+            _context_label(model.context_length),
+        )
+        for model in models
+    ]
+    headings = ("MODEL", "SLUG", "REGION", "GPU", "CONTEXT")
+    colors = ("bold", "fg:ansicyan", "fg:ansiyellow", "fg:ansigreen", "fg:ansibrightblack")
+    return select_row("Select a managed model:", headings, colors, rows, models)
+
+
+def _managed_gpu_label(model) -> str:
+    return f"{model.gpus_per_worker or '—'}x {model.gpu_type or '—'}"
+
+
 def _model_label(dep) -> str:
-    """The deployment's model: name and slug for a managed model, else the model id."""
     managed = dep.managed_model
     if managed:
-        name = escape(managed.display_name or managed.model_slug)
-        return f"{name} [dim]({escape(managed.model_slug)}, managed)[/dim]"
+        return (
+            f"{escape(managed.display_name or managed.model_slug)} [dim]({escape(managed.model_slug)}, managed)[/dim]"
+        )
     return escape(dep.model or "—")
 
 
 def warn_region_errors(region_errors: list) -> None:
-    """Warn about each serverless region that couldn't be reached."""
     for region_error in region_errors:
         warning(f"Could not reach {region_label(region_error.region)}: {region_error.error}")
 
 
 # ── Interactive prompts ──────────────────────────────────────────────────────
 
-PROMPT_STYLE = questionary.Style(
-    [
-        ("pointer", "fg:#73daca bold"),
-        ("separator", "fg:ansibrightblack bold"),
-        ("current-row", "bg:#264f4a"),
-    ]
-)
+PROMPT_STYLE = questionary.Style([("pointer", "fg:#73daca bold"), ("separator", "fg:ansibrightblack bold")])
 
 
 def can_prompt() -> bool:
-    """True when a person is at the terminal to answer an interactive prompt."""
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
 def select_row(message: str, headings: tuple[str, ...], colors: tuple[str, ...], rows: list, values: list) -> Any:
-    """Arrow-key picker shown as a table; returns the value of the chosen row. Ctrl+C exits."""
-    question = questionary.select(message, choices=_table_choices(headings, colors, rows, values), style=PROMPT_STYLE)
-    _highlight_current_row(question)
-    choice = question.ask()
-    if choice is None:  # Ctrl+C
+    """Arrow-key picker shown as an aligned table; returns the chosen row's value. Ctrl+C exits."""
+    widths = [max(len(cell) for cell in column) for column in zip(headings, *rows, strict=True)]
+
+    def pad(cells) -> list[str]:
+        return [cell.ljust(width + 2) for cell, width in zip(cells, widths, strict=True)]
+
+    choices = [questionary.Separator("".join(pad(headings)))]
+    choices += [
+        questionary.Choice(title=list(zip(colors, pad(row), strict=True)), value=value)
+        for row, value in zip(rows, values, strict=True)
+    ]
+    choice = questionary.select(message, choices=choices, style=PROMPT_STYLE).ask()
+    if choice is None:
         raise typer.Exit()
     return choice
 
 
-def _table_choices(headings: tuple[str, ...], colors: tuple[str, ...], rows: list, values: list) -> list:
-    """A heading row plus one colored row per value, with columns sized to fit the longest cell."""
-    widths = [max(len(cell) for cell in column) for column in zip(headings, *rows, strict=True)]
-
-    def cells(row) -> list[str]:
-        # Two spaces between columns; the last column isn't padded.
-        return [f"{cell:<{width}}  " for cell, width in zip(row[:-1], widths[:-1], strict=True)] + [row[-1]]
-
-    return [
-        questionary.Separator("".join(cells(headings))),
-        *(
-            questionary.Choice(title=list(zip(colors, cells(row), strict=True)), value=value)
-            for row, value in zip(rows, values, strict=True)
-        ),
-    ]
-
-
-def _highlight_current_row(question) -> None:
-    """Shade the picker row under the pointer while keeping each column's color."""
-    windows = question.application.layout.find_all_windows()
-    control = next((window.content for window in windows if isinstance(window.content, InquirerControl)), None)
-    if control is None:
-        return
-
-    rows = [
-        (index, choice, list(choice.title))
-        for index, choice in enumerate(control.choices)
-        if not isinstance(choice, questionary.Separator)
-    ]
-
-    def restyle(_app) -> None:
-        for index, choice, tokens in rows:
-            current = " class:current-row" if index == control.pointed_at else ""
-            choice.title[:] = [(style + current, text) for style, text in tokens]
-
-    question.application.before_render += restyle
-
-
 def ask_value(param: str, message: str, value, *, low: int | None = None, high: int | None = None):
-    """Ask for one command setting, prefilled with its current value.
+    """Ask for a setting, prefilled with its value; whole numbers when low/high are given.
 
-    With ``low``/``high`` the answer must be a whole number in that range and is
-    returned as an int; otherwise it's non-empty text. A flag given on the
-    command line is kept as is, without asking. Ctrl+C exits.
+    A flag given on the command line is kept without asking. Ctrl+C exits.
     """
     if cli_options.option_was_explicit(param):
         return value
 
     def validate(text: str) -> bool | str:
-        text = text.strip()
         if low is None:
-            return bool(text) or "This can't be empty."
-        return (text.isdigit() and low <= int(text) <= high) or f"Enter a whole number from {low} to {high}."
+            return bool(text.strip()) or "This can't be empty."
+        return (text.strip().isdigit() and low <= int(text) <= high) or f"Enter a whole number from {low} to {high}."
 
     if low is not None:
-        value = min(max(value, low), high)  # keep the prefill inside the allowed range
+        value = min(max(value, low), high)
     answer = questionary.text(message, default=str(value), validate=validate, style=PROMPT_STYLE).ask()
-    if answer is None:  # Ctrl+C
+    if answer is None:
         raise typer.Exit()
-    answer = answer.strip()
-    return answer if low is None else int(answer)
+    return answer.strip() if low is None else int(answer)

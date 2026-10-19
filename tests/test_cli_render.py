@@ -294,40 +294,22 @@ HEADINGS = ("NAME", "SLUG", "REGION")
 COLORS = ("bold", "fg:ansicyan", "fg:ansiyellow")
 
 
-def test_table_choices_columns_line_up_with_long_values():
+def test_select_row_columns_line_up_with_long_values(monkeypatch):
+    shown = []
+
+    def fake_select(message, choices, **kwargs):
+        shown.extend(choices)
+        return SimpleNamespace(ask=lambda: choices[1].value)
+
+    monkeypatch.setattr(render.questionary, "select", fake_select)
     rows = [("GLM-5.2", "glm-5.2", "IN2"), ("Nemotron 3.5 Lightning", "nemotron-3.5-lightning-30b-a3b-bf16", "IN1")]
-    heading, *choices = render._table_choices(HEADINGS, COLORS, rows, ["a", "b"])
+    assert render.select_row("Pick", HEADINGS, COLORS, rows, ["a", "b"]) == "a"
+
+    heading, *choices = shown
     lines = ["".join(text for _, text in choice.title) for choice in choices]
     # Every column starts at the same position in the heading and in each row.
     assert lines[0].index("glm-5.2") == heading.title.index("SLUG")
     assert lines[0].index("IN2") == lines[1].index("IN1") == heading.title.index("REGION")
-    assert [choice.value for choice in choices] == ["a", "b"]
-
-
-def test_highlight_shades_only_the_current_row():
-    rows = [("A", "a", "IN2"), ("B", "b", "IN2"), ("C", "c", "IN2")]
-    question = render.questionary.select("Pick", choices=render._table_choices(HEADINGS, COLORS, rows, ["a", "b", "c"]))
-    render._highlight_current_row(question)
-    control = next(
-        window.content
-        for window in question.application.layout.find_all_windows()
-        if isinstance(window.content, render.InquirerControl)
-    )
-
-    def shaded_rows():
-        question.application.before_render.fire()
-        return [
-            choice.value
-            for choice in control.choices
-            if not isinstance(choice, render.questionary.Separator)
-            and all("class:current-row" in style for style, _ in choice.title)
-        ]
-
-    assert shaded_rows() == ["a"]  # the pointer starts on the first row, not the heading
-    control.pointed_at = 3
-    assert shaded_rows() == ["c"]  # moving the pointer moves the shading
-    # Column colors are kept under the shading.
-    assert control.choices[3].title[1][0].startswith("fg:ansicyan")
 
 
 def _capture_validators(monkeypatch):

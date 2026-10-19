@@ -28,10 +28,6 @@ BETA_HELP_NOTICE = (
     "Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]"
 )
 
-# Picker columns: heading and the color of that column's values.
-_PICKER_HEADINGS = ("MODEL", "SLUG", "REGION", "GPU", "CONTEXT")
-_PICKER_COLORS = ("bold", "fg:ansicyan", "fg:ansiyellow", "fg:ansigreen", "fg:ansibrightblack")
-
 deploy_app = typer.Typer(
     name="deploy",
     help=(
@@ -46,7 +42,6 @@ managed_app = typer.Typer(
     help="List and deploy JarvisLabs-managed models [bold bright_yellow](beta)[/bold bright_yellow].",
 )
 deploy_app.add_typer(managed_app)
-
 
 RegionHintOption = Annotated[
     str | None, typer.Option("--region", help="Region of the deployment (skips the cross-region search).")
@@ -70,7 +65,6 @@ def _parse_kv(pairs: list[str] | None, *, flag: str, redact: bool = False) -> di
 
 def _finish_create(client, deployment_id: str, region: str, *, detach: bool) -> None:
     """After a create: wait until running (unless detached), then print how to call it."""
-
     render.info(f"Deployment {deployment_id} created.")
     followup = f"Check: jl deploy get {deployment_id} · Delete: jl deploy delete {deployment_id}"
 
@@ -85,6 +79,7 @@ def _finish_create(client, deployment_id: str, region: str, *, detach: bool) -> 
         with render.spinner("Deploying..."):
             deployment = client.deployments.wait_until_running(deployment_id, region=region)
     except KeyboardInterrupt:
+        # The deployment keeps building — hand back the id in both modes so it's never lost.
         if state.json_output:
             render.print_json({"deployment_id": deployment_id, "region": render.region_input_label(region)})
         else:
@@ -98,54 +93,23 @@ def _finish_create(client, deployment_id: str, region: str, *, detach: bool) -> 
     render.deployment_running_handoff(base_url, deployment.served_model)
 
 
-def _resolve_managed_model(client, model_slug: str | None, region: str | None) -> tuple[ManagedModel, bool]:
-    """Find the catalog entry to deploy. Returns (model, picked_from_list)."""
+def _resolve_managed_model(client, model_slug: str | None, region: str | None) -> ManagedModel:
     with render.spinner("Fetching managed models..."):
         result = client.deployments.list_managed_models()
     render.warn_region_errors(result.region_errors)
 
-    wanted_region = normalize_serverless_region(region) if region else None
-    options = [
-        model
-        for model in result.models
-        if (model_slug is None or model.model_slug == model_slug)
-        and (wanted_region is None or model.region == wanted_region)
-    ]
+    region = region and normalize_serverless_region(region)
+    options = [m for m in result.models if model_slug in (None, m.model_slug) and region in (None, m.region)]
     if not options:
         render.die("No matching managed model. See: jl deploy managed-models list")
     if model_slug and len(options) == 1:
-        return options[0], False
+        return options[0]
     if state.json_output or not render.can_prompt():
         if model_slug:
-            regions = ", ".join(render.region_label(model.region) for model in options)
+            regions = ", ".join(render.region_label(m.region) for m in options)
             render.die(f"{model_slug} is available in {regions}. Pass --region.")
         render.die("Pass a model slug. See: jl deploy managed-models list")
-
-    rows = [
-        (
-            model.display_name or model.model_slug,
-            model.model_slug,
-            render.region_label(model.region),
-            f"{model.gpus_per_worker or '—'}x {model.gpu_type or '—'}",
-            f"{model.context_length:,} ctx" if model.context_length else "—",
-        )
-        for model in options
-    ]
-    return render.select_row("Select a managed model:", _PICKER_HEADINGS, _PICKER_COLORS, rows, options), True
-
-
-def _ask_create_settings(model: ManagedModel, name, min_workers, max_workers, idle_timeout, concurrent):
-    """Ask for the deployment settings after a model is picked from the list."""
-
-    name = render.ask_value("name", "Deployment name:", name)
-    min_workers = render.ask_value("min_workers", "Min workers:", min_workers, low=0, high=100)
-    max_workers = render.ask_value("max_workers", "Max workers:", max_workers, low=max(min_workers, 1), high=100)
-    idle_timeout = render.ask_value("idle_timeout", "Idle timeout (seconds):", idle_timeout, low=0, high=86400)
-    concurrent = render.ask_value(
-        "concurrent", "Concurrent requests per worker:", concurrent or model.concurrent_requests or 1, low=1, high=1000
-    )
-
-    return name, min_workers, max_workers, idle_timeout, concurrent
+    return render.select_managed_model(options)
 
 
 @deploy_app.command("create")
@@ -377,14 +341,11 @@ def deploy_delete(
 
 
 @managed_app.command("list")
-def managed_models_list(
-    json_output: cli_options.JsonOption = False,
-) -> None:
+def managed_models_list(json_output: cli_options.JsonOption = False) -> None:
     """List the managed models you can deploy, across all serverless regions."""
     cli_options.apply_command_options(json_output=json_output)
-    client = get_client()
     with render.spinner("Fetching managed models..."):
-        result = client.deployments.list_managed_models()
+        result = get_client().deployments.list_managed_models()
 
     if state.json_output:
         render.print_json(result)
@@ -419,19 +380,26 @@ def managed_models_create(
     [bold bright_yellow]Serverless is in beta. We're actively improving it and would love early feedback. Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
-
     client = get_client()
-    model, picked = _resolve_managed_model(client, model_slug, region)
-    model_slug, region = model.model_slug, model.region
-    name = name or model_slug
-    if picked:
-        name, min_workers, max_workers, idle_timeout, concurrent = _ask_create_settings(
-            model, name, min_workers, max_workers, idle_timeout, concurrent
+    model = _resolve_managed_model(client, model_slug, region)
+    name = name or model.model_slug
+
+    if model_slug is None:  # Picked from the list: ask for each setting not given as a flag.
+        name = render.ask_value("name", "Deployment name:", name)
+        min_workers = render.ask_value("min_workers", "Min workers:", min_workers, low=0, high=100)
+        max_workers = render.ask_value("max_workers", "Max workers:", max_workers, low=max(min_workers, 1), high=100)
+        idle_timeout = render.ask_value("idle_timeout", "Idle timeout (seconds):", idle_timeout, low=0, high=86400)
+        concurrent = render.ask_value(
+            "concurrent",
+            "Concurrent requests per worker:",
+            concurrent or model.concurrent_requests or 1,
+            low=1,
+            high=1000,
         )
 
     details = (
-        f"model={model_slug}, gpu={model.gpus_per_worker}x {model.gpu_type}/worker, name={name!r}, "
-        f"region={render.region_input_label(region)}, workers={min_workers}-{max_workers}, "
+        f"model={model.model_slug}, gpu={model.gpus_per_worker}x {model.gpu_type}/worker, name={name!r}, "
+        f"region={render.region_label(model.region)}, workers={min_workers}-{max_workers}, "
         f"idle_timeout={idle_timeout}s, concurrent={concurrent or model.concurrent_requests}"
     )
     render.warning(BETA_NOTICE)
@@ -440,12 +408,12 @@ def managed_models_create(
 
     with render.spinner("Creating deployment..."):
         deployment_id = client.deployments.create_managed(
-            model_slug,
+            model.model_slug,
             name=name,
-            region=region,
+            region=model.region,
             min_workers=min_workers,
             max_workers=max_workers,
             idle_timeout=idle_timeout,
             concurrent=concurrent,
         )
-    _finish_create(client, deployment_id, region, detach=detach)
+    _finish_create(client, deployment_id, model.region, detach=detach)

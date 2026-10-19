@@ -289,18 +289,9 @@ def test_managed_models_table_renders_rows(capture):
     render.managed_models_table(ManagedModelListResult(models=[model]))
     out = capture.getvalue()
     assert "glm-5.2" in out
-    assert "GLM 5.2" in out
     assert "IN2" in out
     assert "8x H100" in out
-    assert "131,072" in out
-
-
-def test_managed_models_table_empty(capture, monkeypatch):
-    infos: list[str] = []
-    monkeypatch.setattr(render, "info", lambda m: infos.append(m))
-    render.managed_models_table(ManagedModelListResult())
-    assert capture.getvalue() == ""
-    assert infos == ["No managed models available."]
+    assert "131K" in out
 
 
 def test_managed_models_table_warns_on_region_errors(capture, monkeypatch):
@@ -320,16 +311,11 @@ def test_detail_managed_shows_model_and_api_name(capture):
     assert "Args" not in out
 
 
-def test_table_wide_shows_managed_slug(capture):
-    result = DeploymentListResult(
-        deployments=[_summary(managed_model={"model_slug": "glm-5.2"}), _summary(deployment_id="dep2")]
-    )
-    render.deployments_table(result, wide=True)
-    out = capture.getvalue()
-    assert "Managed" in out
-    assert "glm-5.2" in out
-
-
-def test_table_default_hides_managed_column(capture):
-    render.deployments_table(DeploymentListResult(deployments=[_summary(managed_model={"model_slug": "glm-5.2"})]))
-    assert "Managed" not in capture.getvalue()
+def test_table_long_name_wraps_instead_of_hiding_columns(monkeypatch):
+    buf = StringIO()
+    monkeypatch.setattr(render, "stdout_console", Console(file=buf, color_system=None, width=90))
+    long_name = "nemotron-3.5-super-vl-120b-a12b-nvfp4"
+    render.deployments_table(DeploymentListResult(deployments=[_summary(name=long_name)]))
+    out = buf.getvalue()
+    assert "running" in out  # Status stays readable
+    assert long_name not in out  # the name is folded across lines instead

@@ -337,15 +337,9 @@ class Deployments:
             return "reason unavailable"
 
     def list_managed_models(self) -> ManagedModelListResult:
-        """List the managed-model catalog across all serverless regions.
-
-        Each region serves its own catalog, so the same model can appear once
-        per region it's available in.
-        """
+        """List the managed-model catalog; a model appears once per region it's offered in."""
         responses, region_errors = self._fetch_all_regions("managed-models")
-        models = [
-            ManagedModel(**{**item, "region": region}) for region, resp in responses for item in resp.get("models", [])
-        ]
+        models = [ManagedModel(**{**item, "region": region}) for region, resp in responses for item in resp["models"]]
         models.sort(key=lambda m: (m.model_slug, m.region or ""))
         return ManagedModelListResult(models=models, region_errors=region_errors)
 
@@ -362,31 +356,19 @@ class Deployments:
     ) -> str:
         """Create a deployment from a managed model and return its id.
 
-        The model's recipe sets the GPU, framework, and engine settings; only
-        scaling and concurrency are yours to choose. Poll with ``wait_until_running``.
+        The model's recipe sets the GPU, framework, and engine settings; you choose scaling.
         """
-        internal_region = normalize_serverless_region(region)
-        payload: dict = {
-            "name": name,
-            "min_workers": min_workers,
-            "max_workers": max_workers,
-            "idle_timeout": idle_timeout,
-        }
+        payload = {"name": name, "min_workers": min_workers, "max_workers": max_workers, "idle_timeout": idle_timeout}
         if concurrent is not None:
             payload["concurrent_requests"] = concurrent
-
-        base_url = serverless_region_url(internal_region)
+        base_url = serverless_region_url(normalize_serverless_region(region))
         resp = self._t.request(
             "POST", f"management/managed-models/{model_slug}/create", json=payload, base_url=base_url
         )
         return _require_deployment_id(resp)
 
     def _fetch_all_regions(self, path: str) -> tuple[builtins.list[tuple[str, dict]], builtins.list[RegionError]]:
-        """GET ``path`` from every serverless region; return (region, response) pairs.
-
-        Regions that can't be reached are reported in the errors list rather
-        than hiding the rest; if no region answers at all, raise.
-        """
+        """GET ``path`` from every region; unreachable regions go in the errors list, and if none answers, raise."""
         responses: builtins.list[tuple[str, dict]] = []
         region_errors: builtins.list[RegionError] = []
         for region in sorted(SERVERLESS_REGIONS):
