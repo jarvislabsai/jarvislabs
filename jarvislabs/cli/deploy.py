@@ -70,7 +70,7 @@ def _parse_kv(pairs: list[str] | None, *, flag: str, redact: bool = False) -> di
 
 def _finish_create(client, deployment_id: str, region: str, *, detach: bool) -> None:
     """After a create: wait until running (unless detached), then print how to call it."""
-    # Print the id immediately so Ctrl-C can never orphan it silently.
+    
     render.info(f"Deployment {deployment_id} created.")
     followup = f"Check: jl deploy get {deployment_id} · Delete: jl deploy delete {deployment_id}"
 
@@ -85,7 +85,6 @@ def _finish_create(client, deployment_id: str, region: str, *, detach: bool) -> 
         with render.spinner("Deploying..."):
             deployment = client.deployments.wait_until_running(deployment_id, region=region)
     except KeyboardInterrupt:
-        # The deployment keeps building — hand back the id in both modes so it's never lost.
         if state.json_output:
             render.print_json({"deployment_id": deployment_id, "region": render.region_input_label(region)})
         else:
@@ -98,15 +97,8 @@ def _finish_create(client, deployment_id: str, region: str, *, detach: bool) -> 
         return
     render.deployment_running_handoff(base_url, deployment.served_model)
 
-
 def _resolve_managed_model(client, model_slug: str | None, region: str | None) -> tuple[ManagedModel, bool]:
-    """Find the catalog entry to deploy. Returns (model, picked_from_list).
-
-    The catalog is always read, so a bad slug fails before anything is created
-    and the confirm prompt can show the model's GPU. A slug offered in only one
-    region needs no prompt; otherwise the user picks from an arrow-key list.
-    Scripts and --json get an error instead, since there's no one to answer.
-    """
+    """Find the catalog entry to deploy. Returns (model, picked_from_list)."""
     with render.spinner("Fetching managed models..."):
         result = client.deployments.list_managed_models()
     render.warn_region_errors(result.region_errors)
@@ -140,17 +132,17 @@ def _resolve_managed_model(client, model_slug: str | None, region: str | None) -
     ]
     return render.select_row("Select a managed model:", _PICKER_HEADINGS, _PICKER_COLORS, rows, options), True
 
-
 def _ask_create_settings(model: ManagedModel, name, min_workers, max_workers, idle_timeout, concurrent):
     """Ask for the deployment settings after a model is picked from the list."""
-    name = render.ask_value("name", "Deployment name:", name)
-    min_workers = render.ask_value("min_workers", "Min workers:", min_workers, low=0, high=100)
-    # At least one worker overall, and never fewer than the minimum.
-    max_workers = render.ask_value("max_workers", "Max workers:", max_workers, low=max(min_workers, 1), high=100)
+
+    name         = render.ask_value("name", "Deployment name:", name)
+    min_workers  = render.ask_value("min_workers", "Min workers:", min_workers, low=0, high=100)
+    max_workers  = render.ask_value("max_workers", "Max workers:", max_workers, low=max(min_workers, 1), high=100)
     idle_timeout = render.ask_value("idle_timeout", "Idle timeout (seconds):", idle_timeout, low=0, high=86400)
-    concurrent = render.ask_value(
-        "concurrent", "Concurrent requests per worker:", concurrent or model.concurrent_requests or 1, low=1, high=1000
-    )
+    concurrent   = render.ask_value(
+                        "concurrent", "Concurrent requests per worker:", concurrent or model.concurrent_requests or 1, low=1, high=1000
+                    )
+    
     return name, min_workers, max_workers, idle_timeout, concurrent
 
 

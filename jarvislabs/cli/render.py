@@ -921,12 +921,7 @@ def _table_choices(headings: tuple[str, ...], colors: tuple[str, ...], rows: lis
 
 
 def _highlight_current_row(question) -> None:
-    """Shade the picker row under the pointer while keeping each column's color.
-
-    questionary only highlights plain-text rows, so this finds its list control
-    (an internal object) and restyles the rows before every redraw. If a future
-    questionary version changes that control, the picker still works, unshaded.
-    """
+    """Shade the picker row under the pointer while keeping each column's color."""
     windows = question.application.layout.find_all_windows()
     control = next((window.content for window in windows if isinstance(window.content, InquirerControl)), None)
     if control is None:
