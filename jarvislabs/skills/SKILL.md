@@ -401,7 +401,7 @@ jl models chat --end <ID>                           # deletes the history when d
 - **Always pass the model ID and a prompt.** Without them, `get`/`chat` open an interactive picker or chat, which needs a terminal; in scripts or with `--json` they exit with an error.
 - `--thinking/--no-thinking` and `--effort <level>` work only on models that support them; check `thinking` in `jl models get <id> --json`.
 - `-c` continues the most recent session on the machine; it's for humans. Agents must pass `--session <ID>`, since `-c` mixes histories when several chats run at once.
-- Sessions are temporary: stored locally, deleted by `--end` or after 1 hour unused. Each turn resends the whole history, so long sessions cost more. `--system` is set only when the session starts.
+- Sessions are temporary: stored locally, deleted by `--end` or after 15 minutes unused. Each turn resends the whole history, so long sessions cost more. `--system` is set only when the session starts.
 - Other options: `--system "<prompt>"`, `--max-tokens N`. Every call costs money, so cap output with `--max-tokens`. An empty balance fails with an insufficient-balance error.
 - From code: base URL `https://models.jarvislabs.net/v1`, API key = the JarvisLabs API key, `model` = the model ID. `jl models get <id>` prints Python and curl snippets.
 

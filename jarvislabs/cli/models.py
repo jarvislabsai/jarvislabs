@@ -24,7 +24,7 @@ ModelIdArgument = Annotated[str | None, typer.Argument(help="Model ID. Omit it t
 
 # Chat sessions keep history across separate `jl models chat` calls (for agents) until ended or unused this long.
 CHAT_SESSIONS_DIR = Path(tempfile.gettempdir()) / "jl-chats"
-CHAT_SESSION_TTL_S = 3600
+CHAT_SESSION_TTL_S = 900
 
 models_app = typer.Typer(name="models", help="Pay-per-token model APIs: call a model directly, no deployment needed.")
 app.add_typer(models_app, rich_help_panel="Token Factory")
@@ -68,7 +68,7 @@ def models_chat(
         str | None,
         typer.Option(
             "--session",
-            help="Continue a session by its ID (every reply prints one). Deleted after 1 hour unused.",
+            help="Continue a session by its ID (every reply prints one). Deleted after 15 minutes unused.",
         ),
     ] = None,
     continue_session: Annotated[
@@ -123,8 +123,8 @@ def models_chat(
         render.die("Pass a prompt with --session or -c. See: jl models chat --help")
     session = session or (_latest_session() if continue_session else None)
     messages = _load_session(session) if session else []
-    session = session or uuid.uuid4().hex[:8]  # every one-shot reply starts a session, so it can be continued
-    if system and not messages:  # A session keeps the system prompt it started with.
+    session = session or uuid.uuid4().hex[:8]  
+    if system and not messages:  
         messages.append({"role": "system", "content": system})
 
     client = get_client()
