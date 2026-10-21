@@ -391,10 +391,17 @@ jl models get <id> --json                           # one model, plus base_url
 jl models chat <id> "prompt" --max-tokens 500       # streamed reply: answer on stdout, thinking + usage on stderr
 jl models chat <id> "prompt" --json                 # full OpenAI response, including usage
 cat file.txt | jl models chat <id> "Summarize this" # piped text is added to the prompt
+
+# Multi-turn chat: each call is one turn, history is kept between calls
+jl models chat <id> "first message"                 # every reply prints "Session <ID>" on stderr (--json: "session" field)
+jl models chat <id> "follow-up" --session <ID>      # sends the earlier turns too (always use the ID, not -c)
+jl models chat --end <ID>                           # deletes the history when done
 ```
 
 - **Always pass the model ID and a prompt.** Without them, `get`/`chat` open an interactive picker or chat, which needs a terminal; in scripts or with `--json` they exit with an error.
 - `--thinking/--no-thinking` and `--effort <level>` work only on models that support them; check `thinking` in `jl models get <id> --json`.
+- `-c` continues the most recent session on the machine; it's for humans. Agents must pass `--session <ID>`, since `-c` mixes histories when several chats run at once.
+- Sessions are temporary: stored locally, deleted by `--end` or after 1 hour unused. Each turn resends the whole history, so long sessions cost more. `--system` is set only when the session starts.
 - Other options: `--system "<prompt>"`, `--max-tokens N`. Every call costs money, so cap output with `--max-tokens`. An empty balance fails with an insufficient-balance error.
 - From code: base URL `https://models.jarvislabs.net/v1`, API key = the JarvisLabs API key, `model` = the model ID. `jl models get <id>` prints Python and curl snippets.
 

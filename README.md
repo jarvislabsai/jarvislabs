@@ -143,6 +143,12 @@ jl models get <model_id>
 # Ask once, or omit the prompt for an interactive chat
 jl models chat <model_id> "Explain KV cache in two lines"
 cat notes.txt | jl models chat <model_id> "Summarize this"
+
+# Multi-turn chat across separate calls (for agents and scripts)
+jl models chat <model_id> "My name is Jay"        # prints a session ID
+jl models chat <model_id> "What is my name?" --session <session_id>
+jl models chat <model_id> "And my age?" -c       # continue the most recent session
+jl models chat --end <session_id>
 ```
 
 From your own code, use any OpenAI client with base URL `https://models.jarvislabs.net/v1` and your JarvisLabs API key.

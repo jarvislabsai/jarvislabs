@@ -299,7 +299,7 @@ def test_select_row_columns_line_up_with_long_values(monkeypatch):
 
     def fake_select(message, choices, **kwargs):
         shown.extend(choices)
-        return SimpleNamespace(ask=lambda: choices[1].value)
+        return SimpleNamespace(ask=lambda: choices[1].value, application=SimpleNamespace())
 
     monkeypatch.setattr(render.questionary, "select", fake_select)
     rows = [("GLM-5.2", "glm-5.2", "IN2"), ("Nemotron 3.5 Lightning", "nemotron-3.5-lightning-30b-a3b-bf16", "IN1")]

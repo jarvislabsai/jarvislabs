@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import stat
 import sys
+import tempfile
+import time
+import uuid
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import typer
@@ -16,6 +21,10 @@ if TYPE_CHECKING:
     from jarvislabs.models import ModelInfo
 
 ModelIdArgument = Annotated[str | None, typer.Argument(help="Model ID. Omit it to pick from a list.")]
+
+# Chat sessions keep history across separate `jl models chat` calls (for agents) until ended or unused this long.
+CHAT_SESSIONS_DIR = Path(tempfile.gettempdir()) / "jl-chats"
+CHAT_SESSION_TTL_S = 3600
 
 models_app = typer.Typer(name="models", help="Pay-per-token model APIs: call a model directly, no deployment needed.")
 app.add_typer(models_app, rich_help_panel="Token Factory")
@@ -52,20 +61,75 @@ def models_chat(
     model_id: ModelIdArgument = None,
     prompt: Annotated[str | None, typer.Argument(help="Message to send. Omit it for an interactive chat.")] = None,
     system: Annotated[str | None, typer.Option("--system", help="System prompt.")] = None,
-    max_tokens: Annotated[int | None, typer.Option("--max-tokens", help="Maximum output tokens.", min=1)] = None,
+    max_tokens: Annotated[int, typer.Option("--max-tokens", help="Maximum output tokens.", min=1)] = 32768,
     thinking: Annotated[bool | None, typer.Option("--thinking/--no-thinking", help="Turn thinking on or off.")] = None,
     effort: Annotated[str | None, typer.Option("--effort", help="Thinking effort, e.g. low or high.")] = None,
+    session: Annotated[
+        str | None,
+        typer.Option(
+            "--session",
+            help="Continue a session by its ID (every reply prints one). Deleted after 1 hour unused.",
+        ),
+    ] = None,
+    continue_session: Annotated[
+        bool, typer.Option("--continue", "-c", help="Continue the most recent session (no ID needed).")
+    ] = False,
+    end: Annotated[str | None, typer.Option("--end", help="End a session and delete its history.")] = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Chat with a model: pass a prompt for one reply, or omit it for an interactive chat."""
+    """Chat with a model: pass a prompt for one reply, or omit it for an interactive chat.
+
+    The reply streams to stdout; thinking and token usage go to stderr.
+
+    [bold]Examples:[/bold]
+
+      [dim]# Interactive chat (pick a model from the list)[/dim]
+      [cyan]jl models chat[/cyan]
+
+      [dim]# One reply[/dim]
+      [cyan]jl models chat <model_id> "Explain KV cache in two lines"[/cyan]
+
+      [dim]# Add piped text to the prompt[/dim]
+      [cyan]cat notes.txt | jl models chat <model_id> "Summarize this"[/cyan]
+
+      [dim]# System prompt, output limit, thinking controls[/dim]
+      [cyan]jl models chat <model_id> "Hi" --system "Be brief." --max-tokens 500 --no-thinking[/cyan]
+      [cyan]jl models chat <model_id> "Prove it" --effort high[/cyan]
+
+      [dim]# Full OpenAI-style response as JSON[/dim]
+      [cyan]jl models chat <model_id> "Hi" --json[/cyan]
+
+      [dim]# Multi-turn chat across separate calls (for agents and scripts)[/dim]
+      [cyan]jl models chat <model_id> "My name is Jay"[/cyan]                     [dim]# prints a session ID[/dim]
+      [cyan]jl models chat <model_id> "What is my name?" --session <ID>[/cyan]
+      [cyan]jl models chat <model_id> "And my age?" -c[/cyan]                     [dim]# continues the most recent session[/dim]
+      [cyan]jl models chat --end <ID>[/cyan]                                     [dim]# deletes the history[/dim]
+
+    In interactive chat: Ctrl-C stops a reply · Ctrl-D or /exit quits.
+    See supported thinking options with: jl models get <model_id>
+    """
     cli_options.apply_command_options(json_output=json_output)
+    _prune_sessions()
+    if end:
+        _session_path(end).unlink(missing_ok=True)
+        if state.json_output:
+            render.print_json({"success": True, "session": end})
+            return
+        render.success(f"Session {end} ended.")
+        return
+
     text = "\n\n".join(part for part in (prompt, _read_stdin()) if part)
+    if (session or continue_session) and not text:
+        render.die("Pass a prompt with --session or -c. See: jl models chat --help")
+    session = session or (_latest_session() if continue_session else None)
+    messages = _load_session(session) if session else []
+    session = session or uuid.uuid4().hex[:8]  # every one-shot reply starts a session, so it can be continued
+    if system and not messages:  # A session keeps the system prompt it started with.
+        messages.append({"role": "system", "content": system})
+
     client = get_client()
     model = _resolve_model(client, model_id)
-    params = _thinking_params(model, thinking, effort)
-    if max_tokens:
-        params["max_tokens"] = max_tokens
-    messages = [{"role": "system", "content": system}] if system else []
+    params = {**_thinking_params(model, thinking, effort), "max_tokens": max_tokens}
 
     if not text:
         if state.json_output or not render.can_prompt():
@@ -75,9 +139,15 @@ def models_chat(
 
     messages.append({"role": "user", "content": text})
     if state.json_output:
-        render.print_json(client.models.chat(model.id, messages, **params))
+        response = client.models.chat(model.id, messages, **params)
+        reply = response["choices"][0]["message"].get("content") or ""
+        _save_session(session, [*messages, {"role": "assistant", "content": reply}])
+        render.print_json({**response, "session": session})
         return
-    _stream_reply(client, model, messages, params)
+    reply = _stream_reply(client, model, messages, params)
+    if reply is not None:
+        _save_session(session, [*messages, {"role": "assistant", "content": reply}])
+        render.info(f"Session {session} · end: jl models chat --end {session}")
 
 
 def _resolve_model(client, model_id: str | None) -> ModelInfo:
@@ -94,6 +164,39 @@ def _resolve_model(client, model_id: str | None) -> ModelInfo:
     return render.select_model(models)
 
 
+def _session_path(session_id: str) -> Path:
+    if not session_id.isalnum():
+        render.die(f"Invalid session ID: {session_id}")
+    return CHAT_SESSIONS_DIR / f"{session_id}.json"
+
+
+def _load_session(session_id: str) -> list[dict]:
+    path = _session_path(session_id)
+    if not path.exists():
+        render.die(f"Session {session_id} not found or expired. Send a prompt without --session to start a new one.")
+    return json.loads(path.read_text())["messages"]
+
+
+def _latest_session() -> str:
+    paths = sorted(CHAT_SESSIONS_DIR.glob("*.json"), key=lambda path: path.stat().st_mtime)
+    if not paths:
+        render.die("No session to continue. Send a prompt without -c to start one.")
+    return paths[-1].stem
+
+
+def _save_session(session_id: str, messages: list[dict]) -> None:
+    CHAT_SESSIONS_DIR.mkdir(mode=0o700, exist_ok=True)
+    _session_path(session_id).write_text(json.dumps({"messages": messages}))
+
+
+def _prune_sessions() -> None:
+    """Delete sessions unused for CHAT_SESSION_TTL_S, so forgotten ones don't pile up."""
+    cutoff = time.time() - CHAT_SESSION_TTL_S
+    for path in CHAT_SESSIONS_DIR.glob("*.json"):
+        if path.stat().st_mtime < cutoff:
+            path.unlink(missing_ok=True)
+
+
 def _read_stdin() -> str:
     # Only pipes and files: other non-terminal stdins (e.g. agents) may never close, so reading would hang.
     mode = os.fstat(sys.stdin.fileno()).st_mode
@@ -101,8 +204,8 @@ def _read_stdin() -> str:
 
 
 def _thinking_params(model: ModelInfo, thinking: bool | None, effort: str | None) -> dict:
-    support = model.thinking or {}
-    keys = support.get("template_parameters", {})
+    support = model.thinking
+    keys = support.template_parameters
     kwargs = {}
     if thinking is not None:
         if "toggle" not in keys:
@@ -111,8 +214,8 @@ def _thinking_params(model: ModelInfo, thinking: bool | None, effort: str | None
     if effort:
         if "effort" not in keys:
             render.die(f"{model.id} doesn't support --effort.")
-        if effort not in support["supported_efforts"]:
-            render.die(f"--effort must be one of: {', '.join(support['supported_efforts'])}")
+        if effort not in support.supported_efforts:
+            render.die(f"--effort must be one of: {', '.join(support.supported_efforts)}")
         kwargs[keys["effort"]] = effort
     return {"chat_template_kwargs": kwargs} if kwargs else {}
 

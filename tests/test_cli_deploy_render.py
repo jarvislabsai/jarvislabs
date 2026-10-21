@@ -292,6 +292,8 @@ def test_managed_models_table_renders_rows(capture):
     assert "IN2" in out
     assert "8x H100" in out
     assert "131K" in out
+    assert "Concurrent" not in out
+    assert out.index("131K") < out.index("IN2")  # region is the last column
 
 
 def test_managed_models_table_warns_on_region_errors(capture, monkeypatch):
@@ -319,3 +321,12 @@ def test_table_long_name_wraps_instead_of_hiding_columns(monkeypatch):
     out = buf.getvalue()
     assert "running" in out  # Status stays readable
     assert long_name not in out  # the name is folded across lines instead
+
+
+def test_deployments_table_shows_type(capture):
+    managed = _summary(deployment_id="dep-managed", managed_model=ManagedModel(model_slug="glm-5.2"))
+    render.deployments_table(DeploymentListResult(deployments=[_summary(), managed]))
+    out = capture.getvalue()
+    assert "Type" in out
+    assert "custom" in out
+    assert "managed" in out

@@ -18,11 +18,6 @@ from jarvislabs.regions import normalize_serverless_region
 if TYPE_CHECKING:
     from jarvislabs.models import ManagedModel
 
-BETA_NOTICE_TEXT = (
-    "Serverless is in beta. Limits and behavior may change. "
-    "If you hit issues or have feedback, email support@jarvislabs.ai."
-)
-BETA_NOTICE = f"[bold bright_yellow]{BETA_NOTICE_TEXT}[/bold bright_yellow]"
 BETA_HELP_NOTICE = (
     "[bold bright_yellow]Serverless is in beta. We're actively improving it and would love early feedback. "
     "Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]"
@@ -75,8 +70,9 @@ def _finish_create(client, deployment_id: str, region: str, *, detach: bool) -> 
         render.info(f"Detached. {followup}")
         return
 
+    render.info(f"Deployment in progress. Logs: jl deploy logs {deployment_id}", style="yellow")
     try:
-        with render.spinner("Deploying..."):
+        with render.spinner("Deployment in progress..."):
             deployment = client.deployments.wait_until_running(deployment_id, region=region)
     except KeyboardInterrupt:
         # The deployment keeps building — hand back the id in both modes so it's never lost.
@@ -153,7 +149,6 @@ def deploy_create(
         f"name={name!r}, region={render.region_input_label(region)}, framework={framework}, "
         f"gpu={gpus_per_worker}x {gpu}, workers={min_workers}-{max_workers}, storage={storage}GB"
     )
-    render.warning(BETA_NOTICE)
     if not render.confirm(f"Create deployment ({details})?", skip=state.yes):
         raise typer.Exit()
 
@@ -402,7 +397,6 @@ def managed_models_create(
         f"region={render.region_label(model.region)}, workers={min_workers}-{max_workers}, "
         f"idle_timeout={idle_timeout}s, concurrent={concurrent or model.concurrent_requests}"
     )
-    render.warning(BETA_NOTICE)
     if not render.confirm(f"Create deployment ({details})?", skip=state.yes):
         raise typer.Exit()
 

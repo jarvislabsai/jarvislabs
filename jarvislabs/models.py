@@ -20,6 +20,7 @@ from jarvislabs.regions import region_code
 # field's required/optional contract.
 RegionCode = Annotated[str, PlainSerializer(region_code)]
 OptionalRegionCode = Annotated[str | None, PlainSerializer(region_code)]
+Price = Annotated[float, PlainSerializer(lambda value: round(value, 2))]
 
 # ── Account ──────────────────────────────────────────────────────────────────
 
@@ -378,9 +379,17 @@ class ManagedModelListResult(BaseModel):
 
 class ModelPricing(BaseModel):
     currency: str
-    input_per_million_tokens: float
-    cached_input_per_million_tokens: float
-    output_per_million_tokens: float
+    input_per_million_tokens: Price
+    cached_input_per_million_tokens: Price
+    output_per_million_tokens: Price
+
+
+class ModelThinking(BaseModel):
+    supported: bool = False
+    supports_toggle: bool = False
+    supported_efforts: list[str] = Field(default_factory=list)
+    # Keys to set in chat_template_kwargs: "toggle" and/or "effort" -> the model's parameter name.
+    template_parameters: dict[str, str] = Field(default_factory=dict)
 
 
 class ModelInfo(BaseModel):
@@ -389,5 +398,7 @@ class ModelInfo(BaseModel):
     description: str | None = None
     context_length: int | None = None
     model_card_url: str | None = None
-    thinking: dict | None = None
+    input_modalities: list[str] = Field(default_factory=list)
+    output_modalities: list[str] = Field(default_factory=list)
+    thinking: ModelThinking = Field(default_factory=ModelThinking)
     pricing: ModelPricing

@@ -11,7 +11,7 @@ from rich.console import Console
 from jarvislabs.cli import models as models_cli, render, state
 from jarvislabs.constants import MODELS_API_URL
 from jarvislabs.exceptions import InsufficientBalanceError, JarvislabsError, NotFoundError, error_from_response
-from jarvislabs.models import ModelInfo
+from jarvislabs.models import ModelInfo, ModelThinking
 from jarvislabs.token_factory import Models
 
 READ_STDIN = models_cli._read_stdin  # The real one; tests stub it out by default.
@@ -40,8 +40,9 @@ HELLO = [{"role": "user", "content": "Hello"}]
 
 
 @pytest.fixture(autouse=True)
-def _setup(monkeypatch):
+def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(render, "spinner", lambda *a, **k: nullcontext())
+    monkeypatch.setattr(models_cli, "CHAT_SESSIONS_DIR", tmp_path)
     monkeypatch.setattr(models_cli, "_read_stdin", lambda: "")
     state.json_output = False
     yield
@@ -147,7 +148,7 @@ def test_get_detail_and_snippets(monkeypatch):
 
 
 def test_thinking_not_supported():
-    assert render._thinking_lines(None) == "[dim]Not supported[/dim]"
+    assert render._thinking_lines(ModelThinking()) == "[dim]Not supported[/dim]"
 
 
 def test_get_json(monkeypatch):
@@ -228,7 +229,8 @@ def test_chat_streams_reply_and_usage(monkeypatch):
     monkeypatch.setattr(render, "info", notes.append)
     assert _capture(models_cli.models_chat, "deepseek", "Hello") == "Hi there\n"
     assert thinking == ["Hmm.", "\n\n"]
-    assert notes == ["\n1,000,000 in · 1,000,000 out · $1.000000"]
+    assert notes[0] == "\n1,000,000 in · 1,000,000 out · $1.000000"
+    assert notes[1].startswith("Session ")
 
 
 def test_chat_piped_input_and_options(monkeypatch):
@@ -245,11 +247,13 @@ def test_chat_piped_input_and_options(monkeypatch):
 
 
 def test_chat_json(monkeypatch):
-    _chat_client(monkeypatch, reply={"id": "r1"})
+    reply = {"id": "r1", "choices": [{"message": {"role": "assistant", "content": "Hi"}}]}
+    _chat_client(monkeypatch, reply=reply)
     printed = []
     monkeypatch.setattr(render, "print_json", printed.append)
     models_cli.models_chat("deepseek", "Hello", json_output=True)
-    assert printed == [{"id": "r1"}]
+    assert printed[0]["id"] == "r1"
+    assert printed[0]["session"]
 
 
 @pytest.mark.parametrize(
@@ -280,3 +284,135 @@ def test_read_stdin_reads_pipes_only(monkeypatch):
     with open(os.devnull) as devnull:
         monkeypatch.setattr(models_cli.sys, "stdin", devnull)
         assert READ_STDIN() == ""
+
+
+def test_model_info_drops_thinking_defaults_and_rounds_prices():
+    model = ModelInfo(
+        **{
+            **DEEPSEEK,
+            "thinking": {**DEEPSEEK["thinking"], "default_enabled": True, "default_effort": "high"},
+            "pricing": {**QWEN["pricing"], "input_per_million_tokens": 12.3201},
+        }
+    )
+    dumped = model.model_dump()
+    assert "default_enabled" not in dumped["thinking"]
+    assert "default_effort" not in dumped["thinking"]
+    assert dumped["pricing"]["input_per_million_tokens"] == 12.32
+    assert model.pricing.input_per_million_tokens == 12.3201
+
+
+def test_get_detail_shows_modalities(monkeypatch):
+    model = ModelInfo(**{**QWEN, "input_modalities": ["text", "image"], "output_modalities": ["text"]})
+    _client(monkeypatch, get=lambda model_id: model)
+    out = _capture(models_cli.models_get, "qwen")
+    assert "Input    text, image" in out
+    assert "Output   text" in out
+
+
+# ── chat sessions ───────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def sessions_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(models_cli.uuid, "uuid4", lambda: SimpleNamespace(hex="abc12345ffff"))
+    monkeypatch.setattr(render, "chat_usage", lambda *a: None)
+    return tmp_path
+
+
+def test_session_keeps_history_across_calls(monkeypatch, sessions_dir):
+    calls = _chat_client(monkeypatch, [{"choices": [{"delta": {"content": "Hi Jay"}}]}])
+    notes = []
+    monkeypatch.setattr(render, "info", notes.append)
+    _capture(models_cli.models_chat, "deepseek", "I am Jay", system="Be brief.")
+    assert notes[-1].startswith("Session abc12345 ")
+
+    _capture(models_cli.models_chat, "deepseek", "Who am I?", session="abc12345")
+    assert calls[1][0] == [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": "I am Jay"},
+        {"role": "assistant", "content": "Hi Jay"},
+        {"role": "user", "content": "Who am I?"},
+    ]
+
+
+def test_session_json_saves_reply_and_returns_id(monkeypatch, sessions_dir):
+    reply = {"choices": [{"message": {"role": "assistant", "content": "Hi", "reasoning_content": "Hmm"}}]}
+    _chat_client(monkeypatch, reply=reply)
+    printed = []
+    monkeypatch.setattr(render, "print_json", printed.append)
+    models_cli.models_chat("deepseek", "Hello", json_output=True)
+    assert printed[0]["session"] == "abc12345"
+    saved = models_cli._load_session("abc12345")
+    assert saved[-1] == {"role": "assistant", "content": "Hi"}
+
+
+def test_session_not_saved_when_reply_stopped(monkeypatch, sessions_dir):
+    def chat_stream(model_id, messages, **params):
+        raise KeyboardInterrupt
+        yield
+
+    _client(monkeypatch, get=lambda model_id: ModelInfo(**DEEPSEEK), chat_stream=chat_stream)
+    monkeypatch.setattr(render, "info", lambda m: None)
+    _capture(models_cli.models_chat, "deepseek", "Hello")
+    assert not list(sessions_dir.glob("*.json"))
+
+
+def test_end_deletes_session(monkeypatch, sessions_dir):
+    models_cli._save_session("abc123", [{"role": "user", "content": "Hi"}])
+    monkeypatch.setattr(render, "success", lambda m: None)
+    models_cli.models_chat(end="abc123")
+    assert not (sessions_dir / "abc123.json").exists()
+
+
+def test_unused_sessions_expire(sessions_dir):
+    models_cli._save_session("old", [])
+    models_cli._save_session("fresh", [])
+    stale = models_cli.time.time() - models_cli.CHAT_SESSION_TTL_S - 1
+    os.utime(sessions_dir / "old.json", (stale, stale))
+    models_cli._prune_sessions()
+    assert [p.name for p in sessions_dir.glob("*.json")] == ["fresh.json"]
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        (
+            {"session": "missing"},
+            "Session missing not found or expired. Send a prompt without --session to start a new one.",
+        ),
+        ({"session": "../etc"}, "Invalid session ID: ../etc"),
+    ],
+)
+def test_session_errors(monkeypatch, sessions_dir, options, message):
+    _chat_client(monkeypatch)
+    errors = _errors(monkeypatch)
+    with pytest.raises(SystemExit):
+        models_cli.models_chat("deepseek", "Hi", **options)
+    assert errors == [message]
+
+
+def test_session_needs_a_prompt(monkeypatch, sessions_dir):
+    _chat_client(monkeypatch)
+    errors = _errors(monkeypatch)
+    with pytest.raises(SystemExit):
+        models_cli.models_chat("deepseek", session="abc123")
+    assert errors == ["Pass a prompt with --session or -c. See: jl models chat --help"]
+
+
+def test_continue_uses_most_recent_session(monkeypatch, sessions_dir):
+    models_cli._save_session("older", [{"role": "user", "content": "old"}])
+    models_cli._save_session("newer", [{"role": "user", "content": "new"}])
+    stale = models_cli.time.time() - 60
+    os.utime(sessions_dir / "older.json", (stale, stale))
+    calls = _chat_client(monkeypatch)
+    monkeypatch.setattr(render, "info", lambda m: None)
+    _capture(models_cli.models_chat, "deepseek", "Next", continue_session=True)
+    assert calls[0][0][0] == {"role": "user", "content": "new"}
+
+
+def test_continue_without_sessions(monkeypatch, sessions_dir):
+    _chat_client(monkeypatch)
+    errors = _errors(monkeypatch)
+    with pytest.raises(SystemExit):
+        models_cli.models_chat("deepseek", "Hi", continue_session=True)
+    assert errors == ["No session to continue. Send a prompt without -c to start one."]

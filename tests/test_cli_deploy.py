@@ -100,7 +100,7 @@ def test_create_prints_id_then_handoff(monkeypatch):
 
     info_calls: list[str] = []
     handoffs: list[tuple] = []
-    monkeypatch.setattr(deploy.render, "info", lambda m: info_calls.append(m))
+    monkeypatch.setattr(deploy.render, "info", lambda m, **k: info_calls.append(m))
     monkeypatch.setattr(deploy.render, "deployment_running_handoff", lambda url, model: handoffs.append((url, model)))
 
     _create_call(None, arg=["max-model-len=8192"], env=["HF_TOKEN=hf_x"])
@@ -113,24 +113,6 @@ def test_create_prints_id_then_handoff(monkeypatch):
     assert handoffs == [("https://serverlessn.jarvislabs.net/openai/dep1/v1", "Qwen/Qwen3-0.6B")]
 
 
-def test_create_warns_that_serverless_is_beta(monkeypatch):
-    deployments = SimpleNamespace(
-        create=lambda **kw: "dep1",
-        wait_until_running=lambda dep_id, region=None: _deployment(),
-        openai_base_url=lambda dep_id, region=None: "https://serverlessn.jarvislabs.net/openai/dep1/v1",
-    )
-    _install_client(monkeypatch, deployments)
-
-    warnings: list[str] = []
-    monkeypatch.setattr(deploy.render, "warning", lambda m: warnings.append(m))
-    monkeypatch.setattr(deploy.render, "info", lambda m: None)
-    monkeypatch.setattr(deploy.render, "deployment_running_handoff", lambda *a: None)
-
-    _create_call(None)
-
-    assert warnings == [deploy.BETA_NOTICE]
-
-
 def test_create_detach_does_not_poll(monkeypatch):
     polled = []
     deployments = SimpleNamespace(
@@ -139,7 +121,7 @@ def test_create_detach_does_not_poll(monkeypatch):
         openai_base_url=lambda *a, **k: "x",
     )
     _install_client(monkeypatch, deployments)
-    monkeypatch.setattr(deploy.render, "info", lambda m: None)
+    monkeypatch.setattr(deploy.render, "info", lambda m, **k: None)
     _create_call(None, detach=True)
     assert polled == []
 
@@ -154,7 +136,7 @@ def test_create_json_suppresses_early_id_and_snippet(monkeypatch):
     _install_client(monkeypatch, deployments)
     info_calls: list[str] = []
     handoffs: list = []
-    monkeypatch.setattr(deploy.render, "info", lambda m: info_calls.append(m))
+    monkeypatch.setattr(deploy.render, "info", lambda m, **k: info_calls.append(m))
     monkeypatch.setattr(deploy.render, "deployment_running_handoff", lambda *a: handoffs.append(a))
     monkeypatch.setattr(deploy.render, "print_json", lambda data: printed.update(data))
 
@@ -186,7 +168,7 @@ def test_create_ctrl_c_clean_detach(monkeypatch):
     )
     _install_client(monkeypatch, deployments)
     info_calls: list[str] = []
-    monkeypatch.setattr(deploy.render, "info", lambda m: info_calls.append(m))
+    monkeypatch.setattr(deploy.render, "info", lambda m, **k: info_calls.append(m))
 
     with pytest.raises(typer.Exit) as exc:
         _create_call(None)
@@ -234,7 +216,7 @@ def test_create_arg_split_on_first_equals(monkeypatch):
         openai_base_url=lambda *a, **k: "x",
     )
     _install_client(monkeypatch, deployments)
-    monkeypatch.setattr(deploy.render, "info", lambda m: None)
+    monkeypatch.setattr(deploy.render, "info", lambda m, **k: None)
     monkeypatch.setattr(deploy.render, "deployment_running_handoff", lambda *a: None)
     _create_call(None, arg=["key=a=b", "key=c"])  # last wins
     assert captured["args"]["key"] == "c"
@@ -251,7 +233,7 @@ def test_create_handoff_uses_served_model_name_override(monkeypatch):
         openai_base_url=lambda *a, **k: "https://serverlessn.jarvislabs.net/openai/dep1/v1",
     )
     _install_client(monkeypatch, deployments)
-    monkeypatch.setattr(deploy.render, "info", lambda m: None)
+    monkeypatch.setattr(deploy.render, "info", lambda m, **k: None)
     monkeypatch.setattr(deploy.render, "deployment_running_handoff", lambda url, model: handoffs.append((url, model)))
 
     _create_call(None, arg=["served-model-name=custom"])
@@ -403,7 +385,7 @@ def _install_logs(monkeypatch, events, captured=None, record=None):
 
 def test_logs_lines_to_stdout_notices_to_info(monkeypatch, capsys):
     infos: list[str] = []
-    monkeypatch.setattr(deploy.render, "info", lambda m: infos.append(m))
+    monkeypatch.setattr(deploy.render, "info", lambda m, **k: infos.append(m))
     _install_logs(
         monkeypatch,
         [
@@ -461,7 +443,7 @@ def test_logs_ctrl_c_exits_cleanly(monkeypatch):
 
 def test_logs_no_workers_failed_points_to_get(monkeypatch):
     infos: list[str] = []
-    monkeypatch.setattr(deploy.render, "info", lambda m: infos.append(m))
+    monkeypatch.setattr(deploy.render, "info", lambda m, **k: infos.append(m))
     _install_logs(monkeypatch, [("notice", "no active workers")], record=_deployment(status="failed"))
     deploy.deploy_logs("dep1", region="IN2")
     assert any("jl deploy get dep1" in m for m in infos)
@@ -469,7 +451,7 @@ def test_logs_no_workers_failed_points_to_get(monkeypatch):
 
 def test_logs_no_workers_while_starting_says_retry(monkeypatch):
     infos: list[str] = []
-    monkeypatch.setattr(deploy.render, "info", lambda m: infos.append(m))
+    monkeypatch.setattr(deploy.render, "info", lambda m, **k: infos.append(m))
     _install_logs(monkeypatch, [("notice", "no active workers")], record=_deployment(status="starting"))
     deploy.deploy_logs("dep1", region="IN2")
     assert any("once a worker is running" in m for m in infos)
@@ -604,7 +586,7 @@ def _install_managed_client(monkeypatch, catalog, **extra):
         **extra,
     )
     _install_client(monkeypatch, deployments)
-    monkeypatch.setattr(deploy.render, "info", lambda m: None)
+    monkeypatch.setattr(deploy.render, "info", lambda m, **k: None)
     return created
 
 
@@ -655,14 +637,6 @@ def test_managed_create_passes_settings_and_hands_off_api_model(monkeypatch):
     }
     # The snippet uses the managed model's API name, not a (missing) model arg.
     assert handoffs == [("https://serverlessn.jarvislabs.net/openai/dep1/v1", "zai-org/GLM-5.2")]
-
-
-def test_managed_create_warns_that_serverless_is_beta(monkeypatch):
-    _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
-    warnings: list[str] = []
-    monkeypatch.setattr(deploy.render, "warning", lambda m: warnings.append(m))
-    _managed_create_call(detach=True)
-    assert warnings == [deploy.BETA_NOTICE]
 
 
 def test_managed_create_confirm_shows_gpu_and_declined_creates_nothing(monkeypatch):
@@ -730,7 +704,7 @@ def _stub_select(monkeypatch, pick):
         assert isinstance(choices[0], deploy.render.questionary.Separator)
         models = choices[1:]
         shown.append([c.value for c in models])
-        return SimpleNamespace(ask=lambda: pick(models))
+        return SimpleNamespace(ask=lambda: pick(models), application=SimpleNamespace())
 
     monkeypatch.setattr(deploy.render, "can_prompt", lambda: True)
     monkeypatch.setattr(deploy.render.questionary, "select", fake_select)

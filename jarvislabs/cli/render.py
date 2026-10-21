@@ -109,9 +109,12 @@ def _table(title: str | None = None, **kwargs) -> Table:
     )
 
 
-def _print_detail_table(rows: list[tuple[str, str]]) -> None:
-    """Print a borderless field/value detail view (shared by instance and deployment detail)."""
-    table = Table(show_header=False, box=None, padding=(0, 2), border_style=BORDER_STYLE)
+def _print_detail_table(rows: list[tuple[str, str]], *, spaced: bool = False) -> None:
+    """Print a borderless field/value detail view (shared by instance and deployment detail).
+
+    ``spaced`` adds a blank line after each row, for views with multi-line values.
+    """
+    table = Table(show_header=False, box=None, padding=(0, 2, int(spaced), 2), border_style=BORDER_STYLE)
     table.add_column("Field", style="dim")
     # Avoid cutting off long values like notebook URLs with auth tokens.
     table.add_column("Value", overflow="fold")
@@ -421,7 +424,7 @@ def deployments_table(result, *, wide: bool = False) -> None:
     table = _table("Deployments", show_lines=True)
     table.add_column("ID", no_wrap=True)  # full id stays intact so it's copy-pasteable
     table.add_column("Name", overflow="fold")  # the one column that wraps, so the others stay readable
-    table.add_column("Region", no_wrap=True)
+    table.add_column("Type", no_wrap=True)
     table.add_column("Status", no_wrap=True)
     if wide:
         table.add_column("Framework", no_wrap=True)
@@ -431,13 +434,14 @@ def deployments_table(result, *, wide: bool = False) -> None:
         table.add_column("Concurrent", justify="right")
     table.add_column("Started", no_wrap=True)
     table.add_column("Cost", justify="right", no_wrap=True)
+    table.add_column("Region", style="dim", no_wrap=True)
 
     for dep in result.deployments:
         style = _deployment_status_style(dep.status)
         row = [
             escape(dep.deployment_id),
             escape(dep.name or "—"),
-            region_label(dep.region),
+            "managed" if dep.managed_model else "custom",
             f"[{style}]{escape(dep.status)}[/{style}]",
         ]
         if wide:
@@ -448,6 +452,7 @@ def deployments_table(result, *, wide: bool = False) -> None:
             row.append(str(dep.concurrent_requests) if dep.concurrent_requests is not None else "—")
         row.append(_started_label(dep.start_time))
         row.append(_deployment_cost_cell(dep))
+        row.append(region_label(dep.region))
         table.add_row(*row)
 
     stdout_console.print(table)
@@ -584,20 +589,24 @@ def select_model(models: list):
     return select_row("Select a model:", headings, colors, rows, models)
 
 
-def _thinking_lines(thinking: dict | None) -> str:
-    if not thinking or not thinking.get("supported"):
+def _thinking_lines(thinking) -> str:
+    if not thinking.supported:
         return "[dim]Not supported[/dim]"
-    keys = thinking.get("template_parameters", {})
+    keys = thinking.template_parameters
     options = []
     if "toggle" in keys:
         options.append((keys["toggle"], "true | false"))
     if "effort" in keys:
-        options.append((keys["effort"], " | ".join(thinking["supported_efforts"])))
+        options.append((keys["effort"], " | ".join(thinking.supported_efforts)))
     if not options:
         return "[green]Supported[/green]"
     width = max(len(key) for key, _ in options)
     lines = [f"[yellow]{key:<{width}}[/yellow]   {values}" for key, values in options]
     return "\n".join(["[green]Supported[/green]   [dim]set in chat_template_kwargs[/dim]", *lines])
+
+
+def _modalities_lines(model) -> str:
+    return f"Input    {', '.join(model.input_modalities) or '—'}\nOutput   {', '.join(model.output_modalities) or '—'}"
 
 
 def model_detail(model, base_url: str) -> None:
@@ -613,11 +622,13 @@ def model_detail(model, base_url: str) -> None:
     _print_detail_table(
         [
             ("Context", f"{model.context_length:,} tokens" if model.context_length else "—"),
+            ("Modalities", _modalities_lines(model)),
             ("Price per 1M", pricing),
             ("Thinking", _thinking_lines(model.thinking)),
             ("Model card", _link_value(model.model_card_url)),
             ("Base URL", _link_value(base_url)),
-        ]
+        ],
+        spaced=True,
     )
 
 
@@ -863,10 +874,10 @@ def error(msg: str) -> None:
     console.print(f"[red]✗[/red] {msg}", style="red")
 
 
-def info(msg: str) -> None:
+def info(msg: str, style: str = "dim") -> None:
     if state.json_output:
         return
-    console.print(f"[dim]{msg}[/dim]")
+    console.print(f"[{style}]{msg}[/{style}]")
 
 
 def warning(msg: str) -> None:
@@ -962,17 +973,15 @@ def managed_models_table(result) -> None:
     warn_region_errors(result.region_errors)
     table = _table("Managed Models · GPUs per worker")
     table.add_column("Slug", style="cyan", no_wrap=True)
-    table.add_column("Region", no_wrap=True)
     table.add_column("GPU", no_wrap=True)
     table.add_column("Context", justify="right")
-    table.add_column("Concurrent", justify="right")
+    table.add_column("Region", style="dim", no_wrap=True)
     for model in result.models:
         table.add_row(
             escape(model.model_slug),
-            region_label(model.region),
             _managed_gpu_label(model),
             _context_label(model.context_length),
-            str(model.concurrent_requests or "—"),
+            region_label(model.region),
         )
     stdout_console.print(table)
     info("Deploy one: jl deploy managed-models create <SLUG>, or leave out <SLUG> to pick from a list")
@@ -983,14 +992,14 @@ def select_managed_model(models: list):
         (
             model.display_name or model.model_slug,
             model.model_slug,
-            region_label(model.region),
             _managed_gpu_label(model),
             _context_label(model.context_length),
+            region_label(model.region),
         )
         for model in models
     ]
-    headings = ("MODEL", "SLUG", "REGION", "GPU", "CONTEXT")
-    colors = ("bold", "fg:ansicyan", "fg:ansiyellow", "fg:ansigreen", "fg:ansibrightblack")
+    headings = ("MODEL", "SLUG", "GPU", "CONTEXT", "REGION")
+    colors = ("bold", "fg:ansicyan", "fg:ansigreen", "fg:ansibrightblack", "fg:ansibrightblack")
     return select_row("Select a managed model:", headings, colors, rows, models)
 
 
@@ -1033,9 +1042,15 @@ def select_row(message: str, headings: tuple[str, ...], colors: tuple[str, ...],
         questionary.Choice(title=list(zip(colors, pad(row), strict=True)), value=value)
         for row, value in zip(rows, values, strict=True)
     ]
-    choice = questionary.select(message, choices=choices, style=PROMPT_STYLE).ask()
+    question = questionary.select(message, choices=choices, style=PROMPT_STYLE)
+    question.application.erase_when_done = True  # replaced below by the chosen row, one field per line
+    choice = question.ask()
     if choice is None:
         raise typer.Exit()
+    label_width = max(len(heading) for heading in headings)
+    console.print(f"[bold]?[/bold] {message}")
+    for heading, cell in zip(headings, rows[values.index(choice)], strict=True):
+        console.print(f"  [dim]{heading:<{label_width}}[/dim]   {escape(cell)}")
     return choice
 
 
