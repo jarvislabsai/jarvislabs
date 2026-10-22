@@ -971,40 +971,61 @@ def die(msg: str, code: int = 1) -> NoReturn:
 
 def managed_models_table(result) -> None:
     warn_region_errors(result.region_errors)
-    table = _table("Managed Models · GPUs per worker")
+    table = _table("Managed Models · GPUs and price per worker")
     table.add_column("Slug", style="cyan", no_wrap=True)
     table.add_column("GPU", no_wrap=True)
     table.add_column("Context", justify="right")
+    table.add_column("Price/hr", justify="right", style="green", no_wrap=True)
     table.add_column("Region", style="dim", no_wrap=True)
     for model in result.models:
         table.add_row(
             escape(model.model_slug),
             _managed_gpu_label(model),
             _context_label(model.context_length),
+            _managed_price_label(model, result.currency),
             region_label(model.region),
         )
     stdout_console.print(table)
+    info("Price is per running worker; at 0 workers a deployment costs nothing.")
     info("Deploy one: jl deploy managed-models create <SLUG>, or leave out <SLUG> to pick from a list")
 
 
-def select_managed_model(models: list):
+def select_managed_model(models: list, currency: str | None):
     rows = [
         (
             model.display_name or model.model_slug,
             model.model_slug,
             _managed_gpu_label(model),
             _context_label(model.context_length),
+            _managed_price_label(model, currency),
             region_label(model.region),
         )
         for model in models
     ]
-    headings = ("MODEL", "SLUG", "GPU", "CONTEXT", "REGION")
-    colors = ("bold", "fg:ansicyan", "fg:ansigreen", "fg:ansibrightblack", "fg:ansibrightblack")
+    headings = ("MODEL", "SLUG", "GPU", "CONTEXT", "PRICE/HR", "REGION")
+    colors = ("bold", "fg:ansicyan", "fg:ansigreen", "fg:ansibrightblack", "fg:ansigreen", "fg:ansibrightblack")
     return select_row("Select a managed model:", headings, colors, rows, models)
 
 
 def _managed_gpu_label(model) -> str:
     return f"{model.gpus_per_worker or '—'}x {model.gpu_type or '—'}"
+
+
+def _managed_price_label(model, currency: str | None) -> str:
+    if model.price_per_hour is None:
+        return "—"
+    return f"{currency_symbol(currency or 'USD')}{model.price_per_hour:.2f}"
+
+
+def managed_cost_label(model, currency: str | None, max_workers: int) -> str:
+    """Hourly cost for the create confirmation: per running worker, and the most at max workers."""
+    if model.price_per_hour is None:
+        return "unknown"
+    per_worker = _managed_price_label(model, currency)
+    if max_workers <= 1:
+        return f"{per_worker}/hr per running worker"
+    at_max = f"{currency_symbol(currency or 'USD')}{model.price_per_hour * max_workers:.2f}"
+    return f"{per_worker}/hr per running worker, up to {at_max}/hr at {max_workers} workers"
 
 
 def _model_label(dep) -> str:

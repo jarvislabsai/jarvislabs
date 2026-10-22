@@ -16,7 +16,7 @@ from jarvislabs.cli.app import app, get_client
 from jarvislabs.regions import normalize_serverless_region
 
 if TYPE_CHECKING:
-    from jarvislabs.models import ManagedModel
+    from jarvislabs.models import ManagedModel, ManagedModelListResult
 
 BETA_HELP_NOTICE = (
     "[bold bright_yellow]Serverless is in beta. We're actively improving it and would love early feedback. "
@@ -89,9 +89,25 @@ def _finish_create(client, deployment_id: str, region: str, *, detach: bool) -> 
     render.deployment_running_handoff(base_url, deployment.served_model)
 
 
-def _resolve_managed_model(client, model_slug: str | None, region: str | None) -> ManagedModel:
+def _fetch_managed_models(client) -> ManagedModelListResult:
+    """The managed-model catalog with each model's hourly price per running worker.
+
+    The catalog has no prices, so they come from the GPU on-demand price (as in `jl gpus`).
+    """
     with render.spinner("Fetching managed models..."):
         result = client.deployments.list_managed_models()
+        gpu_prices = {(gpu.gpu_type, gpu.region): gpu.price_per_hour for gpu in client.account.gpu_availability()}
+        result.currency = client.account.currency()
+    for model in result.models:
+        price = gpu_prices.get((model.gpu_type, model.region))
+        if price is not None and model.gpus_per_worker:
+            model.price_per_hour = price * model.gpus_per_worker
+    return result
+
+
+def _resolve_managed_model(client, model_slug: str | None, region: str | None) -> tuple[ManagedModel, str | None]:
+    """The model to deploy and the account currency."""
+    result = _fetch_managed_models(client)
     render.warn_region_errors(result.region_errors)
 
     region = region and normalize_serverless_region(region)
@@ -99,13 +115,13 @@ def _resolve_managed_model(client, model_slug: str | None, region: str | None) -
     if not options:
         render.die("No matching managed model. See: jl deploy managed-models list")
     if model_slug and len(options) == 1:
-        return options[0]
+        return options[0], result.currency
     if state.json_output or not render.can_prompt():
         if model_slug:
             regions = ", ".join(render.region_label(m.region) for m in options)
             render.die(f"{model_slug} is available in {regions}. Pass --region.")
         render.die("Pass a model slug. See: jl deploy managed-models list")
-    return render.select_managed_model(options)
+    return render.select_managed_model(options, result.currency), result.currency
 
 
 @deploy_app.command("create")
@@ -122,7 +138,7 @@ def deploy_create(
     storage: Annotated[int, typer.Option("--storage", help="Deployment filesystem size in GB (min 50).")],
     model: Annotated[str, typer.Option("--model", help="Model id (e.g. a Hugging Face repo id).")],
     concurrent: Annotated[
-        int | None, typer.Option("--concurrent", help="Concurrent requests per worker (default 1).")
+        int | None, typer.Option("--concurrent", help="Concurrent requests per worker (default 1).", min=1)
     ] = None,
     arg: Annotated[
         list[str] | None,
@@ -339,8 +355,7 @@ def deploy_delete(
 def managed_models_list(json_output: cli_options.JsonOption = False) -> None:
     """List the managed models you can deploy, across all serverless regions."""
     cli_options.apply_command_options(json_output=json_output)
-    with render.spinner("Fetching managed models..."):
-        result = get_client().deployments.list_managed_models()
+    result = _fetch_managed_models(get_client())
 
     if state.json_output:
         render.print_json(result)
@@ -362,7 +377,7 @@ def managed_models_create(
     idle_timeout: Annotated[int, typer.Option("--idle-timeout", help="Idle timeout in seconds (0-86400).")] = 300,
     concurrent: Annotated[
         int | None,
-        typer.Option("--concurrent", help="Concurrent requests per worker (default: the model's tested value)."),
+        typer.Option("--concurrent", help="Concurrent requests per worker (default: the model's tested value).", min=1),
     ] = None,
     detach: Annotated[bool, typer.Option("--detach", help="Skip the wait: print the id and exit.")] = False,
     yes: cli_options.YesOption = False,
@@ -376,7 +391,7 @@ def managed_models_create(
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     client = get_client()
-    model = _resolve_managed_model(client, model_slug, region)
+    model, currency = _resolve_managed_model(client, model_slug, region)
     name = name or model.model_slug
 
     if model_slug is None:  # Picked from the list: ask for each setting not given as a flag.
@@ -395,7 +410,8 @@ def managed_models_create(
     details = (
         f"model={model.model_slug}, gpu={model.gpus_per_worker}x {model.gpu_type}/worker, name={name!r}, "
         f"region={render.region_label(model.region)}, workers={min_workers}-{max_workers}, "
-        f"idle_timeout={idle_timeout}s, concurrent={concurrent or model.concurrent_requests}"
+        f"idle_timeout={idle_timeout}s, concurrent={concurrent or model.concurrent_requests}, "
+        f"cost={render.managed_cost_label(model, currency, max_workers)}"
     )
     if not render.confirm(f"Create deployment ({details})?", skip=state.yes):
         raise typer.Exit()

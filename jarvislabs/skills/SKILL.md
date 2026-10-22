@@ -342,7 +342,7 @@ jl deploy create \
 Managed models are ready-made deployments: JarvisLabs sets the GPU, framework, engine args, and storage; you only choose scaling. Prefer them when the user wants a common model and doesn't need custom settings.
 
 ```bash
-jl deploy managed-models list --json    # catalog: model_slug, region, gpu_type, gpus_per_worker, context_length
+jl deploy managed-models list --json    # catalog: model_slug, region, gpu_type, gpus_per_worker, context_length, price_per_hour
 jl deploy managed-models create <model_slug> \
   --name my-model --min-workers 0 --max-workers 1 --idle-timeout 300 \
   --detach --yes --json
@@ -351,7 +351,7 @@ jl deploy managed-models create <model_slug> \
 - **Always pass the slug.** Without it, `create` opens an interactive picker, which needs a terminal; in scripts or with `--json` it exits with an error instead.
 - `--region` is optional: it's taken from the catalog. If the same slug is offered in more than one region, pass `--region`.
 - Defaults: name = the slug, `--min-workers 0`, `--max-workers 1`, `--idle-timeout 300`, `--concurrent` = the model's tested value. Names must be unique among your managed deployments, so pass `--name` when creating the same model twice.
-- Check the GPU in the catalog before creating: some models use 8 GPUs per worker, which is expensive.
+- Check the cost before creating: `price_per_hour` is the price of one running worker per hour, in the catalog's `currency` (GPU on-demand price × GPUs per worker). Some models use 8 GPUs per worker, which is expensive. At 0 workers nothing is charged, so `--min-workers 0` avoids idle cost.
 - Poll and manage it like any deployment (`jl deploy status/get/logs/delete`). `jl deploy update` can't change `--wait-time` for managed deployments.
 
 ### OpenAI-compatible inference

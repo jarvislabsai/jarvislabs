@@ -286,8 +286,10 @@ def test_managed_models_table_renders_rows(capture):
         context_length=131072,
         concurrent_requests=32,
     )
-    render.managed_models_table(ManagedModelListResult(models=[model]))
+    model.price_per_hour = 3200.0
+    render.managed_models_table(ManagedModelListResult(models=[model], currency="INR"))
     out = capture.getvalue()
+    assert "₹3200.00" in out
     assert "glm-5.2" in out
     assert "IN2" in out
     assert "8x H100" in out

@@ -370,11 +370,14 @@ class ManagedModel(BaseModel):
     gpu_type: str | None = None
     gpus_per_worker: int | None = None
     concurrent_requests: int | None = None
+    # Cost of one running worker per hour (GPU price x GPUs per worker); filled in by the CLI catalog.
+    price_per_hour: Price | None = None
 
 
 class ManagedModelListResult(BaseModel):
     models: list[ManagedModel] = Field(default_factory=list)
     region_errors: list[RegionError] = Field(default_factory=list)
+    currency: str | None = None
 
 
 class ModelPricing(BaseModel):

@@ -123,8 +123,8 @@ def models_chat(
         render.die("Pass a prompt with --session or -c. See: jl models chat --help")
     session = session or (_latest_session() if continue_session else None)
     messages = _load_session(session) if session else []
-    session = session or uuid.uuid4().hex[:8]  
-    if system and not messages:  
+    session = session or uuid.uuid4().hex[:8]
+    if system and not messages:
         messages.append({"role": "system", "content": system})
 
     client = get_client()

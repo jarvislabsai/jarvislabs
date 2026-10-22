@@ -19,6 +19,7 @@ from jarvislabs.models import (
     DeploymentSummary,
     ManagedModel,
     ManagedModelListResult,
+    ServerMetaGPU,
 )
 
 
@@ -36,8 +37,15 @@ def _stub_spinner(monkeypatch):
     monkeypatch.setattr(deploy.render, "spinner", lambda *a, **k: nullcontext())
 
 
+# GPU prices used to price managed models: H200 in IN2 at 400/hr.
+FAKE_ACCOUNT = SimpleNamespace(
+    gpu_availability=lambda: [ServerMetaGPU(gpu_type="H200", region="india-noida-01", price_per_hour=400.0)],
+    currency=lambda: "INR",
+)
+
+
 def _install_client(monkeypatch, deployments):
-    client = SimpleNamespace(deployments=deployments)
+    client = SimpleNamespace(deployments=deployments, account=FAKE_ACCOUNT)
     monkeypatch.setattr(deploy, "get_client", lambda: client)
     return client
 
@@ -888,3 +896,20 @@ def test_managed_create_slug_in_many_regions_non_interactive_asks_for_region(mon
     with pytest.raises(SystemExit) as exc:
         _managed_create_call(region=None)
     assert str(exc.value) == "glm-5.2 is available in IN1, IN2. Pass --region."
+
+
+def test_managed_models_are_priced_from_gpu_price(monkeypatch):
+    _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01"), ("glm-5.2", "india-chennai-01")))
+    result = deploy._fetch_managed_models(deploy.get_client())
+    assert result.currency == "INR"
+    # 8x H200 at 400/hr in IN2; no H200 price in IN1, so unknown there.
+    assert [m.price_per_hour for m in result.models] == [3200.0, None]
+
+
+def test_managed_create_confirm_shows_cost(monkeypatch):
+    _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
+    prompts: list[str] = []
+    monkeypatch.setattr(deploy.render, "confirm", lambda msg, skip=False: prompts.append(msg) or False)
+    with pytest.raises(typer.Exit):
+        _managed_create_call(max_workers=2)
+    assert "cost=₹3200.00/hr per running worker, up to ₹6400.00/hr at 2 workers" in prompts[0]
