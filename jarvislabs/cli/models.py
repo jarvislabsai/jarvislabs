@@ -81,7 +81,6 @@ def models_chat(
     continue_session: Annotated[
         bool, typer.Option("--continue", "-c", help="Continue the most recent session (no ID needed).")
     ] = False,
-    end: Annotated[str | None, typer.Option("--end", help="End a session and delete its history.")] = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Chat with a model: pass a prompt for one reply, or omit it for an interactive chat.
@@ -110,24 +109,12 @@ def models_chat(
       [cyan]jl models chat <model_id> "My name is Jay"[/cyan]                     [dim]# prints a session ID[/dim]
       [cyan]jl models chat <model_id> "What is my name?" --session <ID>[/cyan]
       [cyan]jl models chat <model_id> "And my age?" -c[/cyan]                     [dim]# continues the most recent session[/dim]
-      [cyan]jl models chat --end <ID>[/cyan]                                     [dim]# deletes the history[/dim]
 
     In interactive chat: Ctrl-C stops a reply · Ctrl-D or /exit quits.
     See supported thinking options with: jl models get <model_id>
     """
     cli_options.apply_command_options(json_output=json_output)
     _prune_sessions()
-    if end:
-        path = _session_path(end)
-        if not path.exists():
-            render.die(f"Session {end} not found or already ended.")
-        path.unlink()
-        if state.json_output:
-            render.print_json({"success": True, "session": end})
-            return
-        render.success(f"Session {end} ended.")
-        return
-
     text = read_prompt(prompt)
     if (session or continue_session) and not text:
         render.die("Pass a prompt with --session or -c. See: jl models chat --help")
@@ -162,7 +149,7 @@ def models_chat(
     if reply is None:
         raise typer.Exit(1)
     _save_session(session, [*messages, reply])
-    render.info(f"Session {session} · end: jl models chat --end {session}")
+    render.info(f"Session {session}")
 
 
 def _resolve_model(client, model_id: str | None) -> ModelInfo:

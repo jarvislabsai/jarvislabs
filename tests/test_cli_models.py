@@ -343,7 +343,7 @@ def test_session_keeps_history_across_calls(monkeypatch, sessions_dir):
     notes = []
     monkeypatch.setattr(render, "info", notes.append)
     _capture(models_cli.models_chat, "deepseek", "I am Jay", system="Be brief.")
-    assert notes[-1].startswith("Session abc12345 ")
+    assert notes[-1] == "Session abc12345"
 
     _capture(models_cli.models_chat, "deepseek", "Who am I?", session="abc12345")
     assert calls[1][0] == [
@@ -375,13 +375,6 @@ def test_session_not_saved_when_reply_stopped(monkeypatch, sessions_dir):
     with pytest.raises(typer.Exit):
         _capture(models_cli.models_chat, "deepseek", "Hello")
     assert not list(sessions_dir.glob("*.json"))
-
-
-def test_end_deletes_session(monkeypatch, sessions_dir):
-    models_cli._save_session("abc123", [{"role": "user", "content": "Hi"}])
-    monkeypatch.setattr(render, "success", lambda m: None)
-    models_cli.models_chat(end="abc123")
-    assert not (sessions_dir / "abc123.json").exists()
 
 
 def test_unused_sessions_expire(sessions_dir):
@@ -436,13 +429,6 @@ def test_continue_without_sessions(monkeypatch, sessions_dir):
     with pytest.raises(SystemExit):
         models_cli.models_chat("deepseek", "Hi", continue_session=True)
     assert errors == ["No session to continue. Send a prompt without -c to start one."]
-
-
-def test_end_unknown_session(monkeypatch, sessions_dir):
-    errors = _errors(monkeypatch)
-    with pytest.raises(SystemExit):
-        models_cli.models_chat(end="missing")
-    assert errors == ["Session missing not found or already ended."]
 
 
 def test_stream_reply_warns_when_cut_off(monkeypatch):
