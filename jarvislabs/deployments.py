@@ -26,11 +26,14 @@ from jarvislabs.models import (
     DeploymentListResult,
     DeploymentStatus,
     DeploymentSummary,
+    ManagedModel,
+    ManagedModelListResult,
     RegionError,
 )
 from jarvislabs.regions import normalize_serverless_region, region_code, serverless_region_url
 
 if TYPE_CHECKING:
+    import builtins
     from collections.abc import Iterator
 
     from jarvislabs.transport import Transport
@@ -92,10 +95,7 @@ class Deployments:
 
         base_url = serverless_region_url(internal_region)
         resp = self._t.request("POST", "management/create", json=payload, base_url=base_url)
-        deployment_id = resp.get("deployment_id")
-        if not deployment_id:
-            raise JarvislabsError("Failed to create deployment: no deployment_id returned.")
-        return deployment_id
+        return _created_deployment_id(resp)
 
     def list(self) -> DeploymentListResult:
         """List deployments across all serverless regions, newest first.
@@ -103,25 +103,12 @@ class Deployments:
         Regions that can't be reached are reported in ``region_errors`` rather
         than hiding the rest; if no region answers at all, raise.
         """
-        deployments: list[DeploymentSummary] = []
-        region_errors: list[RegionError] = []
-        answered = False
-
-        for region in sorted(SERVERLESS_REGIONS):
-            try:
-                resp = self._t.request("GET", "management/list", base_url=serverless_region_url(region))
-            except APIError as exc:
-                if exc.status_code not in DEPLOYMENT_TRANSIENT_STATUS:
-                    raise
-                region_errors.append(RegionError(region=region, error=str(exc)))
-                continue
-            answered = True
-            for item in resp.get("deployments", []):
-                deployments.append(DeploymentSummary(**{**item, "region": region}))
-
-        if not answered and region_errors:
-            raise JarvislabsError("; ".join(f"{region_code(e.region)}: {e.error}" for e in region_errors))
-
+        responses, region_errors = self._fetch_all_regions("management/list")
+        deployments = [
+            DeploymentSummary(**{**item, "region": region})
+            for region, resp in responses
+            for item in resp.get("deployments", [])
+        ]
         deployments.sort(key=_newest_first_key, reverse=True)
         return DeploymentListResult(deployments=deployments, region_errors=region_errors)
 
@@ -149,22 +136,30 @@ class Deployments:
         name: str | None = None,
         idle_timeout: int | None = None,
         wait_time: int | None = None,
+        min_workers: int | None = None,
+        max_workers: int | None = None,
+        concurrent: int | None = None,
         region: str | None = None,
     ) -> Deployment:
         """Update a running deployment and return the refreshed record.
 
-        Only ``name``, ``idle_timeout``, and ``wait_time`` can change; scaling
-        settings require recreating the deployment.
+        Can change the name, idle timeout, scaling (min/max workers, concurrent
+        requests per worker), and wait time (custom deployments only). To change
+        the GPU, model, or storage, recreate the deployment.
         """
-        patch: dict = {}
-        if name is not None:
-            patch["name"] = name
-        if idle_timeout is not None:
-            patch["idle_timeout"] = idle_timeout
-        if wait_time is not None:
-            patch["wait_time"] = wait_time
+        changes = {
+            "name": name,
+            "idle_timeout": idle_timeout,
+            "wait_time": wait_time,
+            "min_workers": min_workers,
+            "max_workers": max_workers,
+            "concurrent_requests": concurrent,
+        }
+        patch = {key: value for key, value in changes.items() if value is not None}
         if not patch:
-            raise ValidationError("Pass at least one of name / idle_timeout / wait_time.")
+            raise ValidationError(
+                "Pass at least one of name / idle_timeout / wait_time / min_workers / max_workers / concurrent."
+            )
 
         # Read before writing: confirms the deployment exists and gives us its
         # current status for a clear message if the update is rejected.
@@ -181,8 +176,7 @@ class Deployments:
         except APIError as exc:
             if exc.status_code == 409:
                 raise ValidationError(
-                    f"Deployment is in '{deployment.status}'; only running deployments can be updated. "
-                    "Min/max workers are not patchable — recreate to rescale."
+                    f"Deployment is in '{deployment.status}'; only running deployments can be updated."
                 ) from exc
             raise
         return self.get(deployment_id, region=resolved_region)
@@ -349,6 +343,53 @@ class Deployments:
         except NotFoundError:
             return "reason unavailable"
 
+    def list_managed_models(self) -> ManagedModelListResult:
+        """List the managed-model catalog; a model appears once per region it's offered in."""
+        responses, region_errors = self._fetch_all_regions("managed-models")
+        models = [ManagedModel(**{**item, "region": region}) for region, resp in responses for item in resp["models"]]
+        models.sort(key=lambda m: (m.model_slug, m.region or ""))
+        return ManagedModelListResult(models=models, region_errors=region_errors)
+
+    def create_managed(
+        self,
+        model_slug: str,
+        *,
+        name: str,
+        region: str,
+        min_workers: int,
+        max_workers: int,
+        idle_timeout: int,
+        concurrent: int | None = None,
+    ) -> str:
+        """Create a deployment from a managed model and return its id.
+
+        The model's recipe sets the GPU, framework, and engine settings; you choose scaling.
+        """
+        payload = {"name": name, "min_workers": min_workers, "max_workers": max_workers, "idle_timeout": idle_timeout}
+        if concurrent is not None:
+            payload["concurrent_requests"] = concurrent
+        base_url = serverless_region_url(normalize_serverless_region(region))
+        resp = self._t.request(
+            "POST", f"management/managed-models/{model_slug}/create", json=payload, base_url=base_url
+        )
+        return _created_deployment_id(resp)
+
+    def _fetch_all_regions(self, path: str) -> tuple[builtins.list[tuple[str, dict]], builtins.list[RegionError]]:
+        """GET ``path`` from every region; unreachable regions go in the errors list, and if none answers, raise."""
+        responses: builtins.list[tuple[str, dict]] = []
+        region_errors: builtins.list[RegionError] = []
+        for region in sorted(SERVERLESS_REGIONS):
+            try:
+                responses.append((region, self._t.request("GET", path, base_url=serverless_region_url(region))))
+            except APIError as exc:
+                if exc.status_code not in DEPLOYMENT_TRANSIENT_STATUS:
+                    raise
+                region_errors.append(RegionError(region=region, error=str(exc)))
+
+        if not responses and region_errors:
+            raise JarvislabsError("; ".join(f"{region_code(e.region)}: {e.error}" for e in region_errors))
+        return responses, region_errors
+
 
 def _newest_first_key(summary: DeploymentSummary) -> tuple[bool, datetime]:
     """Sort key: newest start_time first, rows without one last.
@@ -360,3 +401,11 @@ def _newest_first_key(summary: DeploymentSummary) -> tuple[bool, datetime]:
     if start is not None and start.tzinfo is not None:
         start = start.replace(tzinfo=None)
     return (start is not None, start or datetime.min)
+
+
+def _created_deployment_id(resp: dict) -> str:
+    """The new deployment's id from a create response; raise if it's missing."""
+    deployment_id = resp.get("deployment_id")
+    if not deployment_id:
+        raise JarvislabsError("Failed to create deployment: no deployment_id returned.")
+    return deployment_id

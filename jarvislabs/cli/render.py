@@ -7,15 +7,22 @@ import sys
 from contextlib import nullcontext
 from typing import Any, NoReturn
 
+import questionary
+import typer
 from pydantic import BaseModel
 from rich import box
 from rich.console import Console
 from rich.markup import escape
+from rich.padding import Padding
+from rich.panel import Panel
+from rich.rule import Rule
+from rich.syntax import Syntax
 from rich.table import Table
+from rich.text import Text
 from rich.theme import Theme
 
-from jarvislabs.cli import state
-from jarvislabs.constants import EUROPE_REGION, REGION_CODE_TO_REGION, REGION_DISPLAY_CODES
+from jarvislabs.cli import options as cli_options, state
+from jarvislabs.constants import EUROPE_REGION, MODELS_DEFAULT_MAX_TOKENS, REGION_CODE_TO_REGION, REGION_DISPLAY_CODES
 from jarvislabs.instances import is_cpu_vm
 from jarvislabs.regions import region_code
 
@@ -104,9 +111,12 @@ def _table(title: str | None = None, **kwargs) -> Table:
     )
 
 
-def _print_detail_table(rows: list[tuple[str, str]]) -> None:
-    """Print a borderless field/value detail view (shared by instance and deployment detail)."""
-    table = Table(show_header=False, box=None, padding=(0, 2), border_style=BORDER_STYLE)
+def _print_detail_table(rows: list[tuple[str, str]], *, spaced: bool = False) -> None:
+    """Print a borderless field/value detail view (shared by instance and deployment detail).
+
+    ``spaced`` adds a blank line after each row, for views with multi-line values.
+    """
+    table = Table(show_header=False, box=None, padding=(0, 2, int(spaced), 2), border_style=BORDER_STYLE)
     table.add_column("Field", style="dim")
     # Avoid cutting off long values like notebook URLs with auth tokens.
     table.add_column("Value", overflow="fold")
@@ -407,8 +417,7 @@ def deployments_table(result, *, wide: bool = False) -> None:
     the configuration columns (framework, workers, concurrency). The full
     record is always one ``jl deploy get <id>`` (or ``--json``) away.
     """
-    for region_error in result.region_errors:
-        warning(f"Could not reach {region_label(region_error.region)}: {region_error.error}")
+    warn_region_errors(result.region_errors)
 
     if not result.deployments:
         info("No deployments.")
@@ -416,8 +425,8 @@ def deployments_table(result, *, wide: bool = False) -> None:
 
     table = _table("Deployments", show_lines=True)
     table.add_column("ID", no_wrap=True)  # full id stays intact so it's copy-pasteable
-    table.add_column("Name", no_wrap=True)
-    table.add_column("Region", no_wrap=True)
+    table.add_column("Name", overflow="fold")  # the one column that wraps, so the others stay readable
+    table.add_column("Type", no_wrap=True)
     table.add_column("Status", no_wrap=True)
     if wide:
         table.add_column("Framework", no_wrap=True)
@@ -427,13 +436,14 @@ def deployments_table(result, *, wide: bool = False) -> None:
         table.add_column("Concurrent", justify="right")
     table.add_column("Started", no_wrap=True)
     table.add_column("Cost", justify="right", no_wrap=True)
+    table.add_column("Region", style="dim", no_wrap=True)
 
     for dep in result.deployments:
         style = _deployment_status_style(dep.status)
         row = [
             escape(dep.deployment_id),
             escape(dep.name or "—"),
-            region_label(dep.region),
+            "managed" if dep.managed_model else "custom",
             f"[{style}]{escape(dep.status)}[/{style}]",
         ]
         if wide:
@@ -444,6 +454,7 @@ def deployments_table(result, *, wide: bool = False) -> None:
             row.append(str(dep.concurrent_requests) if dep.concurrent_requests is not None else "—")
         row.append(_started_label(dep.start_time))
         row.append(_deployment_cost_cell(dep))
+        row.append(region_label(dep.region))
         table.add_row(*row)
 
     stdout_console.print(table)
@@ -466,8 +477,10 @@ def deployment_detail(dep, *, base_url: str | None = None) -> None:
         ("Idle timeout", f"{dep.idle_timeout}s" if dep.idle_timeout is not None else "—"),
         ("Wait time", f"{dep.wait_time}s" if dep.wait_time is not None else "—"),
         ("Storage", f"{dep.storage}GB" if dep.storage is not None else "—"),
-        ("Model", escape(dep.model or "—")),
+        ("Model", _model_label(dep)),
     ]
+    if dep.managed_model:
+        rows.append(("API model", escape(dep.managed_model.api_model_name or "—")))
 
     other_args = {k: v for k, v in (dep.args or {}).items() if k != "model"}
     if other_args:
@@ -515,20 +528,183 @@ def deployment_running_handoff(base_url: str, model: str | None) -> None:
     """Print the base URL, a paste-ready OpenAI snippet, and a first-request note.
     Printed markup-safe so brackets/braces are not mangled."""
     stdout_console.print(f"Base URL: {base_url}", markup=False, soft_wrap=True)
-    snippet = (
-        "from openai import OpenAI\n"
-        f'client = OpenAI(base_url="{base_url}", api_key="<YOUR_JL_API_KEY>")\n'
-        "resp = client.chat.completions.create(\n"
-        f'    model="{model or "<model>"}",\n'
-        '    messages=[{"role": "user", "content": "Hello"}],\n'
-        ")\n"
-        "print(resp.choices[0].message.content)"
-    )
-    stdout_console.print(snippet, markup=False, soft_wrap=True)
+    stdout_console.print(_openai_snippet(base_url, model or "<model>"), markup=False, soft_wrap=True)
     stdout_console.print(
         "Note: the first request may be slow while a worker starts up.",
         markup=False,
     )
+
+
+def _openai_snippet(base_url: str, model: str, max_tokens: int | None = None) -> str:
+    limit = f"    max_tokens={max_tokens},\n" if max_tokens else ""
+    return (
+        "from openai import OpenAI\n"
+        f'client = OpenAI(base_url="{base_url}", api_key="<YOUR_JL_API_KEY>")\n'
+        "resp = client.chat.completions.create(\n"
+        f'    model="{model}",\n'
+        '    messages=[{"role": "user", "content": "Hello"}],\n'
+        f"{limit}"
+        ")\n"
+        "print(resp.choices[0].message.content)"
+    )
+
+
+# ── Token factory ────────────────────────────────────────────────────────────
+
+
+def _price(value: float, currency: str) -> str:
+    # Two decimals unless the API gives more, so a small price like 0.003 isn't shown as 0.00.
+    amount = f"{value:.2f}" if value == round(value, 2) else f"{value:g}"
+    return f"{currency_symbol(currency)}{amount}"
+
+
+def _context_label(tokens: int | None) -> str:
+    if not tokens:
+        return "—"
+    if tokens >= 1_000_000:
+        return f"{tokens / 1_000_000:.2f}".rstrip("0").rstrip(".") + "M"
+    return f"{round(tokens / 1000)}K"
+
+
+PRICE_FIELDS = {
+    "Input": "input_per_million_tokens",
+    "Cached": "cached_input_per_million_tokens",
+    "Output": "output_per_million_tokens",
+}
+
+
+def _prices(pricing) -> dict[str, str]:
+    """Prices per 1M tokens for display; "—" where the API has none."""
+    prices = {}
+    for label, field in PRICE_FIELDS.items():
+        value = getattr(pricing, field) if pricing else None
+        prices[label] = "—" if value is None else _price(value, pricing.currency)
+    return prices
+
+
+def models_table(models: list) -> None:
+    table = _table("Models · price per 1M tokens", show_lines=True)
+    # Name above the ID in one column: a separate Name column gets squeezed out on narrow terminals.
+    table.add_column("Model · ID", no_wrap=True)
+    for heading in ("Context", "Input", "Cached", "Output"):
+        table.add_column(heading, justify="right", no_wrap=True)
+    for model in models:
+        table.add_row(
+            f"{escape(model.name or model.id)}\n[cyan]{escape(model.id)}[/cyan]",
+            _context_label(model.context_length),
+            *_prices(model.pricing).values(),
+        )
+    stdout_console.print(table)
+    info("Tip: run 'jl models get <ID>' for details and ready-to-use code")
+
+
+def select_model(models: list):
+    rows = []
+    for model in models:
+        prices = _prices(model.pricing)
+        rows.append((model.id, _context_label(model.context_length), prices["Input"], prices["Output"]))
+    headings = ("MODEL", "CONTEXT", "INPUT/1M", "OUTPUT/1M")
+    return select_row("Select a model:", headings, rows, models)
+
+
+def _thinking_lines(thinking) -> str:
+    if not thinking.supported:
+        return "[dim]Not supported[/dim]"
+    keys = thinking.template_parameters
+    options = []
+    if "toggle" in keys:
+        options.append((keys["toggle"], "true | false"))
+    if "effort" in keys:
+        options.append((keys["effort"], " | ".join(thinking.supported_efforts)))
+    if not options:
+        return "[green]Supported[/green]"
+    width = max(len(key) for key, _ in options)
+    lines = [f"[yellow]{key:<{width}}[/yellow]   {values}" for key, values in options]
+    return "\n".join(["[green]Supported[/green]   [dim]set in chat_template_kwargs[/dim]", *lines])
+
+
+def _modalities_lines(model) -> str:
+    return f"Input    {', '.join(model.input_modalities) or '—'}\nOutput   {', '.join(model.output_modalities) or '—'}"
+
+
+def model_detail(model, base_url: str) -> None:
+    header = f"[bold]{escape(model.name or model.id)}[/bold]   [cyan]{escape(model.id)}[/cyan]"
+    if model.description:
+        header += f"\n[dim]{escape(model.description)}[/dim]"
+    prices = _prices(model.pricing)
+    width = max(len(price) for price in prices.values())
+    pricing = "\n".join(f"{name:<8}[green]{price:>{width}}[/green]" for name, price in prices.items())
+
+    stdout_console.print()
+    stdout_console.print(Padding(header, (0, 0, 1, 2)))
+    _print_detail_table(
+        [
+            ("Context", f"{model.context_length:,} tokens" if model.context_length else "—"),
+            ("Modalities", _modalities_lines(model)),
+            ("Price per 1M", pricing),
+            ("Thinking", _thinking_lines(model.thinking)),
+            ("Model card", _link_value(model.model_card_url)),
+            ("Base URL", _link_value(base_url)),
+        ],
+        spaced=True,
+    )
+
+
+def model_snippets(model_id: str, base_url: str) -> None:
+    body = json.dumps(
+        {
+            "model": model_id,
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": MODELS_DEFAULT_MAX_TOKENS,
+        }
+    )
+    curl = (
+        f"curl {base_url}/chat/completions \\\n"
+        '  -H "Authorization: Bearer $JL_API_KEY" \\\n'
+        '  -H "Content-Type: application/json" \\\n'
+        f"  -d '{body}'"
+    )
+    python = _openai_snippet(base_url, model_id, MODELS_DEFAULT_MAX_TOKENS)
+    for title, code, lexer in (("Python", python, "python"), ("curl", curl, "bash")):
+        stdout_console.print()
+        stdout_console.print(Rule(f"[bold]{title}[/bold]", align="left", style="dim"))
+        stdout_console.print()
+        stdout_console.print(Syntax(code, lexer, theme="ansi_dark", background_color="default", word_wrap=True))
+    stdout_console.print()
+
+
+def chat_text(text: str) -> None:
+    stdout_console.print(text, end="", markup=False, highlight=False, soft_wrap=True)
+
+
+def chat_thinking(text: str) -> None:
+    console.print(text, end="", style="dim italic", markup=False, highlight=False, soft_wrap=True)
+
+
+def chat_prompt() -> str:
+    console.print()
+    return console.input("[bold cyan]>[/bold cyan] ")
+
+
+def chat_usage(usage: dict | None, pricing=None) -> None:
+    """Token counts, plus the cost when the prices are known."""
+    if not usage:
+        return
+    tokens_in, tokens_out = usage["prompt_tokens"], usage["completion_tokens"]
+    line = f"\n{tokens_in:,} in · {tokens_out:,} out"
+    thinking = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+    if thinking:
+        line += f" ({thinking:,} thinking)"
+    cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+    cached_price = pricing and pricing.cached_input_per_million_tokens
+    if pricing and (cached_price is not None or not cached):
+        cost = (
+            (tokens_in - cached) * pricing.input_per_million_tokens
+            + cached * (cached_price or 0)
+            + tokens_out * pricing.output_per_million_tokens
+        ) / 1_000_000
+        line += f" · {currency_symbol(pricing.currency)}{cost:.6f}"
+    info(line)
 
 
 def resource_label(inst) -> str:
@@ -731,10 +907,10 @@ def error(msg: str) -> None:
     console.print(f"[red]✗[/red] {msg}", style="red")
 
 
-def info(msg: str) -> None:
+def info(msg: str, style: str = "dim") -> None:
     if state.json_output:
         return
-    console.print(f"[dim]{msg}[/dim]")
+    console.print(f"[{style}]{msg}[/{style}]")
 
 
 def warning(msg: str) -> None:
@@ -757,7 +933,8 @@ def confirm(msg: str, *, skip: bool = False) -> bool:
     if state.json_output:
         die("--json requires --yes")
     try:
-        response = console.input(f"[yellow]?[/yellow] {msg} [dim]\\[y/N][/dim] ")
+        # A Text prompt skips Rich's auto-highlighting, which would color the numbers in msg.
+        response = console.input(Text.from_markup(f"[yellow]?[/yellow] {msg} [dim]\\[y/N][/dim] "))
         return response.strip().lower() in ("y", "yes")
     except (KeyboardInterrupt, EOFError):
         console.print()
@@ -824,3 +1001,167 @@ def die(msg: str, code: int = 1) -> NoReturn:
     else:
         error(msg)
     sys.exit(code)
+
+
+def managed_models_table(result) -> None:
+    warn_region_errors(result.region_errors)
+    table = _table("Managed Models · GPUs and price per worker")
+    table.add_column("Slug", style="cyan", no_wrap=True)
+    table.add_column("GPU", no_wrap=True)
+    table.add_column("Context", justify="right")
+    table.add_column("Price/hr", justify="right", style="green", no_wrap=True)
+    table.add_column("Region", style="dim", no_wrap=True)
+    for model in result.models:
+        table.add_row(
+            escape(model.model_slug),
+            _managed_gpu_label(model),
+            _context_label(model.context_length),
+            _managed_price_label(model, result.currency),
+            region_label(model.region),
+        )
+    stdout_console.print(table)
+    info("Price is per running worker per hour. With 0 workers you pay no GPU cost,")
+    info("but a small storage fee applies until you delete the deployment.")
+    info("Deploy one: jl deploy managed-models create <SLUG>, or leave out <SLUG> to pick from a list")
+
+
+def select_managed_model(models: list, currency: str | None):
+    rows = [
+        (
+            model.display_name or model.model_slug,
+            model.model_slug,
+            _managed_gpu_label(model),
+            _context_label(model.context_length),
+            _managed_price_label(model, currency),
+            region_label(model.region),
+        )
+        for model in models
+    ]
+    headings = ("MODEL", "SLUG", "GPU", "CONTEXT", "PRICE/HR", "REGION")
+    return select_row("Select a managed model:", headings, rows, models)
+
+
+def _managed_gpu_label(model) -> str:
+    return f"{model.gpus_per_worker or '—'}x {model.gpu_type or '—'}"
+
+
+def _managed_price_label(model, currency: str | None) -> str:
+    if model.price_per_hour is None:
+        return "—"
+    return f"{currency_symbol(currency or 'USD')}{model.price_per_hour:.2f}"
+
+
+def managed_cost_label(model, currency: str | None, max_workers: int) -> str:
+    """Hourly cost for the create confirmation: per running worker, and the most at max workers."""
+    if model.price_per_hour is None:
+        return "unknown"
+    per_worker = _managed_price_label(model, currency)
+    if max_workers <= 1:
+        return f"{per_worker}/hr per running worker, plus storage"
+    at_max = f"{currency_symbol(currency or 'USD')}{model.price_per_hour * max_workers:.2f}"
+    return f"{per_worker}/hr per running worker, up to {at_max}/hr at {max_workers} workers, plus storage"
+
+
+MANAGED_SETTINGS_HELP = (
+    (
+        "Worker",
+        "A machine with GPUs that runs your model and answers requests. You pay by the hour for each worker while it is on.",
+    ),
+    (
+        "Min workers",
+        "How many workers stay on all the time. With 0, nothing runs while nobody uses it, so you pay "
+        "no GPU cost. The first request after a quiet time is slower, because a worker has to start.",
+    ),
+    ("Max workers", "The most workers that can run at once when many requests come in."),
+    ("Idle timeout", "How many seconds a worker waits with no requests before it turns off."),
+    ("Concurrent", "How many requests one worker answers at the same time."),
+    ("Storage", "Each deployment also has a small storage fee until you delete it."),
+)
+
+
+def managed_settings_help() -> None:
+    """Explain the scaling settings in plain words, before asking for them."""
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold", no_wrap=True)
+    grid.add_column()
+    for name, meaning in MANAGED_SETTINGS_HELP:
+        grid.add_row(name, meaning)
+    console.print(Panel(grid, title="What these settings mean", title_align="left", border_style=BORDER_STYLE))
+
+
+def _model_label(dep) -> str:
+    managed = dep.managed_model
+    if managed:
+        return (
+            f"{escape(managed.display_name or managed.model_slug)} [dim]({escape(managed.model_slug)}, managed)[/dim]"
+        )
+    return escape(dep.model or "—")
+
+
+def warn_region_errors(region_errors: list) -> None:
+    for region_error in region_errors:
+        warning(f"Could not reach {region_label(region_error.region)}: {region_error.error}")
+
+
+# ── Interactive prompts ──────────────────────────────────────────────────────
+
+PROMPT_STYLE = questionary.Style(
+    [
+        ("pointer", "fg:#73daca bold"),
+        ("highlighted", "fg:#73daca bold"),  # the row under the cursor
+        ("separator", "fg:ansibrightblack bold"),
+    ]
+)
+
+
+def can_prompt() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def select_row(message: str, headings: tuple[str, ...], rows: list, values: list) -> Any:
+    """Arrow-key picker shown as an aligned table; returns the chosen row's value. Ctrl+C exits.
+
+    Rows are plain text: questionary highlights the row under the cursor only for plain-text titles.
+    """
+    widths = [max(len(cell) for cell in column) for column in zip(headings, *rows, strict=True)]
+
+    def pad(cells) -> list[str]:
+        return [cell.ljust(width + 2) for cell, width in zip(cells, widths, strict=True)]
+
+    choices = [questionary.Separator("".join(pad(headings)))]
+    choices += [
+        questionary.Choice(title="".join(pad(row)), value=value) for row, value in zip(rows, values, strict=True)
+    ]
+    question = questionary.select(message, choices=choices, style=PROMPT_STYLE)
+    question.application.erase_when_done = True  # replaced below by the chosen row, one field per line
+    choice = question.ask()
+    if choice is None:
+        raise typer.Exit()
+    label_width = max(len(heading) for heading in headings)
+    console.print(f"[bold]?[/bold] {message}")
+    for heading, cell in zip(headings, rows[values.index(choice)], strict=True):
+        console.print(f"  [dim]{heading:<{label_width}}[/dim]   {escape(cell)}", highlight=False)
+    return choice
+
+
+def ask_value(param: str, message: str, value, *, low: int | None = None, high: int | None = None):
+    """Ask for a setting, prefilled with its value; a whole number when ``low`` is given (``high`` is optional).
+
+    A flag given on the command line is kept without asking. Ctrl+C exits.
+    """
+    if cli_options.option_was_explicit(param):
+        return value
+
+    def validate(text: str) -> bool | str:
+        if low is None:
+            return bool(text.strip()) or "This can't be empty."
+        if high is None:
+            return (text.strip().isdigit() and int(text) >= low) or f"Enter a whole number of at least {low}."
+        return (text.strip().isdigit() and low <= int(text) <= high) or f"Enter a whole number from {low} to {high}."
+
+    if low is not None:
+        value = max(value, low) if high is None else min(max(value, low), high)
+    answer = questionary.text(message, default=str(value), validate=validate, style=PROMPT_STYLE).ask()
+    if answer is None:
+        raise typer.Exit()
+    return answer.strip() if low is None else int(answer)

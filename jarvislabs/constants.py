@@ -75,3 +75,11 @@ DEPLOYMENT_WAIT_TIMEOUT_S = 4500
 # Statuses treated as a transient/unreachable region rather than a missing
 # deployment (retryable HTTP statuses plus 0 for connection/timeout).
 DEPLOYMENT_TRANSIENT_STATUS: frozenset[int] = RETRY_STATUS_CODES | frozenset({0})
+
+# ── Token factory ────────────────────────────────────────────────────────────
+
+# Pay-per-token model APIs; OpenAI-compatible.
+MODELS_API_URL = "https://models.jarvislabs.net/v1"
+# A request with no output limit stops at 1024 tokens, which thinking models can use up
+# before they answer. `jl models chat` and the code snippets send this limit instead.
+MODELS_DEFAULT_MAX_TOKENS = 32768

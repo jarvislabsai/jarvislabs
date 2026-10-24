@@ -294,6 +294,8 @@ class Deployment(BaseModel):
     storage: int | None = None
     args: dict | None = None
     env: dict | None = None
+    # Set for managed deployments.
+    managed_model: ManagedModelSummary | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
     created_at: datetime | None = None
@@ -310,7 +312,10 @@ class Deployment(BaseModel):
 
     @property
     def served_model(self) -> str | None:
-        """Model name inference clients must use: the served-model-name arg when set, else the model id."""
+        """Model name inference clients must use: the managed model's API name, else the
+        served-model-name arg when set, else the model id."""
+        if self.managed_model:
+            return self.managed_model.api_model_name
         return (self.args or {}).get("served-model-name") or self.model
 
 
@@ -329,6 +334,7 @@ class DeploymentSummary(BaseModel):
     concurrent_requests: int | None = None
     gpus_per_worker: int | None = None
     error_message: str | None = None
+    managed_model: ManagedModelSummary | None = None
     total_cost: float = 0.0
     currency: str = "USD"
 
@@ -349,3 +355,71 @@ class RegionError(BaseModel):
 class DeploymentListResult(BaseModel):
     deployments: list[DeploymentSummary] = Field(default_factory=list)
     region_errors: list[RegionError] = Field(default_factory=list)
+
+
+class _ManagedModelFacts(BaseModel):
+    """Facts about a managed model, shared by catalog entries and deployment records."""
+
+    model_config = ConfigDict(extra="ignore")
+    model_slug: str
+    display_name: str | None = None
+    description: str | None = None
+    context_length: int | None = None
+    model_card_url: str | None = None
+
+
+class ManagedModelSummary(_ManagedModelFacts):
+    """The managed model behind a deployment (``managed_model`` in a deployment record)."""
+
+    # The model name to send in requests to the deployment.
+    api_model_name: str | None = None
+
+
+class ManagedModel(_ManagedModelFacts):
+    """A catalog entry: a managed model offered in one region."""
+
+    region: OptionalRegionCode = None
+    gpu_type: str | None = None
+    gpus_per_worker: int | None = None
+    concurrent_requests: int | None = None
+    # Cost of one running worker per hour (GPU price x GPUs per worker); filled in by the CLI catalog.
+    price_per_hour: float | None = None
+
+
+class ManagedModelListResult(BaseModel):
+    models: list[ManagedModel] = Field(default_factory=list)
+    region_errors: list[RegionError] = Field(default_factory=list)
+    currency: str | None = None
+
+
+class ModelPricing(BaseModel):
+    currency: str
+    input_per_million_tokens: float
+    cached_input_per_million_tokens: float | None = None
+    output_per_million_tokens: float
+
+
+class ModelThinking(BaseModel):
+    supported: bool = False
+    supports_toggle: bool = False
+    supported_efforts: list[str] = Field(default_factory=list)
+    # Keys to set in chat_template_kwargs: "toggle" and/or "effort" -> the model's parameter name.
+    template_parameters: dict[str, str] = Field(default_factory=dict)
+
+
+class ModelInfo(BaseModel):
+    id: str
+    name: str | None = None
+    description: str | None = None
+    context_length: int | None = None
+    model_card_url: str | None = None
+    input_modalities: list[str] = Field(default_factory=list)
+    output_modalities: list[str] = Field(default_factory=list)
+    thinking: ModelThinking = Field(default_factory=ModelThinking)
+    pricing: ModelPricing | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_nulls(cls, data: Any) -> Any:
+        # The API sends null for metadata a model doesn't have yet; use the defaults instead.
+        return {key: value for key, value in data.items() if value is not None} if isinstance(data, dict) else data

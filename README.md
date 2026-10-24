@@ -108,6 +108,50 @@ jl run status <run_id>
 jl run stop <run_id>
 ```
 
+### Serverless Managed Models (Beta)
+
+Deploy a ready-made model as an OpenAI-compatible endpoint with autoscaling workers. JarvisLabs picks the GPU, framework, and engine settings; you choose scaling.
+
+```bash
+# See the available models
+jl deploy managed-models list
+
+# Pick a model from a list, then set or accept the settings
+jl deploy managed-models create
+
+# Or deploy a specific model directly (defaults: 0-1 workers, 300s idle timeout)
+jl deploy managed-models create qwen-3.5-4b --name my-qwen --max-workers 2
+
+# Get the base URL and the model name to use in requests
+jl deploy get <deployment_id>
+
+# Delete when done
+jl deploy delete <deployment_id>
+```
+
+### Token Factory (Pay-per-token models)
+
+Call hosted models directly through an OpenAI-compatible API. Nothing to deploy; you pay only for the tokens you use.
+
+```bash
+# See the models and their price per 1M tokens
+jl models list
+
+# Model details plus ready-to-use Python and curl code (omit the ID to pick from a list)
+jl models get <model_id>
+
+# Ask once, or omit the prompt for an interactive chat
+jl models chat <model_id> "Explain KV cache in two lines"
+cat notes.txt | jl models chat <model_id> "Summarize this"
+
+# Multi-turn chat across separate calls (for agents and scripts)
+jl models chat <model_id> "My name is Jay"        # prints a session ID
+jl models chat <model_id> "What is my name?" --session <session_id>
+jl models chat <model_id> "And my age?" -c       # continue the most recent session
+```
+
+From your own code, use any OpenAI client with base URL `https://models.jarvislabs.net/v1` and your JarvisLabs API key.
+
 ### More Commands
 
 ```bash

@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from jarvislabs.constants import INDIA_NOIDA_REGION
-from jarvislabs.models import Deployment, DeploymentSummary, RegionError, ServerMetaGPU
+from jarvislabs.models import Deployment, DeploymentSummary, ManagedModel, RegionError, ServerMetaGPU
 
 GET_PAYLOAD = {
     "deployment_id": "dep-abc",
@@ -139,3 +139,32 @@ def test_required_region_fields_still_reject_none():
 def test_required_region_fields_serialize_to_display_code():
     assert ServerMetaGPU(gpu_type="L4", region=INDIA_NOIDA_REGION).model_dump()["region"] == "IN2"
     assert RegionError(region=INDIA_NOIDA_REGION, error="boom").model_dump()["region"] == "IN2"
+
+
+MANAGED_MODEL = {
+    "model_slug": "glm-5.2",
+    "display_name": "GLM 5.2",
+    "description": "General chat model.",
+    "api_model_name": "zai-org/GLM-5.2",
+    "context_length": 131072,
+    "model_card_url": "https://huggingface.co/zai-org/GLM-5.2",
+}
+
+
+def test_managed_deployment_served_model_is_api_model_name():
+    # Managed deployments come back with managed_model instead of args/env.
+    payload = {k: v for k, v in GET_PAYLOAD.items() if k not in ("args", "env")}
+    dep = Deployment(**payload, managed_model=MANAGED_MODEL)
+    assert dep.model is None
+    assert dep.served_model == "zai-org/GLM-5.2"
+
+
+def test_summary_parses_managed_model():
+    assert DeploymentSummary(**LIST_ITEM, managed_model=MANAGED_MODEL).managed_model.model_slug == "glm-5.2"
+    assert DeploymentSummary(**LIST_ITEM).managed_model is None
+
+
+def test_managed_model_catalog_row_serializes_region_code():
+    model = ManagedModel(**MANAGED_MODEL, region=INDIA_NOIDA_REGION, gpu_type="H100", gpus_per_worker=8)
+    assert model.region == INDIA_NOIDA_REGION
+    assert model.model_dump()["region"] == "IN2"

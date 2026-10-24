@@ -26,7 +26,10 @@ app = typer.Typer(
         "  [bold]jl list[/bold]                                    [rgb(100,100,100)]list all instances[/rgb(100,100,100)]\n"
         "  [bold]jl gpus[/bold]                                    [rgb(100,100,100)]GPU availability and pricing[/rgb(100,100,100)]\n"
         "  [bold]jl pause <id>[/bold]                              [rgb(100,100,100)]stop billing, keep data[/rgb(100,100,100)]\n"
-        "  [bold]jl destroy <id>[/bold]                            [rgb(100,100,100)]delete permanently[/rgb(100,100,100)]\n\n"
+        "  [bold]jl destroy <id>[/bold]                            [rgb(100,100,100)]delete permanently[/rgb(100,100,100)]\n"
+        "  [bold]jl models list[/bold]                             [rgb(100,100,100)]pay-per-token models and prices[/rgb(100,100,100)]\n"
+        '  [bold]jl models chat <model> "Hello"[/bold]             [rgb(100,100,100)]call a model, no deployment needed[/rgb(100,100,100)]\n'
+        "  [bold]jl deploy managed-models create[/bold]            [rgb(100,100,100)]deploy a ready-made model (pick from a list)[/rgb(100,100,100)]\n\n"
         "[dim]Every command supports[/dim] [bold]--help[/bold] [dim]for details:[/dim]\n"
         "  [dim]jl create --help    jl run --help    jl ssh-key --help[/dim]"
     ),
@@ -63,7 +66,7 @@ def get_client() -> Client:
 def main() -> None:
     """Entry point for `jl` command (wired via pyproject.toml [project.scripts])."""
     # Command modules import `app` from this module, so they can only load after it exists.
-    from jarvislabs.cli import commands, deploy, instance, run, setup  # noqa: F401
+    from jarvislabs.cli import commands, deploy, instance, models, run, setup  # noqa: F401
     from jarvislabs.cli.update_check import finish_update_check, start_update_check
 
     start_update_check()

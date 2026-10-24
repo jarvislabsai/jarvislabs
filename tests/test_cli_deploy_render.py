@@ -13,6 +13,9 @@ from jarvislabs.models import (
     DeploymentListResult,
     DeploymentStatus,
     DeploymentSummary,
+    ManagedModel,
+    ManagedModelListResult,
+    ManagedModelSummary,
     RegionError,
 )
 
@@ -269,3 +272,64 @@ def test_confirm_json_mode_skip_still_wins(monkeypatch):
 
     monkeypatch.setattr(state, "json_output", True)
     assert render.confirm("Delete?", skip=True) is True
+
+
+# ── managed models ──────────────────────────────────────────────────────────────
+
+
+def test_managed_models_table_renders_rows(capture):
+    model = ManagedModel(
+        model_slug="glm-5.2",
+        display_name="GLM 5.2",
+        region="india-noida-01",
+        gpu_type="H100",
+        gpus_per_worker=8,
+        context_length=131072,
+        concurrent_requests=32,
+    )
+    model.price_per_hour = 3200.0
+    render.managed_models_table(ManagedModelListResult(models=[model], currency="INR"))
+    out = capture.getvalue()
+    assert "₹3200.00" in out
+    assert "glm-5.2" in out
+    assert "IN2" in out
+    assert "8x H100" in out
+    assert "131K" in out
+    assert "Concurrent" not in out
+    assert out.index("131K") < out.index("IN2")  # region is the last column
+
+
+def test_managed_models_table_warns_on_region_errors(capture, monkeypatch):
+    warnings: list[str] = []
+    monkeypatch.setattr(render, "warning", lambda m: warnings.append(m))
+    result = ManagedModelListResult(region_errors=[RegionError(region="india-chennai-01", error="timeout")])
+    render.managed_models_table(result)
+    assert any("IN1" in w and "timeout" in w for w in warnings)
+
+
+def test_detail_managed_shows_model_and_api_name(capture):
+    managed = {"model_slug": "glm-5.2", "display_name": "GLM 5.2", "api_model_name": "zai-org/GLM-5.2"}
+    render.deployment_detail(_deployment(args=None, env=None, managed_model=managed))
+    out = capture.getvalue()
+    assert "GLM 5.2 (glm-5.2, managed)" in out
+    assert "zai-org/GLM-5.2" in out
+    assert "Args" not in out
+
+
+def test_table_long_name_wraps_instead_of_hiding_columns(monkeypatch):
+    buf = StringIO()
+    monkeypatch.setattr(render, "stdout_console", Console(file=buf, color_system=None, width=90))
+    long_name = "nemotron-3.5-super-vl-120b-a12b-nvfp4"
+    render.deployments_table(DeploymentListResult(deployments=[_summary(name=long_name)]))
+    out = buf.getvalue()
+    assert "running" in out  # Status stays readable
+    assert long_name not in out  # the name is folded across lines instead
+
+
+def test_deployments_table_shows_type(capture):
+    managed = _summary(deployment_id="dep-managed", managed_model=ManagedModelSummary(model_slug="glm-5.2"))
+    render.deployments_table(DeploymentListResult(deployments=[_summary(), managed]))
+    out = capture.getvalue()
+    assert "Type" in out
+    assert "custom" in out
+    assert "managed" in out
