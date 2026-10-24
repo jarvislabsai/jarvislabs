@@ -102,8 +102,15 @@ def test_sdk_chat_stream(mock_transport):
     assert body["stream_options"] == {"include_usage": True}
 
 
-def test_sdk_chat_stream_error(mock_transport):
-    mock_transport.stream_lines.return_value = iter(['data: {"error": {"message": "Upstream failed"}}'])
+@pytest.mark.parametrize(
+    "line",
+    [
+        'data: {"error": {"message": "Upstream failed"}}',
+        'data: {"error": true, "status_code": 500, "message": "Upstream failed"}',
+    ],
+)
+def test_sdk_chat_stream_error(mock_transport, line):
+    mock_transport.stream_lines.return_value = iter(["event: error", line])
     with pytest.raises(JarvislabsError, match="Upstream failed"):
         list(Models(mock_transport).chat_stream("qwen", HELLO))
 

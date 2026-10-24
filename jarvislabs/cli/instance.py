@@ -308,7 +308,7 @@ def instance_pause(
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Pause a running instance."""
+    """Pause a running instance. Its storage is still billed while it is paused."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     client = get_client()
     with render.spinner("Checking instance..."):

@@ -274,7 +274,7 @@ def _show_getting_started() -> None:
     instance_text.append("jl list\n", style="bold")
     instance_text.append("Pause     ", style=_MUTED)
     instance_text.append("jl pause <id>", style="bold")
-    instance_text.append("              stops billing, keeps storage\n", style=_MUTED)
+    instance_text.append("              stops GPU billing, keeps storage\n", style=_MUTED)
     instance_text.append("Resume    ", style=_MUTED)
     instance_text.append("jl resume <id>", style="bold")
     instance_text.append("             pick up where you left off\n", style=_MUTED)

@@ -45,7 +45,11 @@ class Models:
                 continue
             chunk = json.loads(line.removeprefix("data: "))
             if "error" in chunk:
-                raise JarvislabsError(chunk["error"]["message"])
+                # OpenAI sends {"error": {"message": ...}}; a deployment sends {"error": true, "message": ...}.
+                error = chunk["error"]
+                raise JarvislabsError(
+                    error["message"] if isinstance(error, dict) else chunk.get("message", "Request failed")
+                )
             yield chunk
 
     def chat_submit(self, model_id: str, messages: list[dict], *, base_url: str, **params) -> None:
