@@ -26,7 +26,8 @@ BETA_HELP_NOTICE = (
 
 # Shown under the help of the commands that take deployment settings. The server checks the limits.
 SETTINGS_DOCS_NOTE = (
-    "For what each setting means and its allowed range, see https://docs.jarvislabs.ai/serverless"
+    "For what each setting means and its allowed range, see "
+    "[link=https://docs.jarvislabs.ai/serverless]https://docs.jarvislabs.ai/serverless[/link]"
 )
 
 deploy_app = typer.Typer(
