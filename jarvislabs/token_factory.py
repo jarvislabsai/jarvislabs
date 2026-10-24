@@ -25,28 +25,13 @@ class Models:
         return ModelInfo(**self._t.request("GET", f"models/{model_id}", base_url=MODELS_API_URL))
 
     # Chat calls default to the Token Factory; pass ``base_url`` to call another
-    # OpenAI-compatible endpoint, such as a deployment's ``openai_base_url``, and
-    # ``read_timeout`` (seconds) when the first reply can be slow, e.g. while a worker starts.
-    def chat(
-        self,
-        model_id: str,
-        messages: list[dict],
-        *,
-        base_url: str = MODELS_API_URL,
-        read_timeout: float | None = None,
-        **params,
-    ) -> dict:
+    # OpenAI-compatible endpoint, such as a deployment's ``openai_base_url``.
+    def chat(self, model_id: str, messages: list[dict], *, base_url: str = MODELS_API_URL, **params) -> dict:
         body = {"model": model_id, "messages": messages, **params}
-        return self._t.request("POST", "chat/completions", json=body, base_url=base_url, read_timeout=read_timeout)
+        return self._t.request("POST", "chat/completions", json=body, base_url=base_url)
 
     def chat_stream(
-        self,
-        model_id: str,
-        messages: list[dict],
-        *,
-        base_url: str = MODELS_API_URL,
-        read_timeout: float | None = None,
-        **params,
+        self, model_id: str, messages: list[dict], *, base_url: str = MODELS_API_URL, **params
     ) -> Iterator[dict]:
         body = {
             "model": model_id,
@@ -55,10 +40,7 @@ class Models:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
-        lines = self._t.stream_lines(
-            "chat/completions", method="POST", json=body, base_url=base_url, read_timeout=read_timeout
-        )
-        for line in lines:
+        for line in self._t.stream_lines("chat/completions", method="POST", json=body, base_url=base_url):
             if not line.startswith("data: ") or line == "data: [DONE]":
                 continue
             chunk = json.loads(line.removeprefix("data: "))

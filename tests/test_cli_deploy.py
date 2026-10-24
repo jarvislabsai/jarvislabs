@@ -962,8 +962,7 @@ def test_deploy_chat_sends_to_the_deployment(monkeypatch):
     model, messages, params = sent.calls[0]
     assert model == "Qwen/Qwen3-0.6B"
     assert messages == [{"role": "user", "content": "Say PONG"}]
-    # read_timeout = the deployment's wait_time (60) + the normal read timeout (120)
-    assert params == {"base_url": "https://x/openai/dep1/v1", "max_tokens": 20, "read_timeout": 180}
+    assert params == {"base_url": "https://x/openai/dep1/v1", "max_tokens": 20}
     sent.transport.submit_stream.assert_not_called()
 
 
@@ -1056,4 +1055,4 @@ def test_deploy_chat_sends_image_and_params(monkeypatch, tmp_path):
     deploy.deploy_chat("dep1", "Describe", image=[str(photo)], param=["temperature=0.5"])
     _, messages, params = sent.calls[0]
     assert messages[0]["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
-    assert params == {"temperature": 0.5, "base_url": "https://x/openai/dep1/v1", "read_timeout": 180}
+    assert params == {"temperature": 0.5, "base_url": "https://x/openai/dep1/v1"}

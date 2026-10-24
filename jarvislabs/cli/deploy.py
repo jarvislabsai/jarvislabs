@@ -23,7 +23,6 @@ from jarvislabs.cli.models import (
     stream_reply,
     user_content,
 )
-from jarvislabs.constants import HTTP_TIMEOUT_READ_S
 from jarvislabs.regions import normalize_serverless_region
 
 if TYPE_CHECKING:
@@ -451,8 +450,6 @@ def deploy_chat(
 
     params = merge_params({"max_tokens": max_tokens} if max_tokens else {}, extra)
     params["base_url"] = base_url
-    # A busy deployment holds a request up to wait_time until a slot frees, so wait at least that long for a reply.
-    params["read_timeout"] = (deployment.wait_time or 0) + HTTP_TIMEOUT_READ_S
     messages = [{"role": "system", "content": system}] if system else []
 
     def send(history: list[dict]) -> dict | None:

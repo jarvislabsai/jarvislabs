@@ -245,11 +245,3 @@ def test_submit_stream_wraps_connection_errors():
 def test_structured_detail_reads_as_text():
     payload = {"detail": {"message": "Choose a gpu_type for this model", "gpu_types": ["H100", "H200"]}}
     assert extract_message(payload) == "Choose a gpu_type for this model. gpu_types: H100, H200"
-
-
-def test_read_timeout_overrides_only_the_read_wait():
-    t = Transport(token="t")
-    timeout = t._timeout(500)
-    assert timeout.read == 500
-    assert timeout.connect == t._client.timeout.connect
-    assert t._timeout(None) == t._client.timeout

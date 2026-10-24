@@ -40,9 +40,7 @@ ParamOption = Annotated[
 ]
 # Request fields jl sets itself, and the names of the SDK chat call's own arguments (base_url decides where
 # the request and API key go); --param can't replace them.
-RESERVED_PARAMS = frozenset(
-    {"model", "messages", "stream", "stream_options", "base_url", "read_timeout", "model_id", "self"}
-)
+RESERVED_PARAMS = frozenset({"model", "messages", "stream", "stream_options", "base_url", "model_id", "self"})
 
 # Chat sessions keep history across separate `jl models chat` calls (for agents) until unused this long.
 # They live in the user's own cache folder, readable only by them.

@@ -90,7 +90,6 @@ def test_sdk_chat(mock_transport):
         "chat/completions",
         json={"model": "qwen", "messages": HELLO, "max_tokens": 10},
         base_url=MODELS_API_URL,
-        read_timeout=None,
     )
 
 
@@ -655,7 +654,7 @@ def test_sdk_chat_accepts_named_arguments(mock_transport):
     assert mock_transport.request.call_args.kwargs["json"] == {"model": "qwen", "messages": HELLO}
 
 
-@pytest.mark.parametrize("key", ["model_id", "self", "read_timeout"])
+@pytest.mark.parametrize("key", ["model_id", "self", "base_url"])
 def test_request_params_reserves_sdk_argument_names(monkeypatch, key):
     errors = _errors(monkeypatch)
     with pytest.raises(SystemExit):
