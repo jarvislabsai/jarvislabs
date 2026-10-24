@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import base64
 import json
-import math
 import mimetypes
 import os
 import select
 import stat
 import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -39,9 +39,11 @@ ParamOption = Annotated[
         "valid JSON; @file reads it from a file. Repeatable.",
     ),
 ]
-# Request fields jl sets itself, and the chat call's own options (base_url decides where the request and
-# API key go); --param can't replace them.
-RESERVED_PARAMS = frozenset({"model", "messages", "stream", "stream_options", "base_url", "read_timeout"})
+# Request fields jl sets itself, and the names of the SDK chat call's own arguments (base_url decides where
+# the request and API key go); --param can't replace them.
+RESERVED_PARAMS = frozenset(
+    {"model", "messages", "stream", "stream_options", "base_url", "read_timeout", "model_id", "self"}
+)
 
 # Chat sessions keep history across separate `jl models chat` calls (for agents) until unused this long.
 # They live in the user's own cache folder, readable only by them.
@@ -217,7 +219,7 @@ def _load_session(session_id: str) -> list[dict]:
         messages = json.loads(path.read_text())["messages"]
     except (OSError, ValueError, KeyError, TypeError):
         messages = None
-    if not isinstance(messages, list):
+    if not isinstance(messages, list) or not all(isinstance(message, dict) for message in messages):
         render.die(f"Session {session_id} is damaged. Send a prompt without --session to start a new one.")
     return messages
 
@@ -233,11 +235,14 @@ def _save_session(session_id: str, messages: list[dict]) -> None:
     """Write the file only the user can read, then swap it in, so an interrupted save can't leave it half-written."""
     CHAT_SESSIONS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     path = _session_path(session_id)
-    tmp = path.with_suffix(".tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        json.dump({"messages": messages}, f)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=CHAT_SESSIONS_DIR, suffix=".tmp")  # unique per save, created 0600
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump({"messages": messages}, f)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def _prune_sessions() -> None:
@@ -275,7 +280,7 @@ def _read_stdin(*, wait: bool) -> str:
         if not chunk:
             break
         chunks.append(chunk)
-    return b"".join(chunks).decode(errors="replace").strip()
+    return b"".join(chunks).decode(sys.stdin.encoding or "utf-8", errors="replace").strip()
 
 
 def _thinking_params(model: ModelInfo, thinking: bool | None, effort: str | None) -> dict:
@@ -350,8 +355,10 @@ def request_params(pairs: list[str] | None, *, json_output: bool) -> dict[str, A
             value = json.loads(raw)
         except json.JSONDecodeError:
             value = raw
-        if isinstance(value, float) and not math.isfinite(value):
-            render.die(f"--param {key}: {raw} is not a finite number.")
+        try:
+            json.dumps(value, allow_nan=False)
+        except ValueError:
+            render.die(f"--param {key}: NaN and infinite numbers aren't valid JSON.")
         params[key] = value
     # A streamed reply shows one answer, so several answers (n) need the full JSON response.
     if params.get("n", 1) != 1 and not json_output:

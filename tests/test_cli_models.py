@@ -626,12 +626,11 @@ def test_request_params_rejects_non_finite_numbers_and_unreadable_files(monkeypa
     bad = tmp_path / "bad.json"
     bad.write_bytes(b"\xff")
     errors = _errors(monkeypatch)
-    for pairs in (["temperature=NaN"], ["temperature=1e999"], [f"tools=@{bad}"]):
+    for pairs in (["temperature=NaN"], ["temperature=1e999"], ['logit_bias={"42": NaN}'], [f"tools=@{bad}"]):
         with pytest.raises(SystemExit):
             models_cli.request_params(pairs, json_output=False)
-    assert "not a finite number" in errors[0]
-    assert "not a finite number" in errors[1]
-    assert "can't read" in errors[2]
+    assert all("aren't valid JSON" in error for error in errors[:3])
+    assert "can't read" in errors[3]
 
 
 def test_request_params_n_needs_json(monkeypatch):
@@ -642,9 +641,17 @@ def test_request_params_n_needs_json(monkeypatch):
     assert models_cli.request_params(["n=2"], json_output=True) == {"n": 2}
 
 
-def test_sdk_chat_keeps_model_id_body_field_apart(mock_transport):
-    Models(mock_transport).chat("qwen", HELLO, model_id="x")
-    assert mock_transport.request.call_args.kwargs["json"]["model_id"] == "x"
+def test_sdk_chat_accepts_named_arguments(mock_transport):
+    Models(mock_transport).chat(model_id="qwen", messages=HELLO)
+    assert mock_transport.request.call_args.kwargs["json"] == {"model": "qwen", "messages": HELLO}
+
+
+@pytest.mark.parametrize("key", ["model_id", "self", "read_timeout"])
+def test_request_params_reserves_sdk_argument_names(monkeypatch, key):
+    errors = _errors(monkeypatch)
+    with pytest.raises(SystemExit):
+        models_cli.request_params([f"{key}=x"], json_output=False)
+    assert errors == [f"--param {key} is set by jl and can't be changed."]
 
 
 def test_stream_that_ends_early_is_not_a_reply(monkeypatch):
@@ -681,7 +688,7 @@ def test_json_tool_call_turn_is_not_saved(monkeypatch, sessions_dir):
     assert "session" not in printed[0]
 
 
-@pytest.mark.parametrize("content", ["", "{}", '{"messages": null}', "not json"])
+@pytest.mark.parametrize("content", ["", "{}", '{"messages": null}', '{"messages": [null]}', "not json"])
 def test_damaged_session_is_a_clear_error(monkeypatch, sessions_dir, content):
     sessions_dir.mkdir(parents=True, exist_ok=True)
     (sessions_dir / "broken.json").write_text(content)
@@ -714,3 +721,15 @@ def test_error_text_is_not_read_as_markup(monkeypatch):
     monkeypatch.setattr(render, "console", Console(file=buf, color_system=None))
     render.error("Unknown model: [/bold]")
     assert "[/bold]" in buf.getvalue()
+
+
+def test_concurrent_saves_both_land(sessions_dir):
+    import threading
+
+    threads = [threading.Thread(target=models_cli._save_session, args=("shared", [{"n": i}])) for i in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert models_cli._load_session("shared") in ([{"n": i}] for i in range(8))
+    assert not list(sessions_dir.glob("*.tmp"))
