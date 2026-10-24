@@ -764,8 +764,6 @@ def _gpu_subtable(gpus: list, sym: str, title: str, *, show_spot: bool) -> None:
         table.add_column("Spot", justify="right")
 
     for gpu in available:
-        spot_price = display_spot_price(gpu)
-        spot_available = getattr(gpu, "num_free_devices", 0) > 0
         row = [
             "[green]●[/green]",
             f"[bold]{gpu.gpu_type}[/bold]",
@@ -776,16 +774,10 @@ def _gpu_subtable(gpus: list, sym: str, title: str, *, show_spot: bool) -> None:
             f"[green]{sym}{gpu.price_per_hour:.2f}[/green]" if gpu.price_per_hour else "—",
         ]
         if show_spot:
-            if spot_price is not None and spot_available:
-                row.append(f"[green]{sym}{spot_price:.2f}[/green]")
-            elif spot_price is not None:
-                row.append(f"[dim]{sym}{spot_price:.2f}[/dim]")
-            else:
-                row.append("—")
+            row.append(_spot_cell(gpu, sym, empty="—"))
         table.add_row(*row)
 
     for gpu in unavailable:
-        spot_price = display_spot_price(gpu)
         row = [
             "[dim]○[/dim]",
             f"[dim]{gpu.gpu_type}[/dim]",
@@ -796,10 +788,19 @@ def _gpu_subtable(gpus: list, sym: str, title: str, *, show_spot: bool) -> None:
             f"[dim]{sym}{gpu.price_per_hour:.2f}[/dim]" if gpu.price_per_hour else "[dim]—[/dim]",
         ]
         if show_spot:
-            row.append(f"[dim]{sym}{spot_price:.2f}[/dim]" if spot_price is not None else "[dim]—[/dim]")
+            row.append(_spot_cell(gpu, sym, empty="[dim]—[/dim]"))
         table.add_row(*row)
 
     stdout_console.print(table)
+
+
+def _spot_cell(gpu, sym: str, *, empty: str) -> str:
+    """Spot price in green when spot GPUs are free (even if on-demand is full), dimmed otherwise."""
+    spot_price = display_spot_price(gpu)
+    if spot_price is None:
+        return empty
+    color = "green" if gpu.spot_free_devices > 0 else "dim"
+    return f"[{color}]{sym}{spot_price:.2f}[/{color}]"
 
 
 def _on_demand_available(gpu) -> bool:

@@ -64,7 +64,7 @@ Some options work only with some kinds. For example, `--spot`, `--template` and 
 
 - `effective_num_free_devices` is how many GPUs a normal (on-demand) instance can get.
 - `num_free_devices` is how many GPUs are free right now, without taking any back from spot instances.
-- `jl gpus` does not show how many GPUs a spot instance can get. Spot is offered only in rows that have a `spot_price`.
+- `spot_num_free_devices` is how many GPUs a spot instance can get. Spot is offered only in rows that have a `spot_price`.
 - `workload_type` is `"container"`, `"vm"`, or `null`, which means the row is for both.
 
 **Pick a region, or let the CLI pick.** Instance regions are `IN1`, `IN2` and `EU1`, and each region has different GPU types. If you leave out `--region`, the CLI prefers a region that has free GPUs of the type you asked for.

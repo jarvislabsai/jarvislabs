@@ -7,6 +7,7 @@ import pytest
 from rich.console import Console
 
 from jarvislabs.cli import render
+from jarvislabs.models import ServerMetaGPU
 
 
 def test_service_url_rows_maps_builtin_and_custom_ports():
@@ -199,7 +200,7 @@ def _make_gpu(**overrides):
         "workload_type": None,
     }
     defaults.update(overrides)
-    return SimpleNamespace(**defaults)
+    return ServerMetaGPU(**defaults)
 
 
 def test_gpu_table_splits_container_and_vm():
@@ -238,6 +239,22 @@ def test_gpu_table_uses_effective_free_devices_for_on_demand_availability():
     a100_row = next(line for line in output.splitlines() if "A100-80GB" in line)
     assert "●" in h100_row
     assert "○" in a100_row
+
+
+def test_spot_free_devices_prefers_spot_count():
+    assert _make_gpu(num_free_devices=0, spot_num_free_devices=3).spot_free_devices == 3
+    assert _make_gpu(num_free_devices=2).spot_free_devices == 2
+
+
+def test_spot_cell_is_green_when_only_spot_gpus_are_free():
+    gpu = _make_gpu(
+        workload_type="container",
+        num_free_devices=0,
+        effective_num_free_devices=0,
+        spot_num_free_devices=2,
+        spot_price=0.29,
+    )
+    assert render._spot_cell(gpu, "$", empty="—") == "[green]$0.29[/green]"
 
 
 def test_gpu_table_dims_spot_price_when_spot_capacity_is_not_free():

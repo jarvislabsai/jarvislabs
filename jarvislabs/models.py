@@ -125,6 +125,7 @@ class ServerMetaGPU(BaseModel):
     region: RegionCode
     num_free_devices: int = 0
     effective_num_free_devices: int | None = None
+    spot_num_free_devices: int | None = None
     price_per_hour: float | None = None
     spot_price: float | None = None
     vram: str | None = None
@@ -139,6 +140,11 @@ class ServerMetaGPU(BaseModel):
         if v is None or (isinstance(v, str) and not v.strip()):
             return 0
         return int(v)
+
+    @property
+    def spot_free_devices(self) -> int:
+        """Free GPUs a spot instance can use; falls back to num_free_devices if the backend omits the spot count."""
+        return self.num_free_devices if self.spot_num_free_devices is None else self.spot_num_free_devices
 
 
 class ServerMetaResponse(BaseModel):
