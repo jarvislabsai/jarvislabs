@@ -651,18 +651,16 @@ def model_detail(model, base_url: str) -> None:
 
 
 def model_snippets(model_id: str, base_url: str) -> None:
-    body = json.dumps(
-        {
-            "model": model_id,
-            "messages": [{"role": "user", "content": "Hello"}],
-            "max_tokens": MODELS_DEFAULT_MAX_TOKENS,
-        }
-    )
+    # One field per line, so a narrow terminal doesn't have to wrap the JSON body.
     curl = (
         f"curl {base_url}/chat/completions \\\n"
         '  -H "Authorization: Bearer $JL_API_KEY" \\\n'
         '  -H "Content-Type: application/json" \\\n'
-        f"  -d '{body}'"
+        "  -d '{\n"
+        f'    "model": {json.dumps(model_id)},\n'
+        '    "messages": [{"role": "user", "content": "Hello"}],\n'
+        f'    "max_tokens": {MODELS_DEFAULT_MAX_TOKENS}\n'
+        "  }'"
     )
     python = _openai_snippet(base_url, model_id, MODELS_DEFAULT_MAX_TOKENS)
     for title, code, lexer in (("Python", python, "python"), ("curl", curl, "bash")):

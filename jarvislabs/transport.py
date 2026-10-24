@@ -61,15 +61,20 @@ class Transport:
         params: dict | None = None,
         files: dict | None = None,
         base_url: str | None = None,
+        read_timeout: float | None = None,
     ) -> dict | list:
-        """Send an HTTP request, retrying idempotent calls on transient failures."""
+        """Send an HTTP request, retrying idempotent calls on transient failures.
+
+        ``read_timeout`` replaces the default wait for the response, for calls that can be slow to answer.
+        """
         url = (base_url or self._base_url).rstrip("/") + "/" + path.lstrip("/")
         can_retry = method.upper() in SAFE_METHODS
+        timeout = self._timeout(read_timeout)
 
         for attempt in range(MAX_RETRIES + 1):
             retriable_attempt = can_retry and attempt < MAX_RETRIES
             try:
-                resp = self._client.request(method, url, json=json, params=params, files=files)
+                resp = self._client.request(method, url, json=json, params=params, files=files, timeout=timeout)
             except httpx.HTTPError as exc:
                 if retriable_attempt:
                     time.sleep(2**attempt)
@@ -97,15 +102,19 @@ class Transport:
         json: dict | None = None,
         params: dict | None = None,
         base_url: str | None = None,
+        read_timeout: float | None = None,
     ) -> Iterator[str]:
         """Open a streaming request and yield response lines as they arrive.
 
         No retries: a stream is long-lived and replaying it would repeat
         lines. The connection closes when the caller stops iterating.
+        ``read_timeout`` replaces the default wait between lines.
         """
         url = (base_url or self._base_url).rstrip("/") + "/" + path.lstrip("/")
         try:
-            with self._client.stream(method, url, json=json, params=params) as resp:
+            with self._client.stream(
+                method, url, json=json, params=params, timeout=self._timeout(read_timeout)
+            ) as resp:
                 if not resp.is_success:
                     resp.read()  # streamed bodies aren't loaded until asked
                     raise _api_error(resp)
@@ -113,6 +122,11 @@ class Transport:
         except httpx.HTTPError as exc:
             label = "timed out" if isinstance(exc, httpx.TimeoutException) else "failed"
             raise APIError(0, f"Stream {label}: {method} {path}") from exc
+
+    def _timeout(self, read_timeout: float | None) -> httpx.Timeout:
+        if read_timeout is None:
+            return self._client.timeout
+        return httpx.Timeout(HTTP_TIMEOUT_READ_S, connect=HTTP_TIMEOUT_CONNECT_S, read=read_timeout)
 
     def close(self) -> None:
         self._client.close()

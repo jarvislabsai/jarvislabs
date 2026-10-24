@@ -86,7 +86,11 @@ def test_sdk_list_and_get(mock_transport):
 def test_sdk_chat(mock_transport):
     Models(mock_transport).chat("qwen", HELLO, max_tokens=10)
     mock_transport.request.assert_called_once_with(
-        "POST", "chat/completions", json={"model": "qwen", "messages": HELLO, "max_tokens": 10}, base_url=MODELS_API_URL
+        "POST",
+        "chat/completions",
+        json={"model": "qwen", "messages": HELLO, "max_tokens": 10},
+        base_url=MODELS_API_URL,
+        read_timeout=None,
     )
 
 

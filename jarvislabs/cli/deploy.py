@@ -23,6 +23,7 @@ from jarvislabs.cli.models import (
     stream_reply,
     user_content,
 )
+from jarvislabs.constants import HTTP_TIMEOUT_READ_S
 from jarvislabs.regions import normalize_serverless_region
 
 if TYPE_CHECKING:
@@ -434,6 +435,10 @@ def deploy_chat(
     model = deployment.served_model
     params = merge_params({"max_tokens": max_tokens} if max_tokens else {}, extra)
     params["base_url"] = client.deployments.openai_base_url(deployment_id, region=deployment.region)
+    # The server holds a request up to wait_time while a worker starts, so wait at least that long for a reply.
+    params["read_timeout"] = (deployment.wait_time or 0) + HTTP_TIMEOUT_READ_S
+    if not deployment.workers.healthy:
+        render.info("No worker is ready yet, so the first reply waits for one to start. This can take a few minutes.")
     messages = [{"role": "system", "content": system}] if system else []
 
     def send(history: list[dict]) -> dict | None:

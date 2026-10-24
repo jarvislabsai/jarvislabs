@@ -38,8 +38,9 @@ ParamOption = Annotated[
         "valid JSON; @file reads it from a file. Repeatable.",
     ),
 ]
-# Request fields jl sets itself, and base_url (where the request and API key go); --param can't replace them.
-RESERVED_PARAMS = frozenset({"model", "messages", "stream", "stream_options", "base_url"})
+# Request fields jl sets itself, and the chat call's own options (base_url decides where the request and
+# API key go); --param can't replace them.
+RESERVED_PARAMS = frozenset({"model", "messages", "stream", "stream_options", "base_url", "read_timeout"})
 
 # Chat sessions keep history across separate `jl models chat` calls (for agents) until ended or unused this long.
 CHAT_SESSIONS_DIR = Path(tempfile.gettempdir()) / "jl-chats"
