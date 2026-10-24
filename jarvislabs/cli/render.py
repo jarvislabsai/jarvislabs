@@ -900,25 +900,25 @@ def jsonable_cpu_meta(cpu_meta: dict) -> dict:
 def success(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[green]✓[/green] {escape(msg)}")
+    console.print(f"[green]✓[/green] {escape(msg)}", highlight=False)
 
 
 def error(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[red]✗[/red] {escape(msg)}", style="red")
+    console.print(f"[red]✗[/red] {escape(msg)}", style="red", highlight=False)
 
 
 def info(msg: str, style: str = "dim") -> None:
     if state.json_output:
         return
-    console.print(f"[{style}]{escape(msg)}[/{style}]")
+    console.print(f"[{style}]{escape(msg)}[/{style}]", highlight=False)
 
 
 def warning(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[yellow]![/yellow] {escape(msg)}")
+    console.print(f"[yellow]![/yellow] {escape(msg)}", highlight=False)
 
 
 # ── Confirmation ─────────────────────────────────────────────────────────────
