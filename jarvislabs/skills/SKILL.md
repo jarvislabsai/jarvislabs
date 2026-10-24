@@ -358,7 +358,7 @@ jl deploy managed-models create <model_slug> \
 
 A running deployment exposes an OpenAI-compatible base URL (`openai_base_url` from `jl deploy get <id> --json`, present only when `running`), authed with your JarvisLabs API key. **Use the served model name** — if you set `--arg served-model-name=<x>`, that is the `model` field, not the `--model` id. For a managed deployment, the `model` field is `managed_model.api_model_name` from `jl deploy get <id> --json`. `create` prints a paste-ready snippet; `get` shows the base URL.
 
-Once `running`, send a real inference request to confirm the model responds as expected before relying on the endpoint: `jl deploy chat <id> "Say hello" --max-tokens 50` (add `--json` for the full response). If no worker is running (common with `--min-workers 0`), `jl deploy chat` does not wait and does not send your message: it starts a worker if none is starting, then exits with code 1 and a "starting, try again shortly" error. Wait a few minutes until `workers.healthy` is at least 1 in `jl deploy get <id> --json`, then retry. Other clients that call the endpoint directly wait while a worker starts, or get a 504 "A worker is still starting" for large models, so give the first call a generous timeout.
+Once `running`, send a real inference request to confirm the model responds as expected before relying on the endpoint: `jl deploy chat <id> "Say hello" --max-tokens 50` (add `--json` for the full response). If no worker is running (common with `--min-workers 0`), `jl deploy chat` does not wait and does not send your message: it starts a worker if none is starting, then exits with code 1 and a "starting, try again shortly" error. Wait a few minutes until `workers.healthy` is at least 1 in `jl deploy get <id> --json`, then retry. Other clients that call the endpoint directly may wait while a worker starts, or get an error asking them to retry, so give the first call a generous timeout and retry.
 
 ### Inspecting & managing
 
@@ -392,21 +392,14 @@ jl models chat <id> "prompt" --max-tokens 500       # streamed reply: answer on 
 jl models chat <id> "prompt" --json                 # full OpenAI response, including usage
 cat file.txt | jl models chat <id> "Summarize this" # piped text is added to the prompt
 jl models chat <id> "Describe it" --image photo.jpg # image: local file (sent as base64) or http(s) URL; repeatable
-jl models chat <id> "Hi" --param temperature=0.2     # any OpenAI request field; value is JSON if it parses, @file reads a file
-jl models chat <id> "Weather?" --param tools=@tools.json --json   # tool calls come back only in --json output
-
-# Multi-turn chat: each call is one turn, history is kept between calls
-jl models chat <id> "first message"                 # every reply prints "Session <ID>" on stderr (--json: "session" field)
-jl models chat <id> "follow-up" --session <ID>      # sends the earlier turns too (always use the ID, not -c)
 ```
 
 - **Always pass the model ID and a prompt.** Without them, `get`/`chat` open an interactive picker or chat, which needs a terminal; in scripts or with `--json` they exit with an error.
 - `--thinking/--no-thinking` and `--effort <level>` work only on models that support them; check `thinking` in `jl models get <id> --json`.
-- `-c` continues the most recent session on the machine; it's for humans. Agents must pass `--session <ID>`, since `-c` mixes histories when several chats run at once.
-- Sessions are temporary: stored locally and deleted after 15 minutes unused. Each turn resends the whole history, so long sessions cost more. `--system` is set only when the session starts.
-- `--image` works only on models whose `input_modalities` include `image` (see `jl models get <id> --json`). In a session, earlier images are sent again on every turn, which adds input tokens. URLs are downloaded by the model server; if a site blocks that, download the file and pass the local path.
-- `--param` can't set `model`, `messages`, `stream`, `stream_options`, `base_url`, `model_id` or `self`. `--param n=2` needs `--json`. A turn that ends in tool calls isn't saved to the session (jl can't send the tool results back). `--param chat_template_kwargs='{...}'` is combined with `--thinking`/`--effort`.
-- `jl deploy chat <id>` takes the same `--image` and `--param` options.
+- Each `jl models chat` call is a new conversation; the CLI keeps no history between calls. For a multi-turn conversation, call the API from code (see below) and send the earlier messages yourself.
+- `--image` works only on models whose `input_modalities` include `image` (see `jl models get <id> --json`). URLs are downloaded by the model server; if a site blocks that, download the file and pass the local path.
+- For other request fields (temperature, tools, response_format, ...), call the API from code.
+- `jl deploy chat <id>` takes the same `--image` option.
 - Other options: `--system "<prompt>"`, `--max-tokens N`. Every call costs money, so cap output with `--max-tokens`. An empty balance fails with an insufficient-balance error.
 - From code: base URL `https://models.jarvislabs.net/v1`, API key = the JarvisLabs API key, `model` = the model ID. `jl models get <id>` prints Python and curl snippets.
 

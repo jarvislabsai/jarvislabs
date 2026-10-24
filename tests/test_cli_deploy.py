@@ -10,7 +10,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from jarvislabs.cli import deploy, options as cli_options, state
+from jarvislabs.cli import deploy, state
 from jarvislabs.cli.app import app
 from jarvislabs.exceptions import NotFoundError, RegionResolutionError
 from jarvislabs.models import (
@@ -268,7 +268,7 @@ def test_create_missing_required_flag_exits_nonzero():
     ],
 )
 def test_parse_kv_acceptance_cases(pairs, expected):
-    assert cli_options.parse_kv(pairs, flag="--arg") == expected
+    assert deploy._parse_kv(pairs, flag="--arg") == expected
 
 
 def test_create_confirm_declined_no_call(monkeypatch):
@@ -302,7 +302,7 @@ def test_env_invalid_syntax_does_not_echo_value(monkeypatch):
 
     monkeypatch.setattr(deploy.render, "die", fake_die)
     with pytest.raises(SystemExit) as exc:
-        cli_options.parse_kv(["HF_TOKEN:hf_secret"], flag="--env", redact=True)
+        deploy._parse_kv(["HF_TOKEN:hf_secret"], flag="--env", redact=True)
     assert "hf_secret" not in str(exc.value)
     assert "expected key=value" in str(exc.value)
 
@@ -1025,7 +1025,6 @@ def test_deploy_chat_interactive_with_no_workers_exits_before_the_chat(monkeypat
     [
         ({"prompt": None, "image": ["photo.jpg"]}, "Pass a prompt with --image"),
         ({"prompt": None, "json_output": True}, "Pass a prompt."),
-        ({"prompt": "Hi", "param": ["model=x"]}, "--param model is set by jl"),
     ],
 )
 def test_deploy_chat_checks_input_before_waking(monkeypatch, kwargs, message):
@@ -1048,11 +1047,11 @@ def test_deploy_chat_needs_a_running_deployment(monkeypatch):
     assert "is starting; it must be running" in errors[0]
 
 
-def test_deploy_chat_sends_image_and_params(monkeypatch, tmp_path):
+def test_deploy_chat_sends_image(monkeypatch, tmp_path):
     photo = tmp_path / "photo.jpg"
     photo.write_bytes(b"\xff\xd8\xff")
     sent = _chat_setup(monkeypatch)
-    deploy.deploy_chat("dep1", "Describe", image=[str(photo)], param=["temperature=0.5"])
+    deploy.deploy_chat("dep1", "Describe", image=[str(photo)])
     _, messages, params = sent.calls[0]
     assert messages[0]["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
-    assert params == {"temperature": 0.5, "base_url": "https://x/openai/dep1/v1"}
+    assert params == {"base_url": "https://x/openai/dep1/v1"}

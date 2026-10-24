@@ -108,10 +108,9 @@ class Transport:
             yield from resp.iter_lines()
 
     def submit_stream(self, path: str, *, json: dict | None = None, base_url: str | None = None) -> None:
-        """POST a streaming request and return as soon as the server accepts it, without reading the body.
+        """POST a streaming request and return as soon as the server accepts it (2xx), without reading the body.
 
-        Returns once a 2xx status and headers arrive; raises the mapped error otherwise.
-        Closing the connection does not undo work the server has already queued.
+        Raises the mapped error for any other status.
         """
         with self._stream("POST", path, json=json, base_url=base_url):
             pass

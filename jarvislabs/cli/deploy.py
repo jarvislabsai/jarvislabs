@@ -13,16 +13,7 @@ import typer
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
-from jarvislabs.cli.models import (
-    ImageOption,
-    ParamOption,
-    interactive_chat,
-    merge_params,
-    read_prompt,
-    request_params,
-    stream_reply,
-    user_content,
-)
+from jarvislabs.cli.models import ImageOption, interactive_chat, read_prompt, stream_reply, user_content
 from jarvislabs.regions import normalize_serverless_region
 
 if TYPE_CHECKING:
@@ -60,6 +51,21 @@ deploy_app.add_typer(managed_app)
 RegionHintOption = Annotated[
     str | None, typer.Option("--region", help="Region of the deployment (skips the cross-region search).")
 ]
+
+
+def _parse_kv(pairs: list[str] | None, *, flag: str, redact: bool = False) -> dict[str, str]:
+    """Parse repeatable ``key=value`` flags. Split on the first `=`; last key wins.
+
+    ``redact`` keeps the offending value out of the error message (for secrets).
+    """
+    result: dict[str, str] = {}
+    for raw in pairs or []:
+        if "=" not in raw:
+            shown = "" if redact else f" {raw!r}"
+            render.die(f"Invalid {flag}{shown}: expected key=value")
+        key, value = raw.split("=", 1)
+        result[key] = value
+    return result
 
 
 def _finish_create(client, deployment_id: str, region: str, *, detach: bool) -> None:
@@ -170,8 +176,8 @@ def deploy_create(
     [bold bright_yellow]Serverless is in beta. We're actively improving it and would love early feedback. Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
-    args = cli_options.parse_kv(arg, flag="--arg")
-    env_dict = cli_options.parse_kv(env, flag="--env", redact=True)
+    args = _parse_kv(arg, flag="--arg")
+    env_dict = _parse_kv(env, flag="--env", redact=True)
 
     details = (
         f"name={name!r}, region={render.region_input_label(region)}, framework={framework}, "
@@ -395,7 +401,6 @@ def deploy_chat(
         int | None, typer.Option("--max-tokens", help="Maximum output tokens (default: the model's limit).", min=1)
     ] = None,
     image: ImageOption = None,
-    param: ParamOption = None,
     region: RegionHintOption = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -415,11 +420,10 @@ def deploy_chat(
       [dim]# Full OpenAI-style response as JSON[/dim]
       [cyan]jl deploy chat <id> "Hi" --json[/cyan]
 
-      [dim]# An image, and any other OpenAI request field[/dim]
-      [cyan]jl deploy chat <id> "What is in this picture?" --image photo.jpg --param temperature=0.2[/cyan]
+      [dim]# With an image[/dim]
+      [cyan]jl deploy chat <id> "What is in this picture?" --image photo.jpg[/cyan]
     """
     cli_options.apply_command_options(json_output=json_output)
-    extra = request_params(param, json_output=json_output)
     text = read_prompt(prompt)
     if image and not text:
         render.die("Pass a prompt with --image. See: jl deploy chat --help")
@@ -441,15 +445,14 @@ def deploy_chat(
         check = f"Try again shortly. Check progress: jl deploy get {deployment_id}"
         if workers.provisioning or workers.total:
             render.die(f"This deployment is starting a worker. This can take a few minutes. {check}")
-        # Only a queued request starts a worker, so queue a tiny one (never the user's prompt) and stop.
+        # A worker starts only when a request arrives, so send a tiny one (never the user's prompt) and stop.
         with render.spinner("Starting a worker..."):
             client.models.chat_submit(model, [{"role": "user", "content": "ping"}], base_url=base_url, max_tokens=1)
         render.die(
             f"No worker was running, so this deployment is starting one now. This can take a few minutes. {check}"
         )
 
-    params = merge_params({"max_tokens": max_tokens} if max_tokens else {}, extra)
-    params["base_url"] = base_url
+    params = {"base_url": base_url, **({"max_tokens": max_tokens} if max_tokens else {})}
     messages = [{"role": "system", "content": system}] if system else []
 
     def send(history: list[dict]) -> dict | None:

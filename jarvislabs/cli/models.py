@@ -1,19 +1,15 @@
 from __future__ import annotations
 
 import base64
-import json
 import mimetypes
 import os
 import select
 import stat
 import sys
-import time
-import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
-from platformdirs import user_cache_dir
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
@@ -30,22 +26,6 @@ ImageOption = Annotated[
     list[str] | None,
     typer.Option("--image", help="Image to send with the prompt: a local file or an http(s) URL. Repeatable."),
 ]
-ParamOption = Annotated[
-    list[str] | None,
-    typer.Option(
-        "--param",
-        help="Extra request field as key=value, e.g. temperature=0.2. The value is read as JSON when it is "
-        "valid JSON; @file reads it from a file. Repeatable.",
-    ),
-]
-# Request fields jl sets itself, and the names of the SDK chat call's own arguments (base_url decides where
-# the request and API key go); --param can't replace them.
-RESERVED_PARAMS = frozenset({"model", "messages", "stream", "stream_options", "base_url", "model_id", "self"})
-
-# Chat sessions keep history across separate `jl models chat` calls (for agents) until unused this long.
-# They live in the user's own cache folder, readable only by them.
-CHAT_SESSIONS_DIR = Path(user_cache_dir("jl")) / "chat-sessions"
-CHAT_SESSION_TTL_S = 900
 # With a prompt given, piped input is added only if it starts arriving within this time (see _read_stdin).
 STDIN_WAIT_S = 1.0
 
@@ -89,18 +69,7 @@ def models_chat(
     ] = MODELS_DEFAULT_MAX_TOKENS,
     thinking: Annotated[bool | None, typer.Option("--thinking/--no-thinking", help="Turn thinking on or off.")] = None,
     effort: Annotated[str | None, typer.Option("--effort", help="Thinking effort, e.g. low or high.")] = None,
-    session: Annotated[
-        str | None,
-        typer.Option(
-            "--session",
-            help="Continue a session by its ID (every reply prints one). Deleted after 15 minutes unused.",
-        ),
-    ] = None,
-    continue_session: Annotated[
-        bool, typer.Option("--continue", "-c", help="Continue the most recent session (no ID needed).")
-    ] = False,
     image: ImageOption = None,
-    param: ParamOption = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Chat with a model: pass a prompt for one reply, or omit it for an interactive chat.
@@ -128,64 +97,36 @@ def models_chat(
       [dim]# Images (local file or URL), for models that accept them[/dim]
       [cyan]jl models chat <model_id> "What is in this picture?" --image photo.jpg[/cyan]
 
-      [dim]# Any other OpenAI request field[/dim]
-      [cyan]jl models chat <model_id> "List 3 colors" --param temperature=0.2 --param response_format='{"type": "json_object"}'[/cyan]
-      [cyan]jl models chat <model_id> "Weather in Pune?" --param tools=@tools.json --json[/cyan]
-
-      [dim]# Multi-turn chat across separate calls (for agents and scripts)[/dim]
-      [cyan]jl models chat <model_id> "My name is Jay"[/cyan]                     [dim]# prints a session ID[/dim]
-      [cyan]jl models chat <model_id> "What is my name?" --session <ID>[/cyan]
-      [cyan]jl models chat <model_id> "And my age?" -c[/cyan]                     [dim]# continues the most recent session[/dim]
-
     In interactive chat: Ctrl-C stops a reply · Ctrl-D or /exit quits.
     See supported thinking options with: jl models get <model_id>
     """
     cli_options.apply_command_options(json_output=json_output)
-    _prune_sessions()
     text = read_prompt(prompt)
-    if (session or continue_session) and not text:
-        render.die("Pass a prompt with --session or -c. See: jl models chat --help")
     if image and not text:
         render.die("Pass a prompt with --image. See: jl models chat --help")
-    extra = request_params(param, json_output=json_output)
-    session = session or (_latest_session() if continue_session else None)
-    messages = _load_session(session) if session else []
-    session = session or uuid.uuid4().hex[:8]
-    if system and not messages:
-        messages.append({"role": "system", "content": system})
+    if not text and (state.json_output or not render.can_prompt()):
+        render.die("Pass a prompt. See: jl models chat --help")
+    messages = [{"role": "system", "content": system}] if system else []
 
     client = get_client()
     model = _resolve_model(client, model_id)
-    has_images = bool(image) or any(isinstance(m.get("content"), list) for m in messages)
-    if has_images and model.input_modalities and "image" not in model.input_modalities:
+    if image and model.input_modalities and "image" not in model.input_modalities:
         render.die(f"{model.id} doesn't accept images. See the Modalities in: jl models get {model.id}")
-    params = merge_params({**_thinking_params(model, thinking, effort), "max_tokens": max_tokens}, extra)
+    params = {**_thinking_params(model, thinking, effort), "max_tokens": max_tokens}
 
     def send(history: list[dict]) -> dict | None:
         return stream_reply(client.models.chat_stream(model.id, history, **params), model.pricing)
 
     if not text:
-        if state.json_output or not render.can_prompt():
-            render.die("Pass a prompt. See: jl models chat --help")
         interactive_chat(model.id, messages, send)
         return
 
     messages.append({"role": "user", "content": user_content(text, image)})
     if state.json_output:
-        response = client.models.chat(model.id, messages, **params)
-        message = response["choices"][0]["message"]
-        thinking = message.get("reasoning_content") or message.get("reasoning")
-        # A tool-call turn needs the tool results before the chat can go on, which jl can't send; don't save it.
-        if not message.get("tool_calls"):
-            _save_session(session, [*messages, assistant_message(message.get("content") or "", thinking)])
-        # No session ID when nothing was saved (a tool-call turn that starts a session).
-        render.print_json({**response, "session": session} if _session_path(session).exists() else response)
+        render.print_json(client.models.chat(model.id, messages, **params))
         return
-    reply = send(messages)
-    if reply is None:
+    if send(messages) is None:
         raise typer.Exit(1)
-    _save_session(session, [*messages, reply])
-    render.info(f"Session {session}")
 
 
 def _resolve_model(client, model_id: str | None) -> ModelInfo:
@@ -200,46 +141,6 @@ def _resolve_model(client, model_id: str | None) -> ModelInfo:
     with render.spinner("Fetching models..."):
         models = client.models.list()
     return render.select_model(models)
-
-
-def _session_path(session_id: str) -> Path:
-    if not session_id.isalnum():
-        render.die(f"Invalid session ID: {session_id}")
-    return CHAT_SESSIONS_DIR / f"{session_id}.json"
-
-
-def _load_session(session_id: str) -> list[dict]:
-    path = _session_path(session_id)
-    if not path.exists():
-        render.die(f"Session {session_id} not found or expired. Send a prompt without --session to start a new one.")
-    try:
-        messages = json.loads(path.read_text())["messages"]
-    except (OSError, ValueError, KeyError, TypeError):
-        messages = None
-    if not isinstance(messages, list) or not all(isinstance(message, dict) for message in messages):
-        render.die(f"Session {session_id} is damaged. Send a prompt without --session to start a new one.")
-    return messages
-
-
-def _latest_session() -> str:
-    paths = sorted(CHAT_SESSIONS_DIR.glob("*.json"), key=lambda path: path.stat().st_mtime)
-    if not paths:
-        render.die("No session to continue. Send a prompt without -c to start one.")
-    return paths[-1].stem
-
-
-def _save_session(session_id: str, messages: list[dict]) -> None:
-    # The folder is private (0700), so no one else can read the files in it.
-    CHAT_SESSIONS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    _session_path(session_id).write_text(json.dumps({"messages": messages}))
-
-
-def _prune_sessions() -> None:
-    """Delete sessions unused for CHAT_SESSION_TTL_S, so forgotten ones don't pile up."""
-    cutoff = time.time() - CHAT_SESSION_TTL_S
-    for path in CHAT_SESSIONS_DIR.glob("*.json"):
-        if path.stat().st_mtime < cutoff:
-            path.unlink(missing_ok=True)
 
 
 def read_prompt(prompt: str | None) -> str:
@@ -290,8 +191,8 @@ def _thinking_params(model: ModelInfo, thinking: bool | None, effort: str | None
 
 
 def assistant_message(content: str, thinking: str | None = None) -> dict:
-    """An assistant turn for the chat history. The thinking goes back to the model on later turns
-    as ``reasoning_content``: some chat templates (e.g. GLM's) use earlier thinking, others drop it."""
+    """An assistant turn for the chat history; the thinking is kept as ``reasoning_content``,
+    which some models use on later turns."""
     message = {"role": "assistant", "content": content}
     if thinking:
         message["reasoning_content"] = thinking
@@ -325,47 +226,6 @@ def _image_url(image: str) -> str:
     return f"data:{mime};base64,{base64.b64encode(data).decode()}"
 
 
-def request_params(pairs: list[str] | None, *, json_output: bool) -> dict[str, Any]:
-    """Extra request fields from --param key=value. A value is JSON when it parses, else a string;
-    ``@path`` reads the value from a file."""
-    params: dict[str, Any] = {}
-    for key, raw in cli_options.parse_kv(pairs, flag="--param").items():
-        if key in RESERVED_PARAMS:
-            render.die(f"--param {key} is set by jl and can't be changed.")
-        if raw.startswith("@"):
-            path = Path(raw[1:]).expanduser()
-            if not path.is_file():
-                render.die(f"--param {key}: file not found: {raw[1:]}")
-            try:
-                raw = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError) as exc:
-                render.die(f"--param {key}: can't read {raw[1:]}: {exc}")
-        try:
-            value = json.loads(raw)
-        except json.JSONDecodeError:
-            value = raw
-        try:
-            json.dumps(value, allow_nan=False)
-        except ValueError:
-            render.die(f"--param {key}: NaN and infinite numbers aren't valid JSON.")
-        params[key] = value
-    # A streamed reply shows one answer, so several answers (n) need the full JSON response.
-    if params.get("n", 1) != 1 and not json_output:
-        render.die("--param n needs --json, which returns every answer.")
-    return params
-
-
-def merge_params(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
-    """Request fields from jl's own options, overridden by --param. ``chat_template_kwargs`` from both are
-    combined, and a --param max_completion_tokens replaces jl's max_tokens (the API takes only one)."""
-    merged = {**base, **extra}
-    if isinstance(base.get("chat_template_kwargs"), dict) and isinstance(extra.get("chat_template_kwargs"), dict):
-        merged["chat_template_kwargs"] = {**base["chat_template_kwargs"], **extra["chat_template_kwargs"]}
-    if "max_completion_tokens" in extra and "max_tokens" not in extra:
-        merged.pop("max_tokens", None)
-    return merged
-
-
 def stream_reply(chunks: Iterable[dict[str, Any]], pricing: ModelPricing | None = None) -> dict | None:
     """Print a reply as it streams; returns it as an assistant message, or None when Ctrl-C stopped it
     or no answer came back."""
@@ -376,7 +236,7 @@ def stream_reply(chunks: Iterable[dict[str, Any]], pricing: ModelPricing | None 
             choice = chunk["choices"][0] if chunk.get("choices") else {}
             finish_reason = choice.get("finish_reason") or finish_reason
             delta = choice.get("delta") or {}
-            # The Token Factory sends both names; a deployment's engine (vLLM) sends only "reasoning".
+            # Servers name the thinking field either way.
             thought = delta.get("reasoning_content") or delta.get("reasoning")
             if thought:
                 render.chat_thinking(thought)
@@ -394,9 +254,6 @@ def stream_reply(chunks: Iterable[dict[str, Any]], pricing: ModelPricing | None 
     render.chat_usage(usage, pricing)
     if finish_reason == "length":
         render.warning("The reply hit the --max-tokens limit and was cut off. Raise --max-tokens to get all of it.")
-    elif finish_reason == "tool_calls":
-        render.warning("The model wants to call a tool. Add --json to get the tool calls.")
-        return None
     elif finish_reason is None:
         render.warning("The reply stopped before the model finished (the connection ended early).")
         return None

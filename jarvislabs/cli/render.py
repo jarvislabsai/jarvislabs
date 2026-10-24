@@ -667,7 +667,7 @@ def model_snippets(model_id: str, base_url: str) -> None:
         "  }'"
     )
     python = _openai_snippet(base_url, model_id, MODELS_DEFAULT_MAX_TOKENS)
-    for title, code, lexer in (("Python", python, "python"), ("curl", curl, "bash")):
+    for title, code, lexer in (("curl", curl, "bash"), ("Python", python, "python")):
         stdout_console.print()
         stdout_console.print(Rule(f"[bold]{title}[/bold]", align="left", style="dim"))
         stdout_console.print()

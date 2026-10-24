@@ -7,7 +7,6 @@ from io import StringIO
 from types import SimpleNamespace
 
 import pytest
-import typer
 from rich.console import Console
 
 from jarvislabs.cli import models as models_cli, render, state
@@ -44,7 +43,6 @@ HELLO = [{"role": "user", "content": "Hello"}]
 @pytest.fixture(autouse=True)
 def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(render, "spinner", lambda *a, **k: nullcontext())
-    monkeypatch.setattr(models_cli, "CHAT_SESSIONS_DIR", tmp_path)
     monkeypatch.setattr(models_cli, "_read_stdin", lambda **_: "")
     state.json_output = False
     yield
@@ -251,8 +249,7 @@ def test_chat_streams_reply_and_usage(monkeypatch):
     monkeypatch.setattr(render, "info", notes.append)
     assert _capture(models_cli.models_chat, "deepseek", "Hello") == "Hi there\n"
     assert thinking == ["Hmm.", "\n\n"]
-    assert notes[0] == "\n1,000,000 in · 1,000,000 out · $1.000000"
-    assert notes[1].startswith("Session ")
+    assert notes == ["\n1,000,000 in · 1,000,000 out · $1.000000"]
 
 
 def test_chat_piped_input_and_options(monkeypatch):
@@ -275,7 +272,6 @@ def test_chat_json(monkeypatch):
     monkeypatch.setattr(render, "print_json", printed.append)
     models_cli.models_chat("deepseek", "Hello", json_output=True)
     assert printed[0]["id"] == "r1"
-    assert printed[0]["session"]
 
 
 @pytest.mark.parametrize(
@@ -339,109 +335,6 @@ def test_get_detail_shows_modalities(monkeypatch):
     out = _capture(models_cli.models_get, "qwen")
     assert "Input    text, image" in out
     assert "Output   text" in out
-
-
-# ── chat sessions ───────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def sessions_dir(monkeypatch, tmp_path):
-    monkeypatch.setattr(models_cli.uuid, "uuid4", lambda: SimpleNamespace(hex="abc12345ffff"))
-    monkeypatch.setattr(render, "chat_usage", lambda *a: None)
-    return tmp_path
-
-
-def test_session_keeps_history_across_calls(monkeypatch, sessions_dir):
-    calls = _chat_client(monkeypatch, [{"choices": [{"delta": {"content": "Hi Jay"}, "finish_reason": "stop"}]}])
-    notes = []
-    monkeypatch.setattr(render, "info", notes.append)
-    _capture(models_cli.models_chat, "deepseek", "I am Jay", system="Be brief.")
-    assert notes[-1] == "Session abc12345"
-
-    _capture(models_cli.models_chat, "deepseek", "Who am I?", session="abc12345")
-    assert calls[1][0] == [
-        {"role": "system", "content": "Be brief."},
-        {"role": "user", "content": "I am Jay"},
-        {"role": "assistant", "content": "Hi Jay"},
-        {"role": "user", "content": "Who am I?"},
-    ]
-
-
-def test_session_json_saves_reply_and_returns_id(monkeypatch, sessions_dir):
-    reply = {"choices": [{"message": {"role": "assistant", "content": "Hi", "reasoning_content": "Hmm"}}]}
-    _chat_client(monkeypatch, reply=reply)
-    printed = []
-    monkeypatch.setattr(render, "print_json", printed.append)
-    models_cli.models_chat("deepseek", "Hello", json_output=True)
-    assert printed[0]["session"] == "abc12345"
-    saved = models_cli._load_session("abc12345")
-    assert saved[-1] == {"role": "assistant", "content": "Hi", "reasoning_content": "Hmm"}
-
-
-def test_session_not_saved_when_reply_stopped(monkeypatch, sessions_dir):
-    def chat_stream(model_id, messages, **params):
-        raise KeyboardInterrupt
-        yield
-
-    _client(monkeypatch, get=lambda model_id: ModelInfo(**DEEPSEEK), chat_stream=chat_stream)
-    monkeypatch.setattr(render, "info", lambda m: None)
-    with pytest.raises(typer.Exit):
-        _capture(models_cli.models_chat, "deepseek", "Hello")
-    assert not list(sessions_dir.glob("*.json"))
-
-
-def test_unused_sessions_expire(sessions_dir):
-    models_cli._save_session("old", [])
-    models_cli._save_session("fresh", [])
-    stale = models_cli.time.time() - models_cli.CHAT_SESSION_TTL_S - 1
-    os.utime(sessions_dir / "old.json", (stale, stale))
-    models_cli._prune_sessions()
-    assert [p.name for p in sessions_dir.glob("*.json")] == ["fresh.json"]
-
-
-@pytest.mark.parametrize(
-    ("options", "message"),
-    [
-        (
-            {"session": "missing"},
-            "Session missing not found or expired. Send a prompt without --session to start a new one.",
-        ),
-        ({"session": "../etc"}, "Invalid session ID: ../etc"),
-    ],
-)
-def test_session_errors(monkeypatch, sessions_dir, options, message):
-    _chat_client(monkeypatch)
-    errors = _errors(monkeypatch)
-    with pytest.raises(SystemExit):
-        models_cli.models_chat("deepseek", "Hi", **options)
-    assert errors == [message]
-
-
-def test_session_needs_a_prompt(monkeypatch, sessions_dir):
-    _chat_client(monkeypatch)
-    errors = _errors(monkeypatch)
-    with pytest.raises(SystemExit):
-        models_cli.models_chat("deepseek", session="abc123")
-    assert errors == ["Pass a prompt with --session or -c. See: jl models chat --help"]
-
-
-def test_continue_uses_most_recent_session(monkeypatch, sessions_dir):
-    models_cli._save_session("older", [{"role": "user", "content": "old"}])
-    models_cli._save_session("newer", [{"role": "user", "content": "new"}])
-    stale = models_cli.time.time() - 60
-    os.utime(sessions_dir / "older.json", (stale, stale))
-    calls = _chat_client(monkeypatch)
-    monkeypatch.setattr(render, "info", lambda m: None)
-    _capture(models_cli.models_chat, "deepseek", "Next", continue_session=True)
-    assert calls[0][0][0] == {"role": "user", "content": "new"}
-
-
-def test_continue_without_sessions(monkeypatch, sessions_dir):
-    _chat_client(monkeypatch)
-    errors = _errors(monkeypatch)
-    with pytest.raises(SystemExit):
-        models_cli.models_chat("deepseek", "Hi", continue_session=True)
-    assert errors == ["No session to continue. Send a prompt without -c to start one."]
 
 
 def test_stream_reply_warns_when_cut_off(monkeypatch):
@@ -536,61 +429,7 @@ def test_bad_image_paths(monkeypatch, tmp_path, name, message):
     assert message in errors[0]
 
 
-def test_request_params_reads_json_strings_and_files(tmp_path):
-    tools = tmp_path / "tools.json"
-    tools.write_text('[{"type": "function", "function": {"name": "f"}}]')
-    params = models_cli.request_params(
-        json_output=False,
-        pairs=[
-            "temperature=0.2",
-            "seed=7",
-            "logprobs=true",
-            "stop=END",
-            'response_format={"type": "json_object"}',
-            f"tools=@{tools}",
-        ],
-    )
-    assert params == {
-        "temperature": 0.2,
-        "seed": 7,
-        "logprobs": True,
-        "stop": "END",
-        "response_format": {"type": "json_object"},
-        "tools": [{"type": "function", "function": {"name": "f"}}],
-    }
-
-
-@pytest.mark.parametrize(
-    ("pairs", "message"),
-    [
-        (["model=x"], "--param model is set by jl"),
-        (["base_url=https://evil.test"], "--param base_url is set by jl"),
-        (["temperature"], "expected key=value"),
-        (["tools=@/no/such/file.json"], "file not found"),
-    ],
-)
-def test_request_params_errors(monkeypatch, pairs, message):
-    errors = _errors(monkeypatch)
-    with pytest.raises(SystemExit):
-        models_cli.request_params(pairs, json_output=False)
-    assert message in errors[0]
-
-
-def test_merge_params_combines_template_kwargs_and_token_limits():
-    base = {"chat_template_kwargs": {"thinking": False}, "max_tokens": 100}
-    assert models_cli.merge_params(base, {"chat_template_kwargs": {"x": 1}, "temperature": 0}) == {
-        "chat_template_kwargs": {"thinking": False, "x": 1},
-        "max_tokens": 100,
-        "temperature": 0,
-    }
-    assert models_cli.merge_params(base, {"max_completion_tokens": 50}) == {
-        "chat_template_kwargs": {"thinking": False},
-        "max_completion_tokens": 50,
-    }
-    assert models_cli.merge_params(base, {"max_tokens": 5})["max_tokens"] == 5
-
-
-def test_chat_sends_image_and_params(monkeypatch, tmp_path):
+def test_chat_sends_image(monkeypatch, tmp_path):
     photo = tmp_path / "photo.png"
     photo.write_bytes(PNG)
     calls = _chat_client(monkeypatch)
@@ -598,10 +437,10 @@ def test_chat_sends_image_and_params(monkeypatch, tmp_path):
         models_cli, "_resolve_model", lambda c, m: ModelInfo(**{**DEEPSEEK, "input_modalities": ["text", "image"]})
     )
     monkeypatch.setattr(render, "chat_usage", lambda *a: None)
-    models_cli.models_chat("deepseek", "Describe", image=[str(photo)], param=["temperature=0"], max_tokens=50)
+    models_cli.models_chat("deepseek", "Describe", image=[str(photo)], max_tokens=50)
     messages, params = calls[0]
     assert messages[-1]["content"][1]["type"] == "image_url"
-    assert params == {"max_tokens": 50, "temperature": 0}
+    assert params == {"max_tokens": 50}
 
 
 def test_chat_refuses_images_for_text_only_models(monkeypatch, tmp_path):
@@ -622,44 +461,9 @@ def test_chat_image_needs_a_prompt(monkeypatch):
     assert errors == ["Pass a prompt with --image. See: jl models chat --help"]
 
 
-def test_stream_reply_points_to_json_for_tool_calls(monkeypatch):
-    warnings = []
-    monkeypatch.setattr(render, "warning", warnings.append)
-    chunks = [{"choices": [{"delta": {"tool_calls": [{"index": 0}]}, "finish_reason": "tool_calls"}]}]
-    assert models_cli.stream_reply(chunks) is None
-    assert warnings == ["The model wants to call a tool. Add --json to get the tool calls."]
-
-
-def test_request_params_rejects_non_finite_numbers_and_unreadable_files(monkeypatch, tmp_path):
-    bad = tmp_path / "bad.json"
-    bad.write_bytes(b"\xff")
-    errors = _errors(monkeypatch)
-    for pairs in (["temperature=NaN"], ["temperature=1e999"], ['logit_bias={"42": NaN}'], [f"tools=@{bad}"]):
-        with pytest.raises(SystemExit):
-            models_cli.request_params(pairs, json_output=False)
-    assert all("aren't valid JSON" in error for error in errors[:3])
-    assert "can't read" in errors[3]
-
-
-def test_request_params_n_needs_json(monkeypatch):
-    errors = _errors(monkeypatch)
-    with pytest.raises(SystemExit):
-        models_cli.request_params(["n=2"], json_output=False)
-    assert errors == ["--param n needs --json, which returns every answer."]
-    assert models_cli.request_params(["n=2"], json_output=True) == {"n": 2}
-
-
 def test_sdk_chat_accepts_named_arguments(mock_transport):
     Models(mock_transport).chat(model_id="qwen", messages=HELLO)
     assert mock_transport.request.call_args.kwargs["json"] == {"model": "qwen", "messages": HELLO}
-
-
-@pytest.mark.parametrize("key", ["model_id", "self", "base_url"])
-def test_request_params_reserves_sdk_argument_names(monkeypatch, key):
-    errors = _errors(monkeypatch)
-    with pytest.raises(SystemExit):
-        models_cli.request_params([f"{key}=x"], json_output=False)
-    assert errors == [f"--param {key} is set by jl and can't be changed."]
 
 
 def test_stream_that_ends_early_is_not_a_reply(monkeypatch):
@@ -668,49 +472,6 @@ def test_stream_that_ends_early_is_not_a_reply(monkeypatch):
     assert _capture(models_cli.stream_reply, [{"choices": [{"delta": {"content": "Partial"}}]}]) == "Partial\n"
     assert models_cli.stream_reply([{"choices": [{"delta": {"content": "Partial"}}]}]) is None
     assert "stopped before the model finished" in warnings[0]
-
-
-def test_session_with_images_refused_for_text_only_model(monkeypatch, sessions_dir):
-    image_turn = {
-        "role": "user",
-        "content": [{"type": "text", "text": "x"}, {"type": "image_url", "image_url": {"url": "data:"}}],
-    }
-    models_cli._save_session("img1", [image_turn, {"role": "assistant", "content": "ok"}])
-    _chat_client(monkeypatch)
-    monkeypatch.setattr(
-        models_cli, "_resolve_model", lambda c, m: ModelInfo(**{**DEEPSEEK, "input_modalities": ["text"]})
-    )
-    errors = _errors(monkeypatch)
-    with pytest.raises(SystemExit):
-        models_cli.models_chat("deepseek", "and now?", session="img1")
-    assert "doesn't accept images" in errors[0]
-
-
-def test_json_tool_call_turn_is_not_saved(monkeypatch, sessions_dir):
-    reply = {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [{"id": "1"}]}}]}
-    _chat_client(monkeypatch, reply=reply)
-    printed = []
-    monkeypatch.setattr(render, "print_json", printed.append)
-    models_cli.models_chat("deepseek", "Weather?", json_output=True)
-    assert not list(sessions_dir.glob("*.json"))
-    assert "session" not in printed[0]
-
-
-@pytest.mark.parametrize("content", ["", "{}", '{"messages": null}', '{"messages": [null]}', "not json"])
-def test_damaged_session_is_a_clear_error(monkeypatch, sessions_dir, content):
-    sessions_dir.mkdir(parents=True, exist_ok=True)
-    (sessions_dir / "broken.json").write_text(content)
-    errors = _errors(monkeypatch)
-    with pytest.raises(SystemExit):
-        models_cli._load_session("broken")
-    assert errors == ["Session broken is damaged. Send a prompt without --session to start a new one."]
-
-
-def test_session_folder_is_private(monkeypatch, tmp_path):
-    folder = tmp_path / "chat-sessions"
-    monkeypatch.setattr(models_cli, "CHAT_SESSIONS_DIR", folder)
-    models_cli._save_session("priv", [])
-    assert folder.stat().st_mode & 0o777 == 0o700
 
 
 def test_read_stdin_stops_on_a_quiet_open_pipe_after_data(monkeypatch):
