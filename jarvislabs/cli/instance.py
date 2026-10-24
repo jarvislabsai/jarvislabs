@@ -461,7 +461,7 @@ def instance_ssh(
         render.die(f"Instance {machine_id} has no SSH command (status: {inst.status}).")
 
     if print_command:
-        render.stdout_console.print(inst.ssh_command)
+        render.stdout_console.print(inst.ssh_command, markup=False, highlight=False)
         return
 
     if state.json_output:

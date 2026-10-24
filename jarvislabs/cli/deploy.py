@@ -13,7 +13,7 @@ import typer
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
-from jarvislabs.cli.models import interactive_chat, read_prompt, stream_reply
+from jarvislabs.cli.models import ImageOption, interactive_chat, read_prompt, stream_reply, user_content
 from jarvislabs.regions import normalize_serverless_region
 
 if TYPE_CHECKING:
@@ -400,12 +400,14 @@ def deploy_chat(
     max_tokens: Annotated[
         int | None, typer.Option("--max-tokens", help="Maximum output tokens (default: the model's limit).", min=1)
     ] = None,
+    image: ImageOption = None,
     region: RegionHintOption = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Test a running deployment: send it a message, or chat with it.
 
     The reply streams to stdout; thinking and token usage go to stderr.
+    If no worker is running, it starts one and exits with "starting, try again shortly" instead of waiting.
 
     [bold]Examples:[/bold]
 
@@ -417,8 +419,17 @@ def deploy_chat(
 
       [dim]# Full OpenAI-style response as JSON[/dim]
       [cyan]jl deploy chat <id> "Hi" --json[/cyan]
+
+      [dim]# With an image[/dim]
+      [cyan]jl deploy chat <id> "What is in this picture?" --image photo.jpg[/cyan]
     """
     cli_options.apply_command_options(json_output=json_output)
+    text = read_prompt(prompt)
+    if image and not text:
+        render.die("Pass a prompt with --image. See: jl deploy chat --help")
+    content = user_content(text, image)
+    if not text and (state.json_output or not render.can_prompt()):
+        render.die("Pass a prompt. See: jl deploy chat --help")
     client = get_client()
     with render.spinner("Fetching deployment..."):
         deployment = client.deployments.get(deployment_id, region=region)
@@ -428,22 +439,30 @@ def deploy_chat(
         )
 
     model = deployment.served_model
-    params = {"base_url": client.deployments.openai_base_url(deployment_id, region=deployment.region)}
-    if max_tokens:
-        params["max_tokens"] = max_tokens
+    base_url = client.deployments.openai_base_url(deployment_id, region=deployment.region)
+    workers = deployment.workers
+    if not workers.healthy:
+        check = f"Try again shortly. Check progress: jl deploy get {deployment_id}"
+        if workers.provisioning or workers.total:
+            render.die(f"This deployment is starting a worker. This can take a few minutes. {check}")
+        # A worker starts only when a request arrives, so send a tiny one (never the user's prompt) and stop.
+        with render.spinner("Starting a worker..."):
+            client.models.chat_submit(model, [{"role": "user", "content": "ping"}], base_url=base_url, max_tokens=1)
+        render.die(
+            f"No worker was running, so this deployment is starting one now. This can take a few minutes. {check}"
+        )
+
+    params = {"base_url": base_url, **({"max_tokens": max_tokens} if max_tokens else {})}
     messages = [{"role": "system", "content": system}] if system else []
 
     def send(history: list[dict]) -> dict | None:
         return stream_reply(client.models.chat_stream(model, history, **params))
 
-    text = read_prompt(prompt)
     if not text:
-        if state.json_output or not render.can_prompt():
-            render.die("Pass a prompt. See: jl deploy chat --help")
         interactive_chat(f"{deployment.name or deployment_id} ({model})", messages, send)
         return
 
-    messages.append({"role": "user", "content": text})
+    messages.append({"role": "user", "content": content})
     if state.json_output:
         render.print_json(client.models.chat(model, messages, **params))
         return

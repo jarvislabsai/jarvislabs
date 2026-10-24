@@ -350,3 +350,23 @@ def test_ask_value_keeps_flag_given_on_command_line(monkeypatch):
     monkeypatch.setattr(render.cli_options, "option_was_explicit", lambda param: True)
     monkeypatch.setattr(render.questionary, "text", lambda *a, **k: pytest.fail("should not prompt"))
     assert render.ask_value("max_workers", "Max workers:", 1, low=3, high=100) == 1  # not raised to the range
+
+
+def test_select_row_with_nothing_to_choose(monkeypatch):
+    errors = []
+    monkeypatch.setattr(render, "error", errors.append)
+    with pytest.raises(SystemExit):
+        render.select_row("Pick", HEADINGS, [], [])
+    assert errors == ["There is nothing to choose from."]
+
+
+def test_user_named_rows_and_links_print_brackets(monkeypatch):
+    buf = StringIO()
+    monkeypatch.setattr(render, "stdout_console", Console(file=buf, color_system=None, width=200))
+    render.ssh_keys_table([SimpleNamespace(key_id="k1", key_name="hello [/]", ssh_key="ssh-ed25519 AAAA")])
+    render.scripts_table([SimpleNamespace(script_id=1, script_name="setup [gpu]")])
+    render._print_detail_table([("URL", render._link_value("https://x.test/?filter[world]=1"))])
+    out = buf.getvalue()
+    assert "hello [/]" in out
+    assert "setup [gpu]" in out
+    assert "?filter[world]=1" in out

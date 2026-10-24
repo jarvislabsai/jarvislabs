@@ -16,6 +16,7 @@ from rich.markup import escape
 from rich.padding import Padding
 from rich.panel import Panel
 from rich.rule import Rule
+from rich.style import Style
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
@@ -160,8 +161,9 @@ def instances_table(instances: list, currency: str = "USD") -> None:
     stdout_console.print(table)
 
 
-def _link_value(url: str | None) -> str:
-    return f"[link={url}][magenta]{url}[/magenta][/link]" if url else "—"
+def _link_value(url: str | None) -> Text | str:
+    # Text, not markup: a URL can contain "[" (e.g. ?filter[a]=1), which markup would misread.
+    return Text(url, style=Style(color="magenta", link=url)) if url else "—"
 
 
 def _service_url_rows(inst) -> list[tuple[str, str]]:
@@ -206,7 +208,7 @@ def instance_detail(inst, currency: str = "USD") -> None:
     ]
 
     if inst.ssh_command:
-        rows.append(("SSH", f"[cyan]{inst.ssh_command}[/cyan]"))
+        rows.append(("SSH", f"[cyan]{escape(inst.ssh_command)}[/cyan]"))
 
     if inst.public_ip:
         rows.append(("Public IP", f"[cyan]{inst.public_ip}[/cyan]"))
@@ -237,7 +239,7 @@ def ssh_keys_table(keys: list) -> None:
 
     for key in keys:
         display_key = key.ssh_key[:40] + "..." if len(key.ssh_key) > 40 else key.ssh_key
-        table.add_row(key.key_id, key.key_name, display_key)
+        table.add_row(key.key_id, escape(key.key_name), display_key)
 
     stdout_console.print(table)
 
@@ -252,7 +254,7 @@ def scripts_table(scripts: list) -> None:
     table.add_column("Name", style="bold")
 
     for script in scripts:
-        table.add_row(str(script.script_id), script.script_name or "—")
+        table.add_row(str(script.script_id), escape(script.script_name or "—"))
 
     stdout_console.print(table)
 
@@ -268,7 +270,7 @@ def templates_table(templates: list) -> None:
     table.add_column("Category", style="dim")
 
     for template in templates:
-        table.add_row(template.id, template.title, template.category or "—")
+        table.add_row(template.id, escape(template.title), template.category or "—")
 
     stdout_console.print(table)
 
@@ -286,7 +288,9 @@ def filesystems_table(filesystems: list) -> None:
 
     for filesystem in filesystems:
         storage = f"{filesystem.storage}GB" if filesystem.storage is not None else "—"
-        table.add_row(str(filesystem.fs_id), filesystem.fs_name or "—", storage, region_label(filesystem.region))
+        table.add_row(
+            str(filesystem.fs_id), escape(filesystem.fs_name or "—"), storage, region_label(filesystem.region)
+        )
 
     stdout_console.print(table)
 
@@ -651,21 +655,19 @@ def model_detail(model, base_url: str) -> None:
 
 
 def model_snippets(model_id: str, base_url: str) -> None:
-    body = json.dumps(
-        {
-            "model": model_id,
-            "messages": [{"role": "user", "content": "Hello"}],
-            "max_tokens": MODELS_DEFAULT_MAX_TOKENS,
-        }
-    )
+    # One field per line, so a narrow terminal doesn't have to wrap the JSON body.
     curl = (
         f"curl {base_url}/chat/completions \\\n"
         '  -H "Authorization: Bearer $JL_API_KEY" \\\n'
         '  -H "Content-Type: application/json" \\\n'
-        f"  -d '{body}'"
+        "  -d '{\n"
+        f'    "model": {json.dumps(model_id)},\n'
+        '    "messages": [{"role": "user", "content": "Hello"}],\n'
+        f'    "max_tokens": {MODELS_DEFAULT_MAX_TOKENS}\n'
+        "  }'"
     )
     python = _openai_snippet(base_url, model_id, MODELS_DEFAULT_MAX_TOKENS)
-    for title, code, lexer in (("Python", python, "python"), ("curl", curl, "bash")):
+    for title, code, lexer in (("curl", curl, "bash"), ("Python", python, "python")):
         stdout_console.print()
         stdout_console.print(Rule(f"[bold]{title}[/bold]", align="left", style="dim"))
         stdout_console.print()
@@ -898,25 +900,25 @@ def jsonable_cpu_meta(cpu_meta: dict) -> dict:
 def success(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[green]✓[/green] {msg}")
+    console.print(f"[green]✓[/green] {escape(msg)}")
 
 
 def error(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[red]✗[/red] {msg}", style="red")
+    console.print(f"[red]✗[/red] {escape(msg)}", style="red")
 
 
 def info(msg: str, style: str = "dim") -> None:
     if state.json_output:
         return
-    console.print(f"[{style}]{msg}[/{style}]")
+    console.print(f"[{style}]{escape(msg)}[/{style}]")
 
 
 def warning(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[yellow]![/yellow] {msg}")
+    console.print(f"[yellow]![/yellow] {escape(msg)}")
 
 
 # ── Confirmation ─────────────────────────────────────────────────────────────
@@ -934,7 +936,7 @@ def confirm(msg: str, *, skip: bool = False) -> bool:
         die("--json requires --yes")
     try:
         # A Text prompt skips Rich's auto-highlighting, which would color the numbers in msg.
-        response = console.input(Text.from_markup(f"[yellow]?[/yellow] {msg} [dim]\\[y/N][/dim] "))
+        response = console.input(Text.from_markup(f"[yellow]?[/yellow] {escape(msg)} [dim]\\[y/N][/dim] "))
         return response.strip().lower() in ("y", "yes")
     except (KeyboardInterrupt, EOFError):
         console.print()
@@ -1123,6 +1125,8 @@ def select_row(message: str, headings: tuple[str, ...], rows: list, values: list
 
     Rows are plain text: questionary highlights the row under the cursor only for plain-text titles.
     """
+    if not rows:
+        die("There is nothing to choose from.")
     widths = [max(len(cell) for cell in column) for column in zip(headings, *rows, strict=True)]
 
     def pad(cells) -> list[str]:

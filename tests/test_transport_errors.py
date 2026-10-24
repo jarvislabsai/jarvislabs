@@ -200,6 +200,48 @@ def test_stream_lines_posts_json():
     assert seen == {"method": "POST", "body": b'{"a":1}'}
 
 
+# ── submit_stream ──
+
+
+class _UnreadableBody(httpx.SyncByteStream):
+    """A body that fails the test if anything reads it."""
+
+    def __iter__(self):
+        raise AssertionError("the body was read")
+
+
+def test_submit_stream_returns_on_2xx_without_reading_the_body():
+    seen = {}
+
+    def handler(request):
+        seen["method"] = request.method
+        seen["body"] = request.content
+        return httpx.Response(200, stream=_UnreadableBody())
+
+    t = _stream_transport(handler)
+    assert t.submit_stream("chat/completions", json={"a": 1}, base_url="https://example.test") is None
+    assert seen == {"method": "POST", "body": b'{"a":1}'}
+
+
+def test_submit_stream_maps_http_errors():
+    def handler(request):
+        return httpx.Response(413, json={"detail": "Request too large"})
+
+    t = _stream_transport(handler)
+    with pytest.raises(APIError, match="Request too large") as exc:
+        t.submit_stream("chat/completions", json={}, base_url="https://example.test")
+    assert exc.value.status_code == 413
+
+
+def test_submit_stream_wraps_connection_errors():
+    def handler(request):
+        raise httpx.ConnectError("boom")
+
+    t = _stream_transport(handler)
+    with pytest.raises(APIError, match="Stream failed: POST chat/completions"):
+        t.submit_stream("chat/completions", json={}, base_url="https://example.test")
+
+
 def test_structured_detail_reads_as_text():
     payload = {"detail": {"message": "Choose a gpu_type for this model", "gpu_types": ["H100", "H200"]}}
     assert extract_message(payload) == "Choose a gpu_type for this model. gpu_types: H100, H200"
