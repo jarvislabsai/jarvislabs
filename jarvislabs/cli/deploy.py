@@ -560,5 +560,6 @@ def managed_models_create(
             max_workers=max_workers,
             idle_timeout=idle_timeout,
             concurrent=concurrent,
+            gpu_type=model.gpu_type,
         )
     _finish_create(client, deployment_id, model.region, detach=detach)

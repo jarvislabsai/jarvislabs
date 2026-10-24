@@ -48,7 +48,7 @@ class Models:
                 raise JarvislabsError(chunk["error"]["message"])
             yield chunk
 
-    def chat_submit(self, model_id: str, messages: list[dict], *, base_url: str = MODELS_API_URL, **params) -> None:
+    def chat_submit(self, model_id: str, messages: list[dict], *, base_url: str, **params) -> None:
         """Send a streaming chat request and return once the server accepts it, without waiting for the reply.
 
         Used to start a worker on a deployment that has scaled to zero.

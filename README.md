@@ -140,7 +140,7 @@ Call hosted models directly through an OpenAI-compatible API. Nothing to deploy;
 # See the models and their price per 1M tokens
 jl models list
 
-# Model details plus ready-to-use Python and curl code (omit the ID to pick from a list)
+# Model details plus ready-to-use curl and Python code (omit the ID to pick from a list)
 jl models get <model_id>
 
 # Ask once, or omit the prompt for an interactive chat

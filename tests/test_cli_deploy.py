@@ -645,6 +645,7 @@ def test_managed_create_passes_settings_and_hands_off_api_model(monkeypatch):
         "max_workers": 2,
         "idle_timeout": 600,
         "concurrent": 16,
+        "gpu_type": "H200",
     }
     # The snippet uses the managed model's API name, not a (missing) model arg.
     assert handoffs == [("https://serverlessn.jarvislabs.net/openai/dep1/v1", "zai-org/GLM-5.2")]
@@ -684,6 +685,7 @@ def test_managed_create_uses_defaults_and_slug_as_name(monkeypatch):
         "max_workers": 1,
         "idle_timeout": 300,
         "concurrent": None,
+        "gpu_type": "H200",
     }
 
 
@@ -769,6 +771,7 @@ def test_managed_create_without_slug_picks_model_then_asks_settings(monkeypatch)
         "max_workers": 1,
         "idle_timeout": 300,
         "concurrent": 32,
+        "gpu_type": "H200",
     }
 
 

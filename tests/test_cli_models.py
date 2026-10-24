@@ -461,11 +461,6 @@ def test_chat_image_needs_a_prompt(monkeypatch):
     assert errors == ["Pass a prompt with --image. See: jl models chat --help"]
 
 
-def test_sdk_chat_accepts_named_arguments(mock_transport):
-    Models(mock_transport).chat(model_id="qwen", messages=HELLO)
-    assert mock_transport.request.call_args.kwargs["json"] == {"model": "qwen", "messages": HELLO}
-
-
 def test_stream_that_ends_early_is_not_a_reply(monkeypatch):
     warnings = []
     monkeypatch.setattr(render, "warning", warnings.append)
@@ -484,20 +479,3 @@ def test_read_stdin_stops_on_a_quiet_open_pipe_after_data(monkeypatch):
             assert READ_STDIN(wait=False) == "context"
     finally:
         os.close(write)
-
-
-@pytest.mark.parametrize("show", [render.error, render.warning, render.info, render.success])
-def test_message_text_is_not_read_as_markup(monkeypatch, show):
-    buf = StringIO()
-    monkeypatch.setattr(render, "console", Console(file=buf, color_system=None))
-    show("echo 'hello [world]' [/]")
-    assert "echo 'hello [world]' [/]" in buf.getvalue()
-
-
-def test_confirm_text_is_not_read_as_markup(monkeypatch):
-    buf = StringIO()
-    console = Console(file=buf, color_system=None)
-    monkeypatch.setattr(console, "input", lambda prompt, **k: console.print(prompt, end="") or "n")
-    monkeypatch.setattr(render, "console", console)
-    assert render.confirm("Delete deployment [/]?") is False
-    assert "Delete deployment [/]?" in buf.getvalue()

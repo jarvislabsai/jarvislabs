@@ -113,7 +113,7 @@ def _table(title: str | None = None, **kwargs) -> Table:
 
 
 def _print_detail_table(rows: list[tuple[str, str]], *, spaced: bool = False) -> None:
-    """Print a borderless field/value detail view (shared by instance and deployment detail).
+    """Print a borderless field/value detail view (instance, deployment and model detail).
 
     ``spaced`` adds a blank line after each row, for views with multi-line values.
     """
@@ -909,10 +909,10 @@ def error(msg: str) -> None:
     console.print(f"[red]✗[/red] {escape(msg)}", style="red", highlight=False)
 
 
-def info(msg: str, style: str = "dim") -> None:
+def info(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[{style}]{escape(msg)}[/{style}]", highlight=False)
+    console.print(f"[dim]{escape(msg)}[/dim]", highlight=False)
 
 
 def warning(msg: str) -> None:
@@ -1148,8 +1148,8 @@ def select_row(message: str, headings: tuple[str, ...], rows: list, values: list
     return choice
 
 
-def ask_value(param: str, message: str, value, *, low: int | None = None, high: int | None = None):
-    """Ask for a setting, prefilled with its value; a whole number when ``low`` is given (``high`` is optional).
+def ask_value(param: str, message: str, value, *, low: int | None = None):
+    """Ask for a setting, prefilled with its value; a whole number of at least ``low`` when it's given.
 
     A flag given on the command line is kept without asking. Ctrl+C exits.
     """
@@ -1159,12 +1159,10 @@ def ask_value(param: str, message: str, value, *, low: int | None = None, high: 
     def validate(text: str) -> bool | str:
         if low is None:
             return bool(text.strip()) or "This can't be empty."
-        if high is None:
-            return (text.strip().isdigit() and int(text) >= low) or f"Enter a whole number of at least {low}."
-        return (text.strip().isdigit() and low <= int(text) <= high) or f"Enter a whole number from {low} to {high}."
+        return (text.strip().isdigit() and int(text) >= low) or f"Enter a whole number of at least {low}."
 
     if low is not None:
-        value = max(value, low) if high is None else min(max(value, low), high)
+        value = max(value, low)
     answer = questionary.text(message, default=str(value), validate=validate, style=PROMPT_STYLE).ask()
     if answer is None:
         raise typer.Exit()

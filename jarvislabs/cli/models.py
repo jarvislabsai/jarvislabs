@@ -190,15 +190,6 @@ def _thinking_params(model: ModelInfo, thinking: bool | None, effort: str | None
     return {"chat_template_kwargs": kwargs} if kwargs else {}
 
 
-def assistant_message(content: str, thinking: str | None = None) -> dict:
-    """An assistant turn for the chat history; the thinking is kept as ``reasoning_content``,
-    which some models use on later turns."""
-    message = {"role": "assistant", "content": content}
-    if thinking:
-        message["reasoning_content"] = thinking
-    return message
-
-
 def user_content(text: str, images: list[str] | None) -> str | list[dict]:
     """A user message's content: the text alone, or the text followed by the images."""
     if not images:
@@ -259,7 +250,10 @@ def stream_reply(chunks: Iterable[dict[str, Any]], pricing: ModelPricing | None 
         return None
     elif not reply:
         render.warning("The model returned no answer.")
-    return assistant_message(reply, thinking) if reply else None
+    if not reply:
+        return None
+    # Keep the thinking in the history as reasoning_content; some models use it on later turns.
+    return {"role": "assistant", "content": reply, **({"reasoning_content": thinking} if thinking else {})}
 
 
 def interactive_chat(name: str, messages: list[dict], send: Callable[[list[dict]], dict | None]) -> None:

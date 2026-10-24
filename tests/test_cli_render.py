@@ -322,20 +322,12 @@ def _capture_validators(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("low", "high", "text", "ok"),
-    [
-        (0, 100, "0", True),
-        (0, 100, " 100 ", True),
-        (0, 100, "101", False),
-        (1, 100, "0", False),
-        (0, 100, "-1", False),
-        (0, 100, "abc", False),
-        (0, 100, "", False),
-    ],
+    ("low", "text", "ok"),
+    [(0, "0", True), (0, " 100 ", True), (1, "0", False), (0, "-1", False), (0, "abc", False), (0, "", False)],
 )
-def test_ask_value_number_validation(monkeypatch, low, high, text, ok):
+def test_ask_value_number_validation(monkeypatch, low, text, ok):
     validators = _capture_validators(monkeypatch)
-    assert render.ask_value("min_workers", "Min workers:", low, low=low, high=high) == low
+    assert render.ask_value("min_workers", "Min workers:", low, low=low) == low
     assert (validators[0](text) is True) == ok
 
 
@@ -349,7 +341,7 @@ def test_ask_value_text_rejects_empty(monkeypatch):
 def test_ask_value_keeps_flag_given_on_command_line(monkeypatch):
     monkeypatch.setattr(render.cli_options, "option_was_explicit", lambda param: True)
     monkeypatch.setattr(render.questionary, "text", lambda *a, **k: pytest.fail("should not prompt"))
-    assert render.ask_value("max_workers", "Max workers:", 1, low=3, high=100) == 1  # not raised to the range
+    assert render.ask_value("max_workers", "Max workers:", 1, low=3) == 1  # not raised to the range
 
 
 def test_select_row_with_nothing_to_choose(monkeypatch):
@@ -370,3 +362,20 @@ def test_user_named_rows_and_links_print_brackets(monkeypatch):
     assert "hello [/]" in out
     assert "setup [gpu]" in out
     assert "?filter[world]=1" in out
+
+
+@pytest.mark.parametrize("show", [render.error, render.warning, render.info, render.success])
+def test_message_text_is_not_read_as_markup(monkeypatch, show):
+    buf = StringIO()
+    monkeypatch.setattr(render, "console", Console(file=buf, color_system=None))
+    show("echo 'hello [world]' [/]")
+    assert "echo 'hello [world]' [/]" in buf.getvalue()
+
+
+def test_confirm_text_is_not_read_as_markup(monkeypatch):
+    buf = StringIO()
+    console = Console(file=buf, color_system=None)
+    monkeypatch.setattr(console, "input", lambda prompt, **k: console.print(prompt, end="") or "n")
+    monkeypatch.setattr(render, "console", console)
+    assert render.confirm("Delete deployment [/]?") is False
+    assert "Delete deployment [/]?" in buf.getvalue()
