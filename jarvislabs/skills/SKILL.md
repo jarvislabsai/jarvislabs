@@ -391,6 +391,9 @@ jl models get <id> --json                           # one model, plus base_url
 jl models chat <id> "prompt" --max-tokens 500       # streamed reply: answer on stdout, thinking + usage on stderr
 jl models chat <id> "prompt" --json                 # full OpenAI response, including usage
 cat file.txt | jl models chat <id> "Summarize this" # piped text is added to the prompt
+jl models chat <id> "Describe it" --image photo.jpg # image: local file (sent as base64) or http(s) URL; repeatable
+jl models chat <id> "Hi" --param temperature=0.2     # any OpenAI request field; value is JSON if it parses, @file reads a file
+jl models chat <id> "Weather?" --param tools=@tools.json --json   # tool calls come back only in --json output
 
 # Multi-turn chat: each call is one turn, history is kept between calls
 jl models chat <id> "first message"                 # every reply prints "Session <ID>" on stderr (--json: "session" field)
@@ -401,6 +404,9 @@ jl models chat <id> "follow-up" --session <ID>      # sends the earlier turns to
 - `--thinking/--no-thinking` and `--effort <level>` work only on models that support them; check `thinking` in `jl models get <id> --json`.
 - `-c` continues the most recent session on the machine; it's for humans. Agents must pass `--session <ID>`, since `-c` mixes histories when several chats run at once.
 - Sessions are temporary: stored locally and deleted after 15 minutes unused. Each turn resends the whole history, so long sessions cost more. `--system` is set only when the session starts.
+- `--image` works only on models whose `input_modalities` include `image` (see `jl models get <id> --json`). In a session, earlier images are sent again on every turn, which adds input tokens. URLs are downloaded by the model server; if a site blocks that, download the file and pass the local path.
+- `--param` can't set `model`, `messages`, `stream`, `stream_options` or `base_url`. `--param chat_template_kwargs='{...}'` is combined with `--thinking`/`--effort`.
+- `jl deploy chat <id>` takes the same `--image` and `--param` options.
 - Other options: `--system "<prompt>"`, `--max-tokens N`. Every call costs money, so cap output with `--max-tokens`. An empty balance fails with an insufficient-balance error.
 - From code: base URL `https://models.jarvislabs.net/v1`, API key = the JarvisLabs API key, `model` = the model ID. `jl models get <id>` prints Python and curl snippets.
 

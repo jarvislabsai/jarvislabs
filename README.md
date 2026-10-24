@@ -144,6 +144,10 @@ jl models get <model_id>
 jl models chat <model_id> "Explain KV cache in two lines"
 cat notes.txt | jl models chat <model_id> "Summarize this"
 
+# Images (local file or URL) and any other OpenAI request field
+jl models chat <model_id> "What is in this picture?" --image photo.jpg
+jl models chat <model_id> "List 3 colors" --param temperature=0.2 --param response_format='{"type": "json_object"}'
+
 # Multi-turn chat across separate calls (for agents and scripts)
 jl models chat <model_id> "My name is Jay"        # prints a session ID
 jl models chat <model_id> "What is my name?" --session <session_id>

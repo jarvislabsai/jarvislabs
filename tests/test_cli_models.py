@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import os
 from contextlib import nullcontext
 from io import StringIO
@@ -491,3 +492,126 @@ def test_chat_usage_shows_thinking_tokens(monkeypatch):
     usage = {"prompt_tokens": 10, "completion_tokens": 50, "completion_tokens_details": {"reasoning_tokens": 38}}
     render.chat_usage(usage)
     assert notes == ["\n10 in · 50 out (38 thinking)"]
+
+
+# ── --image and --param ────────────────────────────────────────────────────────
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+
+
+def test_user_content_without_images_is_text():
+    assert models_cli.user_content("Hi", None) == "Hi"
+
+
+def test_user_content_adds_local_file_and_url(tmp_path):
+    photo = tmp_path / "photo.png"
+    photo.write_bytes(PNG)
+    content = models_cli.user_content("What is this?", [str(photo), "https://x.test/cat.jpg"])
+    assert content[0] == {"type": "text", "text": "What is this?"}
+    assert content[1]["image_url"]["url"] == "data:image/png;base64," + base64.b64encode(PNG).decode()
+    assert content[2] == {"type": "image_url", "image_url": {"url": "https://x.test/cat.jpg"}}
+
+
+@pytest.mark.parametrize(
+    ("name", "message"),
+    [("missing.png", "Image not found: "), ("notes.txt", "doesn't look like an image")],
+)
+def test_bad_image_paths(monkeypatch, tmp_path, name, message):
+    (tmp_path / "notes.txt").write_text("hi")
+    errors = _errors(monkeypatch)
+    with pytest.raises(SystemExit):
+        models_cli.user_content("Hi", [str(tmp_path / name)])
+    assert message in errors[0]
+
+
+def test_request_params_reads_json_strings_and_files(tmp_path):
+    tools = tmp_path / "tools.json"
+    tools.write_text('[{"type": "function", "function": {"name": "f"}}]')
+    params = models_cli.request_params(
+        [
+            "temperature=0.2",
+            "seed=7",
+            "logprobs=true",
+            "stop=END",
+            'response_format={"type": "json_object"}',
+            f"tools=@{tools}",
+        ]
+    )
+    assert params == {
+        "temperature": 0.2,
+        "seed": 7,
+        "logprobs": True,
+        "stop": "END",
+        "response_format": {"type": "json_object"},
+        "tools": [{"type": "function", "function": {"name": "f"}}],
+    }
+
+
+@pytest.mark.parametrize(
+    ("pairs", "message"),
+    [
+        (["model=x"], "--param model is set by jl"),
+        (["base_url=https://evil.test"], "--param base_url is set by jl"),
+        (["temperature"], "expected key=value"),
+        (["tools=@/no/such/file.json"], "file not found"),
+    ],
+)
+def test_request_params_errors(monkeypatch, pairs, message):
+    errors = _errors(monkeypatch)
+    with pytest.raises(SystemExit):
+        models_cli.request_params(pairs)
+    assert message in errors[0]
+
+
+def test_merge_params_combines_template_kwargs_and_token_limits():
+    base = {"chat_template_kwargs": {"thinking": False}, "max_tokens": 100}
+    assert models_cli.merge_params(base, {"chat_template_kwargs": {"x": 1}, "temperature": 0}) == {
+        "chat_template_kwargs": {"thinking": False, "x": 1},
+        "max_tokens": 100,
+        "temperature": 0,
+    }
+    assert models_cli.merge_params(base, {"max_completion_tokens": 50}) == {
+        "chat_template_kwargs": {"thinking": False},
+        "max_completion_tokens": 50,
+    }
+    assert models_cli.merge_params(base, {"max_tokens": 5})["max_tokens"] == 5
+
+
+def test_chat_sends_image_and_params(monkeypatch, tmp_path):
+    photo = tmp_path / "photo.png"
+    photo.write_bytes(PNG)
+    calls = _chat_client(monkeypatch)
+    monkeypatch.setattr(
+        models_cli, "_resolve_model", lambda c, m: ModelInfo(**{**DEEPSEEK, "input_modalities": ["text", "image"]})
+    )
+    monkeypatch.setattr(render, "chat_usage", lambda *a: None)
+    models_cli.models_chat("deepseek", "Describe", image=[str(photo)], param=["temperature=0"], max_tokens=50)
+    messages, params = calls[0]
+    assert messages[-1]["content"][1]["type"] == "image_url"
+    assert params == {"max_tokens": 50, "temperature": 0}
+
+
+def test_chat_refuses_images_for_text_only_models(monkeypatch, tmp_path):
+    _chat_client(monkeypatch)
+    monkeypatch.setattr(
+        models_cli, "_resolve_model", lambda c, m: ModelInfo(**{**DEEPSEEK, "input_modalities": ["text"]})
+    )
+    errors = _errors(monkeypatch)
+    with pytest.raises(SystemExit):
+        models_cli.models_chat("deepseek", "Describe", image=["photo.png"])
+    assert errors == ["deepseek doesn't accept images. See the Modalities in: jl models get deepseek"]
+
+
+def test_chat_image_needs_a_prompt(monkeypatch):
+    errors = _errors(monkeypatch)
+    with pytest.raises(SystemExit):
+        models_cli.models_chat("deepseek", image=["photo.png"])
+    assert errors == ["Pass a prompt with --image. See: jl models chat --help"]
+
+
+def test_stream_reply_points_to_json_for_tool_calls(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(render, "warning", warnings.append)
+    chunks = [{"choices": [{"delta": {"tool_calls": [{"index": 0}]}, "finish_reason": "tool_calls"}]}]
+    assert models_cli.stream_reply(chunks) is None
+    assert warnings == ["The model wants to call a tool. Add --json to get the tool calls."]

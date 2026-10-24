@@ -13,7 +13,16 @@ import typer
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
-from jarvislabs.cli.models import interactive_chat, read_prompt, stream_reply
+from jarvislabs.cli.models import (
+    ImageOption,
+    ParamOption,
+    interactive_chat,
+    merge_params,
+    read_prompt,
+    request_params,
+    stream_reply,
+    user_content,
+)
 from jarvislabs.regions import normalize_serverless_region
 
 if TYPE_CHECKING:
@@ -51,21 +60,6 @@ deploy_app.add_typer(managed_app)
 RegionHintOption = Annotated[
     str | None, typer.Option("--region", help="Region of the deployment (skips the cross-region search).")
 ]
-
-
-def _parse_kv(pairs: list[str] | None, *, flag: str, redact: bool = False) -> dict[str, str]:
-    """Parse repeatable ``key=value`` flags. Split on the first `=`; last key wins.
-
-    ``redact`` keeps the offending value out of the error message (for secrets).
-    """
-    result: dict[str, str] = {}
-    for raw in pairs or []:
-        if "=" not in raw:
-            shown = "" if redact else f" {raw!r}"
-            render.die(f"Invalid {flag}{shown}: expected key=value")
-        key, value = raw.split("=", 1)
-        result[key] = value
-    return result
 
 
 def _finish_create(client, deployment_id: str, region: str, *, detach: bool) -> None:
@@ -176,8 +170,8 @@ def deploy_create(
     [bold bright_yellow]Serverless is in beta. We're actively improving it and would love early feedback. Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
-    args = _parse_kv(arg, flag="--arg")
-    env_dict = _parse_kv(env, flag="--env", redact=True)
+    args = cli_options.parse_kv(arg, flag="--arg")
+    env_dict = cli_options.parse_kv(env, flag="--env", redact=True)
 
     details = (
         f"name={name!r}, region={render.region_input_label(region)}, framework={framework}, "
@@ -400,6 +394,8 @@ def deploy_chat(
     max_tokens: Annotated[
         int | None, typer.Option("--max-tokens", help="Maximum output tokens (default: the model's limit).", min=1)
     ] = None,
+    image: ImageOption = None,
+    param: ParamOption = None,
     region: RegionHintOption = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -417,8 +413,16 @@ def deploy_chat(
 
       [dim]# Full OpenAI-style response as JSON[/dim]
       [cyan]jl deploy chat <id> "Hi" --json[/cyan]
+
+      [dim]# An image, and any other OpenAI request field[/dim]
+      [cyan]jl deploy chat <id> "What is in this picture?" --image photo.jpg --param temperature=0.2[/cyan]
     """
     cli_options.apply_command_options(json_output=json_output)
+    extra = request_params(param)
+    text = read_prompt(prompt)
+    if image and not text:
+        render.die("Pass a prompt with --image. See: jl deploy chat --help")
+    content = user_content(text, image)
     client = get_client()
     with render.spinner("Fetching deployment..."):
         deployment = client.deployments.get(deployment_id, region=region)
@@ -428,22 +432,20 @@ def deploy_chat(
         )
 
     model = deployment.served_model
-    params = {"base_url": client.deployments.openai_base_url(deployment_id, region=deployment.region)}
-    if max_tokens:
-        params["max_tokens"] = max_tokens
+    params = merge_params({"max_tokens": max_tokens} if max_tokens else {}, extra)
+    params["base_url"] = client.deployments.openai_base_url(deployment_id, region=deployment.region)
     messages = [{"role": "system", "content": system}] if system else []
 
     def send(history: list[dict]) -> dict | None:
         return stream_reply(client.models.chat_stream(model, history, **params))
 
-    text = read_prompt(prompt)
     if not text:
         if state.json_output or not render.can_prompt():
             render.die("Pass a prompt. See: jl deploy chat --help")
         interactive_chat(f"{deployment.name or deployment_id} ({model})", messages, send)
         return
 
-    messages.append({"role": "user", "content": text})
+    messages.append({"role": "user", "content": content})
     if state.json_output:
         render.print_json(client.models.chat(model, messages, **params))
         return
