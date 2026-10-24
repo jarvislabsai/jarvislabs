@@ -24,8 +24,14 @@ BETA_HELP_NOTICE = (
     "Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]"
 )
 
+# Shown under the help of the commands that take deployment settings. The server checks the limits.
+SETTINGS_DOCS_NOTE = (
+    "For what each setting means and its allowed range, see https://docs.jarvislabs.ai/serverless#configuration."
+)
+
 deploy_app = typer.Typer(
     name="deploy",
+    epilog=SETTINGS_DOCS_NOTE,
     help=(
         "Create and manage serverless model deployments [bold bright_yellow](beta)[/bold bright_yellow].\n\n"
         "[dim]Quick examples:[/dim]\n"
@@ -142,7 +148,7 @@ def _resolve_managed_model(client, model_slug: str | None, region: str | None) -
     return render.select_managed_model(options, result.currency), result.currency
 
 
-@deploy_app.command("create")
+@deploy_app.command("create", epilog=SETTINGS_DOCS_NOTE)
 def deploy_create(
     name: Annotated[str, typer.Option("--name", help="Deployment name.")],
     region: Annotated[str, typer.Option("--region", help="Region (IN1 or IN2).")],
@@ -322,7 +328,7 @@ def _no_workers_message(status: str, deployment_id: str) -> str:
     return "No workers up yet — logs start once a worker is running. Try again shortly."
 
 
-@deploy_app.command("update")
+@deploy_app.command("update", epilog=SETTINGS_DOCS_NOTE)
 def deploy_update(
     deployment_id: Annotated[str, typer.Argument(help="Deployment id.")],
     name: Annotated[str | None, typer.Option("--name", help="New name.")] = None,
@@ -493,7 +499,7 @@ def managed_models_list(json_output: cli_options.JsonOption = False) -> None:
     render.managed_models_table(result)
 
 
-@managed_app.command("create")
+@managed_app.command("create", epilog=SETTINGS_DOCS_NOTE)
 def managed_models_create(
     model_slug: Annotated[
         str | None,
