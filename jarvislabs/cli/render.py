@@ -16,6 +16,7 @@ from rich.markup import escape
 from rich.padding import Padding
 from rich.panel import Panel
 from rich.rule import Rule
+from rich.style import Style
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
@@ -160,8 +161,9 @@ def instances_table(instances: list, currency: str = "USD") -> None:
     stdout_console.print(table)
 
 
-def _link_value(url: str | None) -> str:
-    return f"[link={url}][magenta]{url}[/magenta][/link]" if url else "—"
+def _link_value(url: str | None) -> Text | str:
+    # Text, not markup: a URL can contain "[" (e.g. ?filter[a]=1), which markup would misread.
+    return Text(url, style=Style(color="magenta", link=url)) if url else "—"
 
 
 def _service_url_rows(inst) -> list[tuple[str, str]]:
@@ -206,7 +208,7 @@ def instance_detail(inst, currency: str = "USD") -> None:
     ]
 
     if inst.ssh_command:
-        rows.append(("SSH", f"[cyan]{inst.ssh_command}[/cyan]"))
+        rows.append(("SSH", f"[cyan]{escape(inst.ssh_command)}[/cyan]"))
 
     if inst.public_ip:
         rows.append(("Public IP", f"[cyan]{inst.public_ip}[/cyan]"))
@@ -237,7 +239,7 @@ def ssh_keys_table(keys: list) -> None:
 
     for key in keys:
         display_key = key.ssh_key[:40] + "..." if len(key.ssh_key) > 40 else key.ssh_key
-        table.add_row(key.key_id, key.key_name, display_key)
+        table.add_row(key.key_id, escape(key.key_name), display_key)
 
     stdout_console.print(table)
 
@@ -252,7 +254,7 @@ def scripts_table(scripts: list) -> None:
     table.add_column("Name", style="bold")
 
     for script in scripts:
-        table.add_row(str(script.script_id), script.script_name or "—")
+        table.add_row(str(script.script_id), escape(script.script_name or "—"))
 
     stdout_console.print(table)
 
@@ -268,7 +270,7 @@ def templates_table(templates: list) -> None:
     table.add_column("Category", style="dim")
 
     for template in templates:
-        table.add_row(template.id, template.title, template.category or "—")
+        table.add_row(template.id, escape(template.title), template.category or "—")
 
     stdout_console.print(table)
 
@@ -286,7 +288,9 @@ def filesystems_table(filesystems: list) -> None:
 
     for filesystem in filesystems:
         storage = f"{filesystem.storage}GB" if filesystem.storage is not None else "—"
-        table.add_row(str(filesystem.fs_id), filesystem.fs_name or "—", storage, region_label(filesystem.region))
+        table.add_row(
+            str(filesystem.fs_id), escape(filesystem.fs_name or "—"), storage, region_label(filesystem.region)
+        )
 
     stdout_console.print(table)
 
