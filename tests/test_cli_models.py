@@ -41,7 +41,7 @@ HELLO = [{"role": "user", "content": "Hello"}]
 
 
 @pytest.fixture(autouse=True)
-def _setup(monkeypatch, tmp_path):
+def _setup(monkeypatch):
     monkeypatch.setattr(render, "spinner", lambda *a, **k: nullcontext())
     monkeypatch.setattr(models_cli, "_read_stdin", lambda **_: "")
     state.json_output = False
@@ -399,7 +399,7 @@ def test_chat_usage_shows_thinking_tokens(monkeypatch):
     assert notes == ["\n10 in · 50 out (38 thinking)"]
 
 
-# ── --image and --param ────────────────────────────────────────────────────────
+# ── --image ────────────────────────────────────────────────────────
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
 
