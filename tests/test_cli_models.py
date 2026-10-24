@@ -111,6 +111,15 @@ def test_sdk_chat_stream_error(mock_transport):
         list(Models(mock_transport).chat_stream("qwen", HELLO))
 
 
+def test_sdk_chat_submit(mock_transport):
+    Models(mock_transport).chat_submit("qwen", HELLO, base_url="https://x/v1", max_tokens=1)
+    mock_transport.submit_stream.assert_called_once_with(
+        "chat/completions",
+        json={"model": "qwen", "messages": HELLO, "max_tokens": 1, "stream": True},
+        base_url="https://x/v1",
+    )
+
+
 def test_402_is_insufficient_balance():
     assert isinstance(error_from_response(402, {"error": {"message": "Add credits."}}), InsufficientBalanceError)
 

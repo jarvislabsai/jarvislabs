@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 import typer
@@ -21,6 +22,8 @@ from jarvislabs.models import (
     ManagedModelListResult,
     ServerMetaGPU,
 )
+from jarvislabs.token_factory import Models
+from jarvislabs.transport import Transport
 
 
 @pytest.fixture(autouse=True)
@@ -918,7 +921,21 @@ def test_managed_create_confirm_shows_cost(monkeypatch):
 # ── chat ───────────────────────────────────────────────────────────────────────
 
 
-def _chat_setup(monkeypatch, status="running"):
+HEALTHY = {"total": 1, "healthy": 1, "provisioning": 0}
+NO_WORKERS = {"total": 0, "healthy": 0, "provisioning": 0}
+STARTING = {"total": 1, "healthy": 0, "provisioning": 1}
+STARTING_MSG = (
+    "This deployment is starting a worker. This can take a few minutes. Try again shortly. "
+    "Check progress: jl deploy get dep1"
+)
+WOKEN_MSG = (
+    "No worker was running, so this deployment is starting one now. This can take a few minutes. "
+    "Try again shortly. Check progress: jl deploy get dep1"
+)
+
+
+def _chat_setup(monkeypatch, status="running", workers=HEALTHY):
+    """Returns the chat_stream calls; ``.transport`` is the mock transport behind the real chat_submit."""
     calls = []
 
     def chat_stream(model, messages, **params):
@@ -926,25 +943,101 @@ def _chat_setup(monkeypatch, status="running"):
         yield {"choices": [{"delta": {"content": "PONG"}, "finish_reason": "stop"}]}
 
     deployments = SimpleNamespace(
-        get=lambda deployment_id, region=None: _deployment(status=status),
+        get=lambda deployment_id, region=None: _deployment(status=status, workers=workers),
         openai_base_url=lambda deployment_id, region=None: "https://x/openai/dep1/v1",
     )
     client = _install_client(monkeypatch, deployments)
-    client.models = SimpleNamespace(chat_stream=chat_stream)
+    transport = MagicMock(spec=Transport)
+    client.models = Models(transport)
+    client.models.chat_stream = chat_stream
     monkeypatch.setattr(deploy.render, "spinner", lambda *a, **k: nullcontext())
     monkeypatch.setattr(deploy.render, "chat_usage", lambda *a: None)
     monkeypatch.setattr("jarvislabs.cli.models._read_stdin", lambda **_: "")
-    return calls
+    return SimpleNamespace(calls=calls, transport=transport)
 
 
 def test_deploy_chat_sends_to_the_deployment(monkeypatch):
-    calls = _chat_setup(monkeypatch)
+    sent = _chat_setup(monkeypatch)
     deploy.deploy_chat("dep1", "Say PONG", max_tokens=20)
-    model, messages, params = calls[0]
+    model, messages, params = sent.calls[0]
     assert model == "Qwen/Qwen3-0.6B"
     assert messages == [{"role": "user", "content": "Say PONG"}]
     # read_timeout = the deployment's wait_time (60) + the normal read timeout (120)
     assert params == {"base_url": "https://x/openai/dep1/v1", "max_tokens": 20, "read_timeout": 180}
+    sent.transport.submit_stream.assert_not_called()
+
+
+def test_deploy_chat_with_a_starting_worker_sends_nothing(monkeypatch):
+    sent = _chat_setup(monkeypatch, workers=STARTING)
+    errors = []
+    monkeypatch.setattr(deploy.render, "error", errors.append)
+    with pytest.raises(SystemExit) as exc:
+        deploy.deploy_chat("dep1", "Say PONG")
+    assert exc.value.code == 1
+    assert errors == [STARTING_MSG]
+    assert sent.calls == []
+    sent.transport.submit_stream.assert_not_called()
+
+
+def test_deploy_chat_with_no_workers_sends_one_wake_request(monkeypatch):
+    sent = _chat_setup(monkeypatch, workers=NO_WORKERS)
+    errors = []
+    monkeypatch.setattr(deploy.render, "error", errors.append)
+    with pytest.raises(SystemExit) as exc:
+        deploy.deploy_chat("dep1", "Say PONG", max_tokens=20)
+    assert exc.value.code == 1
+    assert errors == [WOKEN_MSG]
+    assert sent.calls == []
+    sent.transport.submit_stream.assert_called_once_with(
+        "chat/completions",
+        json={
+            "model": "Qwen/Qwen3-0.6B",
+            "messages": [{"role": "user", "content": "ping"}],
+            "max_tokens": 1,
+            "stream": True,
+        },
+        base_url="https://x/openai/dep1/v1",
+    )
+
+
+@pytest.mark.parametrize(("workers", "message"), [(STARTING, STARTING_MSG), (NO_WORKERS, WOKEN_MSG)])
+def test_deploy_chat_json_reports_no_worker_as_error(monkeypatch, workers, message):
+    _chat_setup(monkeypatch, workers=workers)
+    printed = []
+    monkeypatch.setattr(deploy.render, "print_json", printed.append)
+    with pytest.raises(SystemExit) as exc:
+        deploy.deploy_chat("dep1", "Hi", json_output=True)
+    assert exc.value.code == 1
+    assert printed == [{"error": message}]
+
+
+def test_deploy_chat_interactive_with_no_workers_exits_before_the_chat(monkeypatch):
+    sent = _chat_setup(monkeypatch, workers=NO_WORKERS)
+    monkeypatch.setattr(deploy.render, "can_prompt", lambda: True)
+    monkeypatch.setattr(deploy.render, "error", lambda msg: None)
+    monkeypatch.setattr(deploy, "interactive_chat", lambda *a: pytest.fail("chat started"))
+    with pytest.raises(SystemExit):
+        deploy.deploy_chat("dep1")
+    sent.transport.submit_stream.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"prompt": None, "image": ["photo.jpg"]}, "Pass a prompt with --image"),
+        ({"prompt": None, "json_output": True}, "Pass a prompt."),
+        ({"prompt": "Hi", "param": ["model=x"]}, "--param model is set by jl"),
+    ],
+)
+def test_deploy_chat_checks_input_before_waking(monkeypatch, kwargs, message):
+    sent = _chat_setup(monkeypatch, workers=NO_WORKERS)
+    errors = []
+    monkeypatch.setattr(deploy.render, "error", errors.append)
+    monkeypatch.setattr(deploy.render, "print_json", lambda data: errors.append(data["error"]))
+    with pytest.raises(SystemExit):
+        deploy.deploy_chat("dep1", **kwargs)
+    assert message in errors[0]
+    sent.transport.submit_stream.assert_not_called()
 
 
 def test_deploy_chat_needs_a_running_deployment(monkeypatch):
@@ -959,8 +1052,8 @@ def test_deploy_chat_needs_a_running_deployment(monkeypatch):
 def test_deploy_chat_sends_image_and_params(monkeypatch, tmp_path):
     photo = tmp_path / "photo.jpg"
     photo.write_bytes(b"\xff\xd8\xff")
-    calls = _chat_setup(monkeypatch)
+    sent = _chat_setup(monkeypatch)
     deploy.deploy_chat("dep1", "Describe", image=[str(photo)], param=["temperature=0.5"])
-    _, messages, params = calls[0]
+    _, messages, params = sent.calls[0]
     assert messages[0]["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
     assert params == {"temperature": 0.5, "base_url": "https://x/openai/dep1/v1", "read_timeout": 180}

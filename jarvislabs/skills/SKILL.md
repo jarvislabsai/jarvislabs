@@ -358,7 +358,7 @@ jl deploy managed-models create <model_slug> \
 
 A running deployment exposes an OpenAI-compatible base URL (`openai_base_url` from `jl deploy get <id> --json`, present only when `running`), authed with your JarvisLabs API key. **Use the served model name** — if you set `--arg served-model-name=<x>`, that is the `model` field, not the `--model` id. For a managed deployment, the `model` field is `managed_model.api_model_name` from `jl deploy get <id> --json`. `create` prints a paste-ready snippet; `get` shows the base URL.
 
-Once `running`, send a real inference request to confirm the model responds as expected before relying on the endpoint: `jl deploy chat <id> "Say hello" --max-tokens 50` (add `--json` for the full response). With `--min-workers 0`, the first request may be slow while a worker starts; use a generous first-call timeout.
+Once `running`, send a real inference request to confirm the model responds as expected before relying on the endpoint: `jl deploy chat <id> "Say hello" --max-tokens 50` (add `--json` for the full response). If no worker is running (common with `--min-workers 0`), `jl deploy chat` does not wait and does not send your message: it starts a worker if none is starting, then exits with code 1 and a "starting, try again shortly" error. Wait a few minutes until `workers.healthy` is at least 1 in `jl deploy get <id> --json`, then retry. Other clients that call the endpoint directly wait while a worker starts, or get a 504 "A worker is still starting" for large models, so give the first call a generous timeout.
 
 ### Inspecting & managing
 

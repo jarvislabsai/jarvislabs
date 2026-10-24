@@ -6,6 +6,7 @@ Every API call goes through Transport. client.py never touches httpx directly.
 from __future__ import annotations
 
 import time
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import httpx
@@ -110,6 +111,33 @@ class Transport:
         lines. The connection closes when the caller stops iterating.
         ``read_timeout`` replaces the default wait between lines.
         """
+        with self._stream(method, path, json=json, params=params, base_url=base_url, read_timeout=read_timeout) as resp:
+            yield from resp.iter_lines()
+
+    def submit_stream(self, path: str, *, json: dict | None = None, base_url: str | None = None) -> None:
+        """POST a streaming request and return as soon as the server accepts it, without reading the body.
+
+        Returns once a 2xx status and headers arrive; raises the mapped error otherwise.
+        Closing the connection does not undo work the server has already queued.
+        """
+        with self._stream("POST", path, json=json, base_url=base_url):
+            pass
+
+    @contextmanager
+    def _stream(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: dict | None = None,
+        params: dict | None = None,
+        base_url: str | None = None,
+        read_timeout: float | None = None,
+    ) -> Iterator[httpx.Response]:
+        """Open a streaming request and yield the response once a 2xx status arrives.
+
+        Maps error statuses and wraps connection errors, including those raised while the caller reads the body.
+        """
         url = (base_url or self._base_url).rstrip("/") + "/" + path.lstrip("/")
         try:
             with self._client.stream(
@@ -118,7 +146,7 @@ class Transport:
                 if not resp.is_success:
                     resp.read()  # streamed bodies aren't loaded until asked
                     raise _api_error(resp)
-                yield from resp.iter_lines()
+                yield resp
         except httpx.HTTPError as exc:
             label = "timed out" if isinstance(exc, httpx.TimeoutException) else "failed"
             raise APIError(0, f"Stream {label}: {method} {path}") from exc

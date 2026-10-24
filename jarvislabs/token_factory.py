@@ -65,3 +65,12 @@ class Models:
             if "error" in chunk:
                 raise JarvislabsError(chunk["error"]["message"])
             yield chunk
+
+    def chat_submit(self, model_id: str, messages: list[dict], *, base_url: str = MODELS_API_URL, **params) -> None:
+        """Send a streaming chat request and return once the server accepts it, without waiting for the reply.
+
+        A deployment queues an accepted request even after the connection closes, so this can wake a
+        deployment that has scaled to zero.
+        """
+        body = {"model": model_id, "messages": messages, **params, "stream": True}
+        self._t.submit_stream("chat/completions", json=body, base_url=base_url)

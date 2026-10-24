@@ -403,6 +403,7 @@ def deploy_chat(
     """Test a running deployment: send it a message, or chat with it.
 
     The reply streams to stdout; thinking and token usage go to stderr.
+    If no worker is running, it starts one and exits with "starting, try again shortly" instead of waiting.
 
     [bold]Examples:[/bold]
 
@@ -424,6 +425,8 @@ def deploy_chat(
     if image and not text:
         render.die("Pass a prompt with --image. See: jl deploy chat --help")
     content = user_content(text, image)
+    if not text and (state.json_output or not render.can_prompt()):
+        render.die("Pass a prompt. See: jl deploy chat --help")
     client = get_client()
     with render.spinner("Fetching deployment..."):
         deployment = client.deployments.get(deployment_id, region=region)
@@ -433,20 +436,29 @@ def deploy_chat(
         )
 
     model = deployment.served_model
+    base_url = client.deployments.openai_base_url(deployment_id, region=deployment.region)
+    workers = deployment.workers
+    if not workers.healthy:
+        check = f"Try again shortly. Check progress: jl deploy get {deployment_id}"
+        if workers.provisioning or workers.total:
+            render.die(f"This deployment is starting a worker. This can take a few minutes. {check}")
+        # Only a queued request starts a worker, so queue a tiny one (never the user's prompt) and stop.
+        with render.spinner("Starting a worker..."):
+            client.models.chat_submit(model, [{"role": "user", "content": "ping"}], base_url=base_url, max_tokens=1)
+        render.die(
+            f"No worker was running, so this deployment is starting one now. This can take a few minutes. {check}"
+        )
+
     params = merge_params({"max_tokens": max_tokens} if max_tokens else {}, extra)
-    params["base_url"] = client.deployments.openai_base_url(deployment_id, region=deployment.region)
-    # The server holds a request up to wait_time while a worker starts, so wait at least that long for a reply.
+    params["base_url"] = base_url
+    # A busy deployment holds a request up to wait_time until a slot frees, so wait at least that long for a reply.
     params["read_timeout"] = (deployment.wait_time or 0) + HTTP_TIMEOUT_READ_S
-    if not deployment.workers.healthy:
-        render.info("No worker is ready yet, so the first reply waits for one to start. This can take a few minutes.")
     messages = [{"role": "system", "content": system}] if system else []
 
     def send(history: list[dict]) -> dict | None:
         return stream_reply(client.models.chat_stream(model, history, **params))
 
     if not text:
-        if state.json_output or not render.can_prompt():
-            render.die("Pass a prompt. See: jl deploy chat --help")
         interactive_chat(f"{deployment.name or deployment_id} ({model})", messages, send)
         return
 
