@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/jarvislabs)](https://pypi.org/project/jarvislabs/)
 [![License](https://img.shields.io/pypi/l/jarvislabs)](https://github.com/jarvislabsai/jarvislabs/blob/main/LICENSE)
 
-CLI and Python SDK for managing GPU instances on [JarvisLabs.ai](https://jarvislabs.ai).
+CLI and Python SDK for GPU instances, serverless deployments and pay-per-token models on [JarvisLabs.ai](https://jarvislabs.ai).
 
 See the docs on [Jarvislabs Docs](https://docs.jarvislabs.ai/cli/)
 
@@ -125,6 +125,9 @@ jl deploy managed-models create qwen-3.5-4b --name my-qwen --max-workers 2
 # Get the base URL and the model name to use in requests
 jl deploy get <deployment_id>
 
+# Send a test message. With 0 workers, the first call starts a worker; run it again in a few minutes
+jl deploy chat <deployment_id> "Hello"
+
 # Delete when done
 jl deploy delete <deployment_id>
 ```
@@ -167,7 +170,7 @@ jl vpc create my-net --cidr 10.50.0.0/24 --region IN1
 jl get <id>                  # Shows Jupyter + exposed port URLs
 ```
 
-Every command supports `--help`, `--json` (machine-readable output), and `--yes` (skip confirmations).
+Every command supports `--help`. Most support `--json` (machine-readable output), and commands that ask for confirmation support `--yes` (skip it).
 
 ## Python SDK
 

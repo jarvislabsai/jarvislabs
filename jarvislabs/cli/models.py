@@ -179,11 +179,11 @@ def _thinking_params(model: ModelInfo, thinking: bool | None, effort: str | None
     kwargs = {}
     if thinking is not None:
         if "toggle" not in keys:
-            render.die(f"{model.id} can't turn thinking on or off.")
+            render.die(f"{model.id} can't turn thinking on or off. See: jl models get {model.id}")
         kwargs[keys["toggle"]] = thinking
     if effort:
         if "effort" not in keys:
-            render.die(f"{model.id} doesn't support --effort.")
+            render.die(f"{model.id} doesn't support --effort. See: jl models get {model.id}")
         if effort not in support.supported_efforts:
             render.die(f"--effort must be one of: {', '.join(support.supported_efforts)}")
         kwargs[keys["effort"]] = effort
@@ -253,7 +253,7 @@ def stream_reply(chunks: Iterable[dict[str, Any]], pricing: ModelPricing | None 
     render.chat_text("\n")
     render.chat_usage(usage, pricing)
     if finish_reason == "length":
-        render.warning("The reply hit the --max-tokens limit and was cut off. Raise --max-tokens to get all of it.")
+        render.warning("The reply hit the output token limit and was cut off. Raise --max-tokens to get all of it.")
     elif finish_reason is None:
         render.warning("The reply stopped before the model finished (the connection ended early).")
         return None

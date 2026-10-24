@@ -279,8 +279,8 @@ def test_chat_json(monkeypatch):
     [
         (DEEPSEEK, {}, "Pass a prompt. See: jl models chat --help"),
         (DEEPSEEK, {"prompt": "Hi", "effort": "extreme"}, "--effort must be one of: low, high, max"),
-        (QWEN, {"prompt": "Hi", "thinking": True}, "qwen can't turn thinking on or off."),
-        (QWEN, {"prompt": "Hi", "effort": "low"}, "qwen doesn't support --effort."),
+        (QWEN, {"prompt": "Hi", "thinking": True}, "qwen can't turn thinking on or off. See: jl models get qwen"),
+        (QWEN, {"prompt": "Hi", "effort": "low"}, "qwen doesn't support --effort. See: jl models get qwen"),
     ],
 )
 def test_chat_errors(monkeypatch, model, options, message):

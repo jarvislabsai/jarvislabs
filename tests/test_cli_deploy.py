@@ -437,7 +437,7 @@ def test_logs_json_rejected_before_any_call(monkeypatch):
     monkeypatch.setattr(deploy.render, "die", fake_die)
     with pytest.raises(SystemExit) as exc:
         deploy.deploy_logs("dep1", json_output=True)
-    assert "log streaming" in str(exc.value)
+    assert "doesn't support --json" in str(exc.value)
     assert called == []
 
 
@@ -1055,3 +1055,13 @@ def test_deploy_chat_sends_image(monkeypatch, tmp_path):
     _, messages, params = sent.calls[0]
     assert messages[0]["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
     assert params == {"base_url": "https://x/openai/dep1/v1"}
+
+
+def test_update_without_changes_lists_the_flags(monkeypatch):
+    errors = []
+    monkeypatch.setattr(deploy.render, "error", errors.append)
+    with pytest.raises(SystemExit):
+        deploy.deploy_update("dep1")
+    assert errors == [
+        "Pass at least one of --name, --idle-timeout, --wait-time, --min-workers, --max-workers, --concurrent."
+    ]

@@ -152,7 +152,9 @@ def deploy_create(
     min_workers: Annotated[int, typer.Option("--min-workers", help="Minimum workers (0-100).")],
     max_workers: Annotated[int, typer.Option("--max-workers", help="Maximum workers (0-100).")],
     idle_timeout: Annotated[int, typer.Option("--idle-timeout", help="Idle timeout in seconds (0-86400).")],
-    wait_time: Annotated[int, typer.Option("--wait-time", help="Wait time in seconds (0-600).")],
+    wait_time: Annotated[
+        int, typer.Option("--wait-time", help="Seconds a request waits for a free worker before it fails (0-600).")
+    ],
     storage: Annotated[int, typer.Option("--storage", help="Deployment filesystem size in GB (min 50).")],
     model: Annotated[str, typer.Option("--model", help="Model id (e.g. a Hugging Face repo id).")],
     concurrent: Annotated[
@@ -170,8 +172,6 @@ def deploy_create(
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Create a serverless deployment and poll until running (unless --detach).
-
-    Use --arg to pass extra framework flags as key=value.
 
     [bold bright_yellow]Serverless is in beta. We're actively improving it and would love early feedback. Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]
     """
@@ -273,7 +273,7 @@ def deploy_logs(
     region: RegionHintOption = None,
     tail: Annotated[int, typer.Option("--tail", help="Last N lines from each worker (0 = live only).")] = 100,
     follow: Annotated[
-        bool, typer.Option("--follow/--no-follow", "-f", help="Keep streaming new lines (Ctrl+C to stop).")
+        bool, typer.Option("--follow/--no-follow", "-f", help="Keep streaming new lines (Ctrl-C to stop).")
     ] = True,
     worker: Annotated[
         int | None, typer.Option("--worker", help="Only this worker id (ids shown in `jl deploy get`).")
@@ -283,7 +283,7 @@ def deploy_logs(
     """Stream a deployment's logs, live from its running workers (logs are not stored)."""
     cli_options.apply_command_options(json_output=json_output)
     if state.json_output:
-        render.die("--json is not supported for log streaming.")
+        render.die("jl deploy logs doesn't support --json. Use --no-follow for a one-time read.")
 
     client = get_client()
     # Read the record before streaming: it resolves the region once (so logs()
@@ -328,7 +328,10 @@ def deploy_update(
     name: Annotated[str | None, typer.Option("--name", help="New name.")] = None,
     idle_timeout: Annotated[int | None, typer.Option("--idle-timeout", help="New idle timeout in seconds.")] = None,
     wait_time: Annotated[
-        int | None, typer.Option("--wait-time", help="New wait time in seconds (custom deployments only).")
+        int | None,
+        typer.Option(
+            "--wait-time", help="New wait time: seconds a request waits for a free worker (custom deployments only)."
+        ),
     ] = None,
     min_workers: Annotated[int | None, typer.Option("--min-workers", help="New minimum workers.")] = None,
     max_workers: Annotated[int | None, typer.Option("--max-workers", help="New maximum workers.")] = None,
@@ -349,6 +352,10 @@ def deploy_update(
       [cyan]jl deploy update <id> --min-workers 1 --max-workers 3[/cyan]
     """
     cli_options.apply_command_options(json_output=json_output)
+    if all(value is None for value in (name, idle_timeout, wait_time, min_workers, max_workers, concurrent)):
+        render.die(
+            "Pass at least one of --name, --idle-timeout, --wait-time, --min-workers, --max-workers, --concurrent."
+        )
 
     client = get_client()
     with render.spinner("Updating deployment..."):
@@ -376,7 +383,7 @@ def deploy_delete(
     region: RegionHintOption = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Tear down a deployment."""
+    """Delete a deployment and stop its billing."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
 
     if not render.confirm(f"Delete deployment {deployment_id}?", skip=state.yes):
@@ -398,7 +405,8 @@ def deploy_chat(
     prompt: Annotated[str | None, typer.Argument(help="Message to send. Omit it for an interactive chat.")] = None,
     system: Annotated[str | None, typer.Option("--system", help="System prompt.")] = None,
     max_tokens: Annotated[
-        int | None, typer.Option("--max-tokens", help="Maximum output tokens (default: the model's limit).", min=1)
+        int | None,
+        typer.Option("--max-tokens", help="Maximum output tokens (default: the model server's default).", min=1),
     ] = None,
     image: ImageOption = None,
     region: RegionHintOption = None,
@@ -407,7 +415,8 @@ def deploy_chat(
     """Test a running deployment: send it a message, or chat with it.
 
     The reply streams to stdout; thinking and token usage go to stderr.
-    If no worker is running, it starts one and exits with "starting, try again shortly" instead of waiting.
+    If no worker is ready, it doesn't wait or send your message: it starts a worker (unless one is already
+    starting) and exits with an error. Try again in a few minutes.
 
     [bold]Examples:[/bold]
 
@@ -422,6 +431,8 @@ def deploy_chat(
 
       [dim]# With an image[/dim]
       [cyan]jl deploy chat <id> "What is in this picture?" --image photo.jpg[/cyan]
+
+    In interactive chat: Ctrl-C stops a reply · Ctrl-D or /exit quits.
     """
     cli_options.apply_command_options(json_output=json_output)
     text = read_prompt(prompt)
@@ -485,7 +496,10 @@ def managed_models_list(json_output: cli_options.JsonOption = False) -> None:
 @managed_app.command("create")
 def managed_models_create(
     model_slug: Annotated[
-        str | None, typer.Argument(help="Managed model slug. Omit it to pick from a list of available models.")
+        str | None,
+        typer.Argument(
+            help="Managed model slug. Omit it to pick from a list; you are then asked for each setting you didn't pass."
+        ),
     ] = None,
     name: Annotated[str | None, typer.Option("--name", help="Deployment name (default: the model slug).")] = None,
     region: Annotated[
