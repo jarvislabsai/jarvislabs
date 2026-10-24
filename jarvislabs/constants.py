@@ -78,5 +78,5 @@ DEPLOYMENT_TRANSIENT_STATUS: frozenset[int] = RETRY_STATUS_CODES | frozenset({0}
 
 # ── Token factory ────────────────────────────────────────────────────────────
 
-# Pay-per-token model APIs; OpenAI-compatible, authed with the same API key.
+# Pay-per-token model APIs; OpenAI-compatible.
 MODELS_API_URL = "https://models.jarvislabs.net/v1"

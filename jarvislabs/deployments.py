@@ -95,7 +95,7 @@ class Deployments:
 
         base_url = serverless_region_url(internal_region)
         resp = self._t.request("POST", "management/create", json=payload, base_url=base_url)
-        return _require_deployment_id(resp)
+        return _created_deployment_id(resp)
 
     def list(self) -> DeploymentListResult:
         """List deployments across all serverless regions, newest first.
@@ -136,22 +136,30 @@ class Deployments:
         name: str | None = None,
         idle_timeout: int | None = None,
         wait_time: int | None = None,
+        min_workers: int | None = None,
+        max_workers: int | None = None,
+        concurrent: int | None = None,
         region: str | None = None,
     ) -> Deployment:
         """Update a running deployment and return the refreshed record.
 
-        Only ``name``, ``idle_timeout``, and ``wait_time`` can change; scaling
-        settings require recreating the deployment.
+        Can change the name, idle timeout, scaling (min/max workers, concurrent
+        requests per worker), and wait time (custom deployments only). To change
+        the GPU, model, or storage, recreate the deployment.
         """
-        patch: dict = {}
-        if name is not None:
-            patch["name"] = name
-        if idle_timeout is not None:
-            patch["idle_timeout"] = idle_timeout
-        if wait_time is not None:
-            patch["wait_time"] = wait_time
+        changes = {
+            "name": name,
+            "idle_timeout": idle_timeout,
+            "wait_time": wait_time,
+            "min_workers": min_workers,
+            "max_workers": max_workers,
+            "concurrent_requests": concurrent,
+        }
+        patch = {key: value for key, value in changes.items() if value is not None}
         if not patch:
-            raise ValidationError("Pass at least one of name / idle_timeout / wait_time.")
+            raise ValidationError(
+                "Pass at least one of name / idle_timeout / wait_time / min_workers / max_workers / concurrent."
+            )
 
         # Read before writing: confirms the deployment exists and gives us its
         # current status for a clear message if the update is rejected.
@@ -168,8 +176,7 @@ class Deployments:
         except APIError as exc:
             if exc.status_code == 409:
                 raise ValidationError(
-                    f"Deployment is in '{deployment.status}'; only running deployments can be updated. "
-                    "Min/max workers are not patchable — recreate to rescale."
+                    f"Deployment is in '{deployment.status}'; only running deployments can be updated."
                 ) from exc
             raise
         return self.get(deployment_id, region=resolved_region)
@@ -365,7 +372,7 @@ class Deployments:
         resp = self._t.request(
             "POST", f"management/managed-models/{model_slug}/create", json=payload, base_url=base_url
         )
-        return _require_deployment_id(resp)
+        return _created_deployment_id(resp)
 
     def _fetch_all_regions(self, path: str) -> tuple[builtins.list[tuple[str, dict]], builtins.list[RegionError]]:
         """GET ``path`` from every region; unreachable regions go in the errors list, and if none answers, raise."""
@@ -396,7 +403,7 @@ def _newest_first_key(summary: DeploymentSummary) -> tuple[bool, datetime]:
     return (start is not None, start or datetime.min)
 
 
-def _require_deployment_id(resp: dict) -> str:
+def _created_deployment_id(resp: dict) -> str:
     """The new deployment's id from a create response; raise if it's missing."""
     deployment_id = resp.get("deployment_id")
     if not deployment_id:

@@ -474,7 +474,6 @@ def test_update_not_running_translated(mock_transport):
     with pytest.raises(ValidationError) as exc:
         _deps(mock_transport).update("dep1", name="new", region="IN2")
     msg = str(exc.value)
-    assert "recreate to rescale" in msg
     assert "starting" in msg  # current status interpolated
 
 
@@ -703,3 +702,10 @@ def test_create_managed_missing_id_raises(mock_transport):
     mock_transport.request.return_value = {}
     with pytest.raises(JarvislabsError):
         _deps(mock_transport).create_managed("glm-5.2", **_create_managed_kwargs())
+
+
+def test_update_sends_scaling(mock_transport):
+    mock_transport.request.side_effect = [_get_payload(), {"updated": {}}, _get_payload()]
+    _deps(mock_transport).update("dep1", min_workers=0, max_workers=3, concurrent=8, region="IN2")
+    patch = mock_transport.request.call_args_list[1].kwargs["json"]
+    assert patch == {"min_workers": 0, "max_workers": 3, "concurrent_requests": 8}

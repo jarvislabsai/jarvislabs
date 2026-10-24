@@ -20,7 +20,6 @@ from jarvislabs.regions import region_code
 # field's required/optional contract.
 RegionCode = Annotated[str, PlainSerializer(region_code)]
 OptionalRegionCode = Annotated[str | None, PlainSerializer(region_code)]
-Price = Annotated[float, PlainSerializer(lambda value: round(value, 2))]
 
 # ── Account ──────────────────────────────────────────────────────────────────
 
@@ -295,7 +294,7 @@ class Deployment(BaseModel):
     storage: int | None = None
     args: dict | None = None
     env: dict | None = None
-    # Set for managed deployments; the API then omits args and env.
+    # Set for managed deployments.
     managed_model: ManagedModel | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
@@ -371,7 +370,7 @@ class ManagedModel(BaseModel):
     gpus_per_worker: int | None = None
     concurrent_requests: int | None = None
     # Cost of one running worker per hour (GPU price x GPUs per worker); filled in by the CLI catalog.
-    price_per_hour: Price | None = None
+    price_per_hour: float | None = None
 
 
 class ManagedModelListResult(BaseModel):
@@ -382,9 +381,9 @@ class ManagedModelListResult(BaseModel):
 
 class ModelPricing(BaseModel):
     currency: str
-    input_per_million_tokens: Price
-    cached_input_per_million_tokens: Price
-    output_per_million_tokens: Price
+    input_per_million_tokens: float
+    cached_input_per_million_tokens: float | None = None
+    output_per_million_tokens: float
 
 
 class ModelThinking(BaseModel):
@@ -404,4 +403,10 @@ class ModelInfo(BaseModel):
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
     thinking: ModelThinking = Field(default_factory=ModelThinking)
-    pricing: ModelPricing
+    pricing: ModelPricing | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_nulls(cls, data: Any) -> Any:
+        # The API sends null for metadata a model doesn't have yet; use the defaults instead.
+        return {key: value for key, value in data.items() if value is not None} if isinstance(data, dict) else data

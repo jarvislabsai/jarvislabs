@@ -6,6 +6,7 @@ from io import StringIO
 from types import SimpleNamespace
 
 import pytest
+import typer
 from rich.console import Console
 
 from jarvislabs.cli import models as models_cli, render, state
@@ -43,7 +44,7 @@ HELLO = [{"role": "user", "content": "Hello"}]
 def _setup(monkeypatch, tmp_path):
     monkeypatch.setattr(render, "spinner", lambda *a, **k: nullcontext())
     monkeypatch.setattr(models_cli, "CHAT_SESSIONS_DIR", tmp_path)
-    monkeypatch.setattr(models_cli, "_read_stdin", lambda: "")
+    monkeypatch.setattr(models_cli, "_read_stdin", lambda **_: "")
     state.json_output = False
     yield
     state.json_output = False
@@ -136,6 +137,11 @@ def test_context_label(tokens, label):
     assert render._context_label(tokens) == label
 
 
+@pytest.mark.parametrize(("value", "label"), [(0.5, "$0.50"), (0.15, "$0.15"), (0.003, "$0.003"), (0.0, "$0.00")])
+def test_price_keeps_small_values(value, label):
+    assert render._price(value, "USD") == label
+
+
 def test_get_detail_and_snippets(monkeypatch):
     _client(monkeypatch, get=lambda model_id: ModelInfo(**DEEPSEEK))
     out = _capture(models_cli.models_get, "deepseek")
@@ -193,7 +199,7 @@ def test_get_without_id_picks_from_list(monkeypatch):
 
 def test_select_model_rows(monkeypatch):
     seen = []
-    monkeypatch.setattr(render, "select_row", lambda message, headings, colors, rows, values: seen.extend(rows))
+    monkeypatch.setattr(render, "select_row", lambda message, headings, rows, values: seen.extend(rows))
     render.select_model([ModelInfo(**QWEN)])
     assert seen == [("qwen", "128K", "$0.20", "$0.80")]
 
@@ -201,7 +207,10 @@ def test_select_model_rows(monkeypatch):
 # ── chat ────────────────────────────────────────────────────────────────────────
 
 
-def _chat_client(monkeypatch, chunks=(), reply=None):
+OK_CHUNKS = ({"choices": [{"delta": {"content": "OK"}, "finish_reason": "stop"}]},)
+
+
+def _chat_client(monkeypatch, chunks=OK_CHUNKS, reply=None):
     calls = []
 
     def chat_stream(model_id, messages, **params):
@@ -235,7 +244,7 @@ def test_chat_streams_reply_and_usage(monkeypatch):
 
 def test_chat_piped_input_and_options(monkeypatch):
     calls = _chat_client(monkeypatch)
-    monkeypatch.setattr(models_cli, "_read_stdin", lambda: "file text")
+    monkeypatch.setattr(models_cli, "_read_stdin", lambda **_: "file text")
     monkeypatch.setattr(render, "chat_usage", lambda *a: None)
     models_cli.models_chat("deepseek", "Summarize", system="Be brief.", max_tokens=50, thinking=False, effort="high")
     assert calls == [
@@ -280,13 +289,24 @@ def test_read_stdin_reads_pipes_only(monkeypatch):
     os.close(write)
     with os.fdopen(read) as pipe:
         monkeypatch.setattr(models_cli.sys, "stdin", pipe)
-        assert READ_STDIN() == "piped text"
+        assert READ_STDIN(wait=True) == "piped text"
     with open(os.devnull) as devnull:
         monkeypatch.setattr(models_cli.sys, "stdin", devnull)
-        assert READ_STDIN() == ""
+        assert READ_STDIN(wait=True) == ""
 
 
-def test_model_info_drops_thinking_defaults_and_rounds_prices():
+def test_read_stdin_skips_a_silent_open_pipe_when_a_prompt_is_given(monkeypatch):
+    monkeypatch.setattr(models_cli, "STDIN_WAIT_S", 0.01)
+    read, write = os.pipe()  # the write end stays open and nothing is written: reading would hang
+    try:
+        with os.fdopen(read) as pipe:
+            monkeypatch.setattr(models_cli.sys, "stdin", pipe)
+            assert READ_STDIN(wait=False) == ""
+    finally:
+        os.close(write)
+
+
+def test_model_info_drops_thinking_defaults_and_keeps_exact_prices():
     model = ModelInfo(
         **{
             **DEEPSEEK,
@@ -297,8 +317,7 @@ def test_model_info_drops_thinking_defaults_and_rounds_prices():
     dumped = model.model_dump()
     assert "default_enabled" not in dumped["thinking"]
     assert "default_effort" not in dumped["thinking"]
-    assert dumped["pricing"]["input_per_million_tokens"] == 12.32
-    assert model.pricing.input_per_million_tokens == 12.3201
+    assert dumped["pricing"]["input_per_million_tokens"] == 12.3201
 
 
 def test_get_detail_shows_modalities(monkeypatch):
@@ -353,7 +372,8 @@ def test_session_not_saved_when_reply_stopped(monkeypatch, sessions_dir):
 
     _client(monkeypatch, get=lambda model_id: ModelInfo(**DEEPSEEK), chat_stream=chat_stream)
     monkeypatch.setattr(render, "info", lambda m: None)
-    _capture(models_cli.models_chat, "deepseek", "Hello")
+    with pytest.raises(typer.Exit):
+        _capture(models_cli.models_chat, "deepseek", "Hello")
     assert not list(sessions_dir.glob("*.json"))
 
 
@@ -416,3 +436,50 @@ def test_continue_without_sessions(monkeypatch, sessions_dir):
     with pytest.raises(SystemExit):
         models_cli.models_chat("deepseek", "Hi", continue_session=True)
     assert errors == ["No session to continue. Send a prompt without -c to start one."]
+
+
+def test_end_unknown_session(monkeypatch, sessions_dir):
+    errors = _errors(monkeypatch)
+    with pytest.raises(SystemExit):
+        models_cli.models_chat(end="missing")
+    assert errors == ["Session missing not found or already ended."]
+
+
+def test_stream_reply_warns_when_cut_off(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(render, "warning", warnings.append)
+    chunks = [{"choices": [{"delta": {"content": "Half"}, "finish_reason": "length"}]}]
+    assert _capture(models_cli.stream_reply, chunks) == "Half\n"
+    assert "--max-tokens" in warnings[0]
+
+
+def test_stream_reply_without_answer_returns_none(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(render, "warning", warnings.append)
+    monkeypatch.setattr(render, "chat_thinking", lambda text: None)
+    chunks = [{"choices": [{"delta": {"reasoning_content": "Hmm"}, "finish_reason": "length"}]}]
+    assert models_cli.stream_reply(chunks) is None
+    assert warnings
+
+
+def test_stream_reply_reads_vllm_reasoning(monkeypatch):
+    thoughts = []
+    monkeypatch.setattr(render, "chat_thinking", thoughts.append)
+    chunks = [{"choices": [{"delta": {"reasoning": "Hmm"}}]}, {"choices": [{"delta": {"content": "Hi"}}]}]
+    _capture(models_cli.stream_reply, chunks)
+    assert thoughts[0] == "Hmm"
+
+
+def test_model_info_accepts_nulls():
+    model = ModelInfo(id="m", pricing=None, thinking=None, input_modalities=None, output_modalities=None)
+    assert model.pricing is None
+    assert model.thinking.supported is False
+    assert model.input_modalities == []
+    assert render._prices(None) == {"Input": "—", "Cached": "—", "Output": "—"}
+
+
+def test_chat_usage_without_prices_shows_tokens(monkeypatch):
+    notes = []
+    monkeypatch.setattr(render, "info", notes.append)
+    render.chat_usage({"prompt_tokens": 10, "completion_tokens": 5})
+    assert notes == ["\n10 in · 5 out"]

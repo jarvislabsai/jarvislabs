@@ -14,9 +14,11 @@ from rich import box
 from rich.console import Console
 from rich.markup import escape
 from rich.padding import Padding
+from rich.panel import Panel
 from rich.rule import Rule
 from rich.syntax import Syntax
 from rich.table import Table
+from rich.text import Text
 from rich.theme import Theme
 
 from jarvislabs.cli import options as cli_options, state
@@ -549,7 +551,9 @@ def _openai_snippet(base_url: str, model: str) -> str:
 
 
 def _price(value: float, currency: str) -> str:
-    return f"{currency_symbol(currency)}{value:.2f}"
+    # Two decimals unless the API gives more, so a small price like 0.003 isn't shown as 0.00.
+    amount = f"{value:.2f}" if value == round(value, 2) else f"{value:g}"
+    return f"{currency_symbol(currency)}{amount}"
 
 
 def _context_label(tokens: int | None) -> str:
@@ -560,21 +564,34 @@ def _context_label(tokens: int | None) -> str:
     return f"{round(tokens / 1000)}K"
 
 
+PRICE_FIELDS = {
+    "Input": "input_per_million_tokens",
+    "Cached": "cached_input_per_million_tokens",
+    "Output": "output_per_million_tokens",
+}
+
+
 def _prices(pricing) -> dict[str, str]:
-    return {
-        "Input": _price(pricing.input_per_million_tokens, pricing.currency),
-        "Cached": _price(pricing.cached_input_per_million_tokens, pricing.currency),
-        "Output": _price(pricing.output_per_million_tokens, pricing.currency),
-    }
+    """Prices per 1M tokens for display; "—" where the API has none."""
+    prices = {}
+    for label, field in PRICE_FIELDS.items():
+        value = getattr(pricing, field) if pricing else None
+        prices[label] = "—" if value is None else _price(value, pricing.currency)
+    return prices
 
 
 def models_table(models: list) -> None:
-    table = _table("Models · price per 1M tokens")
-    table.add_column("ID", style="cyan", no_wrap=True)
+    table = _table("Models · price per 1M tokens", show_lines=True)
+    # Name above the ID in one column: a separate Name column gets squeezed out on narrow terminals.
+    table.add_column("Model · ID", no_wrap=True)
     for heading in ("Context", "Input", "Cached", "Output"):
         table.add_column(heading, justify="right", no_wrap=True)
     for model in models:
-        table.add_row(escape(model.id), _context_label(model.context_length), *_prices(model.pricing).values())
+        table.add_row(
+            f"{escape(model.name or model.id)}\n[cyan]{escape(model.id)}[/cyan]",
+            _context_label(model.context_length),
+            *_prices(model.pricing).values(),
+        )
     stdout_console.print(table)
     info("Tip: run 'jl models get <ID>' for details and ready-to-use code")
 
@@ -585,8 +602,7 @@ def select_model(models: list):
         prices = _prices(model.pricing)
         rows.append((model.id, _context_label(model.context_length), prices["Input"], prices["Output"]))
     headings = ("MODEL", "CONTEXT", "INPUT/1M", "OUTPUT/1M")
-    colors = ("fg:ansicyan", "fg:ansibrightblack", "fg:ansigreen", "fg:ansigreen")
-    return select_row("Select a model:", headings, colors, rows, models)
+    return select_row("Select a model:", headings, rows, models)
 
 
 def _thinking_lines(thinking) -> str:
@@ -661,17 +677,22 @@ def chat_prompt() -> str:
     return console.input("[bold cyan]>[/bold cyan] ")
 
 
-def chat_usage(usage: dict | None, pricing) -> None:
+def chat_usage(usage: dict | None, pricing=None) -> None:
+    """Token counts, plus the cost when the prices are known."""
     if not usage:
         return
     tokens_in, tokens_out = usage["prompt_tokens"], usage["completion_tokens"]
+    line = f"\n{tokens_in:,} in · {tokens_out:,} out"
     cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
-    cost = (
-        (tokens_in - cached) * pricing.input_per_million_tokens
-        + cached * pricing.cached_input_per_million_tokens
-        + tokens_out * pricing.output_per_million_tokens
-    ) / 1_000_000
-    info(f"\n{tokens_in:,} in · {tokens_out:,} out · {currency_symbol(pricing.currency)}{cost:.6f}")
+    cached_price = pricing and pricing.cached_input_per_million_tokens
+    if pricing and (cached_price is not None or not cached):
+        cost = (
+            (tokens_in - cached) * pricing.input_per_million_tokens
+            + cached * (cached_price or 0)
+            + tokens_out * pricing.output_per_million_tokens
+        ) / 1_000_000
+        line += f" · {currency_symbol(pricing.currency)}{cost:.6f}"
+    info(line)
 
 
 def resource_label(inst) -> str:
@@ -900,7 +921,8 @@ def confirm(msg: str, *, skip: bool = False) -> bool:
     if state.json_output:
         die("--json requires --yes")
     try:
-        response = console.input(f"[yellow]?[/yellow] {msg} [dim]\\[y/N][/dim] ")
+        # A Text prompt skips Rich's auto-highlighting, which would color the numbers in msg.
+        response = console.input(Text.from_markup(f"[yellow]?[/yellow] {msg} [dim]\\[y/N][/dim] "))
         return response.strip().lower() in ("y", "yes")
     except (KeyboardInterrupt, EOFError):
         console.print()
@@ -986,7 +1008,8 @@ def managed_models_table(result) -> None:
             region_label(model.region),
         )
     stdout_console.print(table)
-    info("Price is per running worker; at 0 workers a deployment costs nothing.")
+    info("Price is per running worker per hour. With 0 workers you pay no GPU cost,")
+    info("but a small storage fee applies until you delete the deployment.")
     info("Deploy one: jl deploy managed-models create <SLUG>, or leave out <SLUG> to pick from a list")
 
 
@@ -1003,8 +1026,7 @@ def select_managed_model(models: list, currency: str | None):
         for model in models
     ]
     headings = ("MODEL", "SLUG", "GPU", "CONTEXT", "PRICE/HR", "REGION")
-    colors = ("bold", "fg:ansicyan", "fg:ansigreen", "fg:ansibrightblack", "fg:ansigreen", "fg:ansibrightblack")
-    return select_row("Select a managed model:", headings, colors, rows, models)
+    return select_row("Select a managed model:", headings, rows, models)
 
 
 def _managed_gpu_label(model) -> str:
@@ -1023,9 +1045,36 @@ def managed_cost_label(model, currency: str | None, max_workers: int) -> str:
         return "unknown"
     per_worker = _managed_price_label(model, currency)
     if max_workers <= 1:
-        return f"{per_worker}/hr per running worker"
+        return f"{per_worker}/hr per running worker, plus storage"
     at_max = f"{currency_symbol(currency or 'USD')}{model.price_per_hour * max_workers:.2f}"
-    return f"{per_worker}/hr per running worker, up to {at_max}/hr at {max_workers} workers"
+    return f"{per_worker}/hr per running worker, up to {at_max}/hr at {max_workers} workers, plus storage"
+
+
+MANAGED_SETTINGS_HELP = (
+    (
+        "Worker",
+        "A machine with GPUs that runs your model and answers requests. You pay by the hour for each worker while it is on.",
+    ),
+    (
+        "Min workers",
+        "How many workers stay on all the time. With 0, nothing runs while nobody uses it, so you pay "
+        "no GPU cost. The first request after a quiet time is slower, because a worker has to start.",
+    ),
+    ("Max workers", "The most workers that can run at once when many requests come in."),
+    ("Idle timeout", "How many seconds a worker waits with no requests before it turns off."),
+    ("Concurrent", "How many requests one worker answers at the same time."),
+    ("Storage", "Each deployment also has a small storage fee until you delete it."),
+)
+
+
+def managed_settings_help() -> None:
+    """Explain the scaling settings in plain words, before asking for them."""
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold", no_wrap=True)
+    grid.add_column()
+    for name, meaning in MANAGED_SETTINGS_HELP:
+        grid.add_row(name, meaning)
+    console.print(Panel(grid, title="What these settings mean", title_align="left", border_style=BORDER_STYLE))
 
 
 def _model_label(dep) -> str:
@@ -1044,15 +1093,24 @@ def warn_region_errors(region_errors: list) -> None:
 
 # ── Interactive prompts ──────────────────────────────────────────────────────
 
-PROMPT_STYLE = questionary.Style([("pointer", "fg:#73daca bold"), ("separator", "fg:ansibrightblack bold")])
+PROMPT_STYLE = questionary.Style(
+    [
+        ("pointer", "fg:#73daca bold"),
+        ("highlighted", "fg:#73daca bold"),  # the row under the cursor
+        ("separator", "fg:ansibrightblack bold"),
+    ]
+)
 
 
 def can_prompt() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def select_row(message: str, headings: tuple[str, ...], colors: tuple[str, ...], rows: list, values: list) -> Any:
-    """Arrow-key picker shown as an aligned table; returns the chosen row's value. Ctrl+C exits."""
+def select_row(message: str, headings: tuple[str, ...], rows: list, values: list) -> Any:
+    """Arrow-key picker shown as an aligned table; returns the chosen row's value. Ctrl+C exits.
+
+    Rows are plain text: questionary highlights the row under the cursor only for plain-text titles.
+    """
     widths = [max(len(cell) for cell in column) for column in zip(headings, *rows, strict=True)]
 
     def pad(cells) -> list[str]:
@@ -1060,8 +1118,7 @@ def select_row(message: str, headings: tuple[str, ...], colors: tuple[str, ...],
 
     choices = [questionary.Separator("".join(pad(headings)))]
     choices += [
-        questionary.Choice(title=list(zip(colors, pad(row), strict=True)), value=value)
-        for row, value in zip(rows, values, strict=True)
+        questionary.Choice(title="".join(pad(row)), value=value) for row, value in zip(rows, values, strict=True)
     ]
     question = questionary.select(message, choices=choices, style=PROMPT_STYLE)
     question.application.erase_when_done = True  # replaced below by the chosen row, one field per line
@@ -1071,12 +1128,12 @@ def select_row(message: str, headings: tuple[str, ...], colors: tuple[str, ...],
     label_width = max(len(heading) for heading in headings)
     console.print(f"[bold]?[/bold] {message}")
     for heading, cell in zip(headings, rows[values.index(choice)], strict=True):
-        console.print(f"  [dim]{heading:<{label_width}}[/dim]   {escape(cell)}")
+        console.print(f"  [dim]{heading:<{label_width}}[/dim]   {escape(cell)}", highlight=False)
     return choice
 
 
 def ask_value(param: str, message: str, value, *, low: int | None = None, high: int | None = None):
-    """Ask for a setting, prefilled with its value; whole numbers when low/high are given.
+    """Ask for a setting, prefilled with its value; a whole number when ``low`` is given (``high`` is optional).
 
     A flag given on the command line is kept without asking. Ctrl+C exits.
     """
@@ -1086,10 +1143,12 @@ def ask_value(param: str, message: str, value, *, low: int | None = None, high: 
     def validate(text: str) -> bool | str:
         if low is None:
             return bool(text.strip()) or "This can't be empty."
+        if high is None:
+            return (text.strip().isdigit() and int(text) >= low) or f"Enter a whole number of at least {low}."
         return (text.strip().isdigit() and low <= int(text) <= high) or f"Enter a whole number from {low} to {high}."
 
     if low is not None:
-        value = min(max(value, low), high)
+        value = max(value, low) if high is None else min(max(value, low), high)
     answer = questionary.text(message, default=str(value), validate=validate, style=PROMPT_STYLE).ask()
     if answer is None:
         raise typer.Exit()

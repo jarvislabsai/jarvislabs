@@ -318,7 +318,7 @@ jl filesystem create --name x --storage 100 --yes --json  # create filesystem
 
 `jl deploy` = beta serverless model serving: an OpenAI-compatible endpoint with autoscaling workers, **no instance to manage** (no SSH/exec, no pause/resume). You create, call the endpoint, and `delete` the deployment when done.
 
-Subcommands: `create`, `list`, `get`, `status`, `logs`, `update`, `delete`, plus `managed-models list` / `managed-models create` for ready-made models. Run `jl deploy <cmd> --help` for exact flags.
+Subcommands: `create`, `list`, `get`, `status`, `logs`, `chat`, `update`, `delete`, plus `managed-models list` / `managed-models create` for ready-made models. Run `jl deploy <cmd> --help` for exact flags.
 
 **Regions:** serverless is `IN1`/`IN2` only (not `EU1`). `create` requires `--region`. Per-id commands (`get`/`status`/`logs`/`update`/`delete`) search both regions if `--region` is omitted — pass it to skip the search.
 
@@ -358,7 +358,7 @@ jl deploy managed-models create <model_slug> \
 
 A running deployment exposes an OpenAI-compatible base URL (`openai_base_url` from `jl deploy get <id> --json`, present only when `running`), authed with your JarvisLabs API key. **Use the served model name** — if you set `--arg served-model-name=<x>`, that is the `model` field, not the `--model` id. For a managed deployment, the `model` field is `managed_model.api_model_name` from `jl deploy get <id> --json`. `create` prints a paste-ready snippet; `get` shows the base URL.
 
-Once `running`, send a real inference request to confirm the model responds as expected before relying on the endpoint. With `--min-workers 0`, the first request may be slow while a worker starts; use a generous first-call timeout.
+Once `running`, send a real inference request to confirm the model responds as expected before relying on the endpoint: `jl deploy chat <id> "Say hello" --max-tokens 50` (add `--json` for the full response). With `--min-workers 0`, the first request may be slow while a worker starts; use a generous first-call timeout.
 
 ### Inspecting & managing
 
@@ -374,7 +374,7 @@ jl deploy delete <id> --yes --json
 
 - Poll until `status` is `running`; `failed`/`cleaning`/`deleting` are terminal. On failure with no live workers, read the reason from `jl deploy get <id>`.
 - **`jl deploy logs` defaults to `--follow` (blocks) and rejects `--json`** — pass `--no-follow` for a one-shot read. Logs stream live from workers and are not stored.
-- `jl deploy update` only changes `name`/`idle-timeout`/`wait-time`, and only while running. To change GPU/model/workers/storage, recreate.
+- `jl deploy update` changes `--name`, `--idle-timeout`, `--min-workers`, `--max-workers`, `--concurrent`, and `--wait-time` (custom deployments only), and only while running. To change GPU/model/storage, recreate.
 - Deployments accrue cost while active (compute + storage), so `delete` when done.
 
 ## Token Factory (Pay-per-token models)

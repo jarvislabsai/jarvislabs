@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import stat
 import sys
 import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
@@ -18,13 +19,17 @@ from jarvislabs.constants import MODELS_API_URL
 from jarvislabs.exceptions import NotFoundError
 
 if TYPE_CHECKING:
-    from jarvislabs.models import ModelInfo
+    from collections.abc import Callable, Iterable
+
+    from jarvislabs.models import ModelInfo, ModelPricing
 
 ModelIdArgument = Annotated[str | None, typer.Argument(help="Model ID. Omit it to pick from a list.")]
 
 # Chat sessions keep history across separate `jl models chat` calls (for agents) until ended or unused this long.
 CHAT_SESSIONS_DIR = Path(tempfile.gettempdir()) / "jl-chats"
 CHAT_SESSION_TTL_S = 900
+# With a prompt given, piped input is added only if it starts arriving within this time (see _read_stdin).
+STDIN_WAIT_S = 1.0
 
 models_app = typer.Typer(name="models", help="Pay-per-token model APIs: call a model directly, no deployment needed.")
 app.add_typer(models_app, rich_help_panel="Token Factory")
@@ -111,14 +116,17 @@ def models_chat(
     cli_options.apply_command_options(json_output=json_output)
     _prune_sessions()
     if end:
-        _session_path(end).unlink(missing_ok=True)
+        path = _session_path(end)
+        if not path.exists():
+            render.die(f"Session {end} not found or already ended.")
+        path.unlink()
         if state.json_output:
             render.print_json({"success": True, "session": end})
             return
         render.success(f"Session {end} ended.")
         return
 
-    text = "\n\n".join(part for part in (prompt, _read_stdin()) if part)
+    text = read_prompt(prompt)
     if (session or continue_session) and not text:
         render.die("Pass a prompt with --session or -c. See: jl models chat --help")
     session = session or (_latest_session() if continue_session else None)
@@ -131,10 +139,13 @@ def models_chat(
     model = _resolve_model(client, model_id)
     params = {**_thinking_params(model, thinking, effort), "max_tokens": max_tokens}
 
+    def send(history: list[dict]) -> str | None:
+        return stream_reply(client.models.chat_stream(model.id, history, **params), model.pricing)
+
     if not text:
         if state.json_output or not render.can_prompt():
             render.die("Pass a prompt. See: jl models chat --help")
-        _interactive_chat(client, model, messages, params)
+        interactive_chat(model.id, messages, send)
         return
 
     messages.append({"role": "user", "content": text})
@@ -144,10 +155,11 @@ def models_chat(
         _save_session(session, [*messages, {"role": "assistant", "content": reply}])
         render.print_json({**response, "session": session})
         return
-    reply = _stream_reply(client, model, messages, params)
-    if reply is not None:
-        _save_session(session, [*messages, {"role": "assistant", "content": reply}])
-        render.info(f"Session {session} · end: jl models chat --end {session}")
+    reply = send(messages)
+    if reply is None:
+        raise typer.Exit(1)
+    _save_session(session, [*messages, {"role": "assistant", "content": reply}])
+    render.info(f"Session {session} · end: jl models chat --end {session}")
 
 
 def _resolve_model(client, model_id: str | None) -> ModelInfo:
@@ -197,10 +209,27 @@ def _prune_sessions() -> None:
             path.unlink(missing_ok=True)
 
 
-def _read_stdin() -> str:
-    # Only pipes and files: other non-terminal stdins (e.g. agents) may never close, so reading would hang.
+def read_prompt(prompt: str | None) -> str:
+    """The prompt argument plus any piped or redirected input, joined by a blank line."""
+    return "\n\n".join(part for part in (prompt, _read_stdin(wait=prompt is None)) if part)
+
+
+def _read_stdin(*, wait: bool) -> str:
+    """Piped or redirected input; "" for a terminal or anything else.
+
+    Some callers (e.g. agents) leave a pipe open without ever writing to it, so reading it
+    would hang. When a prompt was given (``wait=False``), a pipe is read only if input or
+    end-of-file arrives within STDIN_WAIT_S. Without a prompt the input is all there is, so wait.
+    """
     mode = os.fstat(sys.stdin.fileno()).st_mode
-    return sys.stdin.read().strip() if stat.S_ISFIFO(mode) or stat.S_ISREG(mode) else ""
+    if stat.S_ISREG(mode):
+        return sys.stdin.read().strip()
+    if not stat.S_ISFIFO(mode):
+        return ""
+    # select() can't watch pipes on Windows, so there a pipe is always read.
+    if not wait and os.name != "nt" and not select.select([sys.stdin], [], [], STDIN_WAIT_S)[0]:
+        return ""
+    return sys.stdin.read().strip()
 
 
 def _thinking_params(model: ModelInfo, thinking: bool | None, effort: str | None) -> dict:
@@ -220,15 +249,19 @@ def _thinking_params(model: ModelInfo, thinking: bool | None, effort: str | None
     return {"chat_template_kwargs": kwargs} if kwargs else {}
 
 
-def _stream_reply(client, model: ModelInfo, messages: list[dict], params: dict) -> str | None:
-    """Print a reply as it streams; returns its text, or None when Ctrl-C stopped it."""
-    reply, thought, usage = "", False, None
+def stream_reply(chunks: Iterable[dict[str, Any]], pricing: ModelPricing | None = None) -> str | None:
+    """Print a reply as it streams; returns its text, or None when Ctrl-C stopped it or no answer came back."""
+    reply, thought, usage, finish_reason = "", False, None, None
     try:
-        for chunk in client.models.chat_stream(model.id, messages, **params):
+        for chunk in chunks:
             usage = chunk.get("usage") or usage
-            delta = chunk["choices"][0]["delta"] if chunk.get("choices") else {}
-            if delta.get("reasoning_content"):
-                render.chat_thinking(delta["reasoning_content"])
+            choice = chunk["choices"][0] if chunk.get("choices") else {}
+            finish_reason = choice.get("finish_reason") or finish_reason
+            delta = choice.get("delta") or {}
+            # The Token Factory sends both names; a deployment's engine (vLLM) sends only "reasoning".
+            thinking = delta.get("reasoning_content") or delta.get("reasoning")
+            if thinking:
+                render.chat_thinking(thinking)
                 thought = True
             if delta.get("content"):
                 if thought and not reply:
@@ -240,12 +273,17 @@ def _stream_reply(client, model: ModelInfo, messages: list[dict], params: dict) 
         render.info("Stopped.")
         return None
     render.chat_text("\n")
-    render.chat_usage(usage, model.pricing)
-    return reply
+    render.chat_usage(usage, pricing)
+    if finish_reason == "length":
+        render.warning("The reply hit the --max-tokens limit and was cut off. Raise --max-tokens to get all of it.")
+    elif not reply:
+        render.warning("The model returned no answer.")
+    return reply or None
 
 
-def _interactive_chat(client, model: ModelInfo, messages: list[dict], params: dict) -> None:
-    render.info(f"Chatting with {model.id}. Ctrl-C stops a reply · Ctrl-D or /exit quits.")
+def interactive_chat(name: str, messages: list[dict], send: Callable[[list[dict]], str | None]) -> None:
+    """Chat turn by turn; ``send`` streams one reply to the history and returns it (None if there's none)."""
+    render.info(f"Chatting with {name}. Ctrl-C stops a reply · Ctrl-D or /exit quits.")
     while True:
         try:
             text = render.chat_prompt().strip()
@@ -257,7 +295,7 @@ def _interactive_chat(client, model: ModelInfo, messages: list[dict], params: di
         if not text:
             continue
         messages.append({"role": "user", "content": text})
-        reply = _stream_reply(client, model, messages, params)
+        reply = send(messages)
         if reply is None:
             messages.pop()
         else:

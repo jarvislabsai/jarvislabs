@@ -291,7 +291,6 @@ def test_gpu_table_empty(capsys):
 # ── Interactive prompts ──────────────────────────────────────────────────────
 
 HEADINGS = ("NAME", "SLUG", "REGION")
-COLORS = ("bold", "fg:ansicyan", "fg:ansiyellow")
 
 
 def test_select_row_columns_line_up_with_long_values(monkeypatch):
@@ -303,10 +302,10 @@ def test_select_row_columns_line_up_with_long_values(monkeypatch):
 
     monkeypatch.setattr(render.questionary, "select", fake_select)
     rows = [("GLM-5.2", "glm-5.2", "IN2"), ("Nemotron 3.5 Lightning", "nemotron-3.5-lightning-30b-a3b-bf16", "IN1")]
-    assert render.select_row("Pick", HEADINGS, COLORS, rows, ["a", "b"]) == "a"
+    assert render.select_row("Pick", HEADINGS, rows, ["a", "b"]) == "a"
 
     heading, *choices = shown
-    lines = ["".join(text for _, text in choice.title) for choice in choices]
+    lines = [choice.title for choice in choices]  # plain text, so questionary can highlight it
     # Every column starts at the same position in the heading and in each row.
     assert lines[0].index("glm-5.2") == heading.title.index("SLUG")
     assert lines[0].index("IN2") == lines[1].index("IN1") == heading.title.index("REGION")

@@ -181,7 +181,7 @@ def test_create_ctrl_c_clean_detach(monkeypatch):
     with pytest.raises(typer.Exit) as exc:
         _create_call(None)
     assert exc.value.exit_code == 0
-    assert any("keeps running" in m for m in info_calls)
+    assert any("still starting" in m for m in info_calls)
 
 
 def test_create_ctrl_c_json_emits_id(monkeypatch):
@@ -913,3 +913,43 @@ def test_managed_create_confirm_shows_cost(monkeypatch):
     with pytest.raises(typer.Exit):
         _managed_create_call(max_workers=2)
     assert "cost=₹3200.00/hr per running worker, up to ₹6400.00/hr at 2 workers" in prompts[0]
+
+
+# ── chat ───────────────────────────────────────────────────────────────────────
+
+
+def _chat_setup(monkeypatch, status="running"):
+    calls = []
+
+    def chat_stream(model, messages, **params):
+        calls.append((model, messages, params))
+        yield {"choices": [{"delta": {"content": "PONG"}, "finish_reason": "stop"}]}
+
+    deployments = SimpleNamespace(
+        get=lambda deployment_id, region=None: _deployment(status=status),
+        openai_base_url=lambda deployment_id, region=None: "https://x/openai/dep1/v1",
+    )
+    client = _install_client(monkeypatch, deployments)
+    client.models = SimpleNamespace(chat_stream=chat_stream)
+    monkeypatch.setattr(deploy.render, "spinner", lambda *a, **k: nullcontext())
+    monkeypatch.setattr(deploy.render, "chat_usage", lambda *a: None)
+    monkeypatch.setattr("jarvislabs.cli.models._read_stdin", lambda **_: "")
+    return calls
+
+
+def test_deploy_chat_sends_to_the_deployment(monkeypatch):
+    calls = _chat_setup(monkeypatch)
+    deploy.deploy_chat("dep1", "Say PONG", max_tokens=20)
+    model, messages, params = calls[0]
+    assert model == "Qwen/Qwen3-0.6B"
+    assert messages == [{"role": "user", "content": "Say PONG"}]
+    assert params == {"base_url": "https://x/openai/dep1/v1", "max_tokens": 20}
+
+
+def test_deploy_chat_needs_a_running_deployment(monkeypatch):
+    _chat_setup(monkeypatch, status="starting")
+    errors = []
+    monkeypatch.setattr(deploy.render, "error", errors.append)
+    with pytest.raises(SystemExit):
+        deploy.deploy_chat("dep1", "Hi")
+    assert "is starting; it must be running" in errors[0]
