@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import mimetypes
 import os
 import select
 import stat
 import sys
-import tempfile
 import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
+from platformdirs import user_cache_dir
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
@@ -42,8 +43,9 @@ ParamOption = Annotated[
 # API key go); --param can't replace them.
 RESERVED_PARAMS = frozenset({"model", "messages", "stream", "stream_options", "base_url", "read_timeout"})
 
-# Chat sessions keep history across separate `jl models chat` calls (for agents) until ended or unused this long.
-CHAT_SESSIONS_DIR = Path(tempfile.gettempdir()) / "jl-chats"
+# Chat sessions keep history across separate `jl models chat` calls (for agents) until unused this long.
+# They live in the user's own cache folder, readable only by them.
+CHAT_SESSIONS_DIR = Path(user_cache_dir("jl")) / "chat-sessions"
 CHAT_SESSION_TTL_S = 900
 # With a prompt given, piped input is added only if it starts arriving within this time (see _read_stdin).
 STDIN_WAIT_S = 1.0
@@ -146,7 +148,7 @@ def models_chat(
         render.die("Pass a prompt with --session or -c. See: jl models chat --help")
     if image and not text:
         render.die("Pass a prompt with --image. See: jl models chat --help")
-    extra = request_params(param)
+    extra = request_params(param, json_output=json_output)
     session = session or (_latest_session() if continue_session else None)
     messages = _load_session(session) if session else []
     session = session or uuid.uuid4().hex[:8]
@@ -155,7 +157,8 @@ def models_chat(
 
     client = get_client()
     model = _resolve_model(client, model_id)
-    if image and model.input_modalities and "image" not in model.input_modalities:
+    has_images = bool(image) or any(isinstance(m.get("content"), list) for m in messages)
+    if has_images and model.input_modalities and "image" not in model.input_modalities:
         render.die(f"{model.id} doesn't accept images. See the Modalities in: jl models get {model.id}")
     params = merge_params({**_thinking_params(model, thinking, effort), "max_tokens": max_tokens}, extra)
 
@@ -173,8 +176,11 @@ def models_chat(
         response = client.models.chat(model.id, messages, **params)
         message = response["choices"][0]["message"]
         thinking = message.get("reasoning_content") or message.get("reasoning")
-        _save_session(session, [*messages, assistant_message(message.get("content") or "", thinking)])
-        render.print_json({**response, "session": session})
+        # A tool-call turn needs the tool results before the chat can go on, which jl can't send; don't save it.
+        if not message.get("tool_calls"):
+            _save_session(session, [*messages, assistant_message(message.get("content") or "", thinking)])
+        # No session ID when nothing was saved (a tool-call turn that starts a session).
+        render.print_json({**response, "session": session} if _session_path(session).exists() else response)
         return
     reply = send(messages)
     if reply is None:
@@ -207,7 +213,13 @@ def _load_session(session_id: str) -> list[dict]:
     path = _session_path(session_id)
     if not path.exists():
         render.die(f"Session {session_id} not found or expired. Send a prompt without --session to start a new one.")
-    return json.loads(path.read_text())["messages"]
+    try:
+        messages = json.loads(path.read_text())["messages"]
+    except (OSError, ValueError, KeyError, TypeError):
+        messages = None
+    if not isinstance(messages, list):
+        render.die(f"Session {session_id} is damaged. Send a prompt without --session to start a new one.")
+    return messages
 
 
 def _latest_session() -> str:
@@ -218,8 +230,14 @@ def _latest_session() -> str:
 
 
 def _save_session(session_id: str, messages: list[dict]) -> None:
-    CHAT_SESSIONS_DIR.mkdir(mode=0o700, exist_ok=True)
-    _session_path(session_id).write_text(json.dumps({"messages": messages}))
+    """Write the file only the user can read, then swap it in, so an interrupted save can't leave it half-written."""
+    CHAT_SESSIONS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = _session_path(session_id)
+    tmp = path.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump({"messages": messages}, f)
+    os.replace(tmp, path)
 
 
 def _prune_sessions() -> None:
@@ -247,10 +265,17 @@ def _read_stdin(*, wait: bool) -> str:
         return sys.stdin.read().strip()
     if not stat.S_ISFIFO(mode):
         return ""
-    # select() can't watch pipes on Windows, so there a pipe is always read.
-    if not wait and os.name != "nt" and not select.select([sys.stdin], [], [], STDIN_WAIT_S)[0]:
-        return ""
-    return sys.stdin.read().strip()
+    # select() can't watch pipes on Windows, so there a pipe is always read to the end.
+    if wait or os.name == "nt":
+        return sys.stdin.read().strip()
+    # Read what arrives, and stop once the pipe closes or stays quiet for STDIN_WAIT_S.
+    fd, chunks = sys.stdin.fileno(), []
+    while select.select([fd], [], [], STDIN_WAIT_S)[0]:
+        chunk = os.read(fd, 65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return b"".join(chunks).decode(errors="replace").strip()
 
 
 def _thinking_params(model: ModelInfo, thinking: bool | None, effort: str | None) -> dict:
@@ -299,10 +324,14 @@ def _image_url(image: str) -> str:
     mime = mimetypes.guess_type(path.name)[0]
     if not mime or not mime.startswith("image/"):
         render.die(f"{image} doesn't look like an image (by its file extension).")
-    return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode()}"
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        render.die(f"Can't read {image}: {exc.strerror}")
+    return f"data:{mime};base64,{base64.b64encode(data).decode()}"
 
 
-def request_params(pairs: list[str] | None) -> dict[str, Any]:
+def request_params(pairs: list[str] | None, *, json_output: bool) -> dict[str, Any]:
     """Extra request fields from --param key=value. A value is JSON when it parses, else a string;
     ``@path`` reads the value from a file."""
     params: dict[str, Any] = {}
@@ -313,11 +342,20 @@ def request_params(pairs: list[str] | None) -> dict[str, Any]:
             path = Path(raw[1:]).expanduser()
             if not path.is_file():
                 render.die(f"--param {key}: file not found: {raw[1:]}")
-            raw = path.read_text()
+            try:
+                raw = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                render.die(f"--param {key}: can't read {raw[1:]}: {exc}")
         try:
-            params[key] = json.loads(raw)
+            value = json.loads(raw)
         except json.JSONDecodeError:
-            params[key] = raw
+            value = raw
+        if isinstance(value, float) and not math.isfinite(value):
+            render.die(f"--param {key}: {raw} is not a finite number.")
+        params[key] = value
+    # A streamed reply shows one answer, so several answers (n) need the full JSON response.
+    if params.get("n", 1) != 1 and not json_output:
+        render.die("--param n needs --json, which returns every answer.")
     return params
 
 
@@ -362,6 +400,10 @@ def stream_reply(chunks: Iterable[dict[str, Any]], pricing: ModelPricing | None 
         render.warning("The reply hit the --max-tokens limit and was cut off. Raise --max-tokens to get all of it.")
     elif finish_reason == "tool_calls":
         render.warning("The model wants to call a tool. Add --json to get the tool calls.")
+        return None
+    elif finish_reason is None:
+        render.warning("The reply stopped before the model finished (the connection ended early).")
+        return None
     elif not reply:
         render.warning("The model returned no answer.")
     return assistant_message(reply, thinking) if reply else None

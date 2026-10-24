@@ -902,7 +902,7 @@ def success(msg: str) -> None:
 def error(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[red]✗[/red] {msg}", style="red")
+    console.print(f"[red]✗[/red] {escape(msg)}", style="red")
 
 
 def info(msg: str, style: str = "dim") -> None:
@@ -914,7 +914,7 @@ def info(msg: str, style: str = "dim") -> None:
 def warning(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[yellow]![/yellow] {msg}")
+    console.print(f"[yellow]![/yellow] {escape(msg)}")
 
 
 # ── Confirmation ─────────────────────────────────────────────────────────────
@@ -1121,6 +1121,8 @@ def select_row(message: str, headings: tuple[str, ...], rows: list, values: list
 
     Rows are plain text: questionary highlights the row under the cursor only for plain-text titles.
     """
+    if not rows:
+        die("There is nothing to choose from.")
     widths = [max(len(cell) for cell in column) for column in zip(headings, *rows, strict=True)]
 
     def pad(cells) -> list[str]:

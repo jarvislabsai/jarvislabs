@@ -234,7 +234,7 @@ def test_chat_streams_reply_and_usage(monkeypatch):
     chunks = [
         {"choices": [{"delta": {"reasoning_content": "Hmm."}}]},
         {"choices": [{"delta": {"content": "Hi "}}]},
-        {"choices": [{"delta": {"content": "there"}}]},
+        {"choices": [{"delta": {"content": "there"}, "finish_reason": "stop"}]},
         {"choices": [], "usage": {"prompt_tokens": 1_000_000, "completion_tokens": 1_000_000}},
     ]
     _chat_client(monkeypatch, chunks)
@@ -344,7 +344,7 @@ def sessions_dir(monkeypatch, tmp_path):
 
 
 def test_session_keeps_history_across_calls(monkeypatch, sessions_dir):
-    calls = _chat_client(monkeypatch, [{"choices": [{"delta": {"content": "Hi Jay"}}]}])
+    calls = _chat_client(monkeypatch, [{"choices": [{"delta": {"content": "Hi Jay"}, "finish_reason": "stop"}]}])
     notes = []
     monkeypatch.setattr(render, "info", notes.append)
     _capture(models_cli.models_chat, "deepseek", "I am Jay", system="Be brief.")
@@ -532,14 +532,15 @@ def test_request_params_reads_json_strings_and_files(tmp_path):
     tools = tmp_path / "tools.json"
     tools.write_text('[{"type": "function", "function": {"name": "f"}}]')
     params = models_cli.request_params(
-        [
+        json_output=False,
+        pairs=[
             "temperature=0.2",
             "seed=7",
             "logprobs=true",
             "stop=END",
             'response_format={"type": "json_object"}',
             f"tools=@{tools}",
-        ]
+        ],
     )
     assert params == {
         "temperature": 0.2,
@@ -563,7 +564,7 @@ def test_request_params_reads_json_strings_and_files(tmp_path):
 def test_request_params_errors(monkeypatch, pairs, message):
     errors = _errors(monkeypatch)
     with pytest.raises(SystemExit):
-        models_cli.request_params(pairs)
+        models_cli.request_params(pairs, json_output=False)
     assert message in errors[0]
 
 
@@ -619,3 +620,97 @@ def test_stream_reply_points_to_json_for_tool_calls(monkeypatch):
     chunks = [{"choices": [{"delta": {"tool_calls": [{"index": 0}]}, "finish_reason": "tool_calls"}]}]
     assert models_cli.stream_reply(chunks) is None
     assert warnings == ["The model wants to call a tool. Add --json to get the tool calls."]
+
+
+def test_request_params_rejects_non_finite_numbers_and_unreadable_files(monkeypatch, tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_bytes(b"\xff")
+    errors = _errors(monkeypatch)
+    for pairs in (["temperature=NaN"], ["temperature=1e999"], [f"tools=@{bad}"]):
+        with pytest.raises(SystemExit):
+            models_cli.request_params(pairs, json_output=False)
+    assert "not a finite number" in errors[0]
+    assert "not a finite number" in errors[1]
+    assert "can't read" in errors[2]
+
+
+def test_request_params_n_needs_json(monkeypatch):
+    errors = _errors(monkeypatch)
+    with pytest.raises(SystemExit):
+        models_cli.request_params(["n=2"], json_output=False)
+    assert errors == ["--param n needs --json, which returns every answer."]
+    assert models_cli.request_params(["n=2"], json_output=True) == {"n": 2}
+
+
+def test_sdk_chat_keeps_model_id_body_field_apart(mock_transport):
+    Models(mock_transport).chat("qwen", HELLO, model_id="x")
+    assert mock_transport.request.call_args.kwargs["json"]["model_id"] == "x"
+
+
+def test_stream_that_ends_early_is_not_a_reply(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(render, "warning", warnings.append)
+    assert _capture(models_cli.stream_reply, [{"choices": [{"delta": {"content": "Partial"}}]}]) == "Partial\n"
+    assert models_cli.stream_reply([{"choices": [{"delta": {"content": "Partial"}}]}]) is None
+    assert "stopped before the model finished" in warnings[0]
+
+
+def test_session_with_images_refused_for_text_only_model(monkeypatch, sessions_dir):
+    image_turn = {
+        "role": "user",
+        "content": [{"type": "text", "text": "x"}, {"type": "image_url", "image_url": {"url": "data:"}}],
+    }
+    models_cli._save_session("img1", [image_turn, {"role": "assistant", "content": "ok"}])
+    _chat_client(monkeypatch)
+    monkeypatch.setattr(
+        models_cli, "_resolve_model", lambda c, m: ModelInfo(**{**DEEPSEEK, "input_modalities": ["text"]})
+    )
+    errors = _errors(monkeypatch)
+    with pytest.raises(SystemExit):
+        models_cli.models_chat("deepseek", "and now?", session="img1")
+    assert "doesn't accept images" in errors[0]
+
+
+def test_json_tool_call_turn_is_not_saved(monkeypatch, sessions_dir):
+    reply = {"choices": [{"message": {"role": "assistant", "content": None, "tool_calls": [{"id": "1"}]}}]}
+    _chat_client(monkeypatch, reply=reply)
+    printed = []
+    monkeypatch.setattr(render, "print_json", printed.append)
+    models_cli.models_chat("deepseek", "Weather?", json_output=True)
+    assert not list(sessions_dir.glob("*.json"))
+    assert "session" not in printed[0]
+
+
+@pytest.mark.parametrize("content", ["", "{}", '{"messages": null}', "not json"])
+def test_damaged_session_is_a_clear_error(monkeypatch, sessions_dir, content):
+    sessions_dir.mkdir(parents=True, exist_ok=True)
+    (sessions_dir / "broken.json").write_text(content)
+    errors = _errors(monkeypatch)
+    with pytest.raises(SystemExit):
+        models_cli._load_session("broken")
+    assert errors == ["Session broken is damaged. Send a prompt without --session to start a new one."]
+
+
+def test_session_file_is_private(sessions_dir):
+    models_cli._save_session("priv", [])
+    assert (sessions_dir / "priv.json").stat().st_mode & 0o777 == 0o600
+    assert not list(sessions_dir.glob("*.tmp"))
+
+
+def test_read_stdin_stops_on_a_quiet_open_pipe_after_data(monkeypatch):
+    monkeypatch.setattr(models_cli, "STDIN_WAIT_S", 0.05)
+    read, write = os.pipe()
+    os.write(write, b"context")  # data, but the writer stays open
+    try:
+        with os.fdopen(read) as pipe:
+            monkeypatch.setattr(models_cli.sys, "stdin", pipe)
+            assert READ_STDIN(wait=False) == "context"
+    finally:
+        os.close(write)
+
+
+def test_error_text_is_not_read_as_markup(monkeypatch):
+    buf = StringIO()
+    monkeypatch.setattr(render, "console", Console(file=buf, color_system=None))
+    render.error("Unknown model: [/bold]")
+    assert "[/bold]" in buf.getvalue()

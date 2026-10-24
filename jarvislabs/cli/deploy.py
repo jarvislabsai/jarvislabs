@@ -419,7 +419,7 @@ def deploy_chat(
       [cyan]jl deploy chat <id> "What is in this picture?" --image photo.jpg --param temperature=0.2[/cyan]
     """
     cli_options.apply_command_options(json_output=json_output)
-    extra = request_params(param)
+    extra = request_params(param, json_output=json_output)
     text = read_prompt(prompt)
     if image and not text:
         render.die("Pass a prompt with --image. See: jl deploy chat --help")

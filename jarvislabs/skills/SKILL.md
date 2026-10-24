@@ -405,7 +405,7 @@ jl models chat <id> "follow-up" --session <ID>      # sends the earlier turns to
 - `-c` continues the most recent session on the machine; it's for humans. Agents must pass `--session <ID>`, since `-c` mixes histories when several chats run at once.
 - Sessions are temporary: stored locally and deleted after 15 minutes unused. Each turn resends the whole history, so long sessions cost more. `--system` is set only when the session starts.
 - `--image` works only on models whose `input_modalities` include `image` (see `jl models get <id> --json`). In a session, earlier images are sent again on every turn, which adds input tokens. URLs are downloaded by the model server; if a site blocks that, download the file and pass the local path.
-- `--param` can't set `model`, `messages`, `stream`, `stream_options` or `base_url`. `--param chat_template_kwargs='{...}'` is combined with `--thinking`/`--effort`.
+- `--param` can't set `model`, `messages`, `stream`, `stream_options`, `base_url` or `read_timeout`. `--param n=2` needs `--json`. A turn that ends in tool calls isn't saved to the session (jl can't send the tool results back). `--param chat_template_kwargs='{...}'` is combined with `--thinking`/`--effort`.
 - `jl deploy chat <id>` takes the same `--image` and `--param` options.
 - Other options: `--system "<prompt>"`, `--max-tokens N`. Every call costs money, so cap output with `--max-tokens`. An empty balance fails with an insufficient-balance error.
 - From code: base URL `https://models.jarvislabs.net/v1`, API key = the JarvisLabs API key, `model` = the model ID. `jl models get <id>` prints Python and curl snippets.
