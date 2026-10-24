@@ -149,16 +149,16 @@ def deploy_create(
     framework: Annotated[str, typer.Option("--framework", help="vllm | sglang | ollama.")],
     gpu: Annotated[str, typer.Option("--gpu", help="GPU type.")],
     gpus_per_worker: Annotated[int, typer.Option("--gpus-per-worker", help="GPUs per worker.")],
-    min_workers: Annotated[int, typer.Option("--min-workers", help="Minimum workers (0-100).")],
-    max_workers: Annotated[int, typer.Option("--max-workers", help="Maximum workers (0-100).")],
-    idle_timeout: Annotated[int, typer.Option("--idle-timeout", help="Idle timeout in seconds (0-86400).")],
+    min_workers: Annotated[int, typer.Option("--min-workers", help="Minimum workers.")],
+    max_workers: Annotated[int, typer.Option("--max-workers", help="Maximum workers.")],
+    idle_timeout: Annotated[int, typer.Option("--idle-timeout", help="Idle timeout in seconds.")],
     wait_time: Annotated[
-        int, typer.Option("--wait-time", help="Seconds a request waits for a free worker before it fails (0-600).")
+        int, typer.Option("--wait-time", help="Seconds a request waits for a free worker before it fails.")
     ],
-    storage: Annotated[int, typer.Option("--storage", help="Deployment filesystem size in GB (min 50).")],
+    storage: Annotated[int, typer.Option("--storage", help="Deployment filesystem size in GB.")],
     model: Annotated[str, typer.Option("--model", help="Model id (e.g. a Hugging Face repo id).")],
     concurrent: Annotated[
-        int | None, typer.Option("--concurrent", help="Concurrent requests per worker (default 1).", min=1)
+        int | None, typer.Option("--concurrent", help="Concurrent requests per worker (default 1).")
     ] = None,
     arg: Annotated[
         list[str] | None,
@@ -406,7 +406,7 @@ def deploy_chat(
     system: Annotated[str | None, typer.Option("--system", help="System prompt.")] = None,
     max_tokens: Annotated[
         int | None,
-        typer.Option("--max-tokens", help="Maximum output tokens (default: the model server's default).", min=1),
+        typer.Option("--max-tokens", help="Maximum output tokens (default: the model server's default)."),
     ] = None,
     image: ImageOption = None,
     region: RegionHintOption = None,
@@ -463,7 +463,7 @@ def deploy_chat(
             f"No worker was running, so this deployment is starting one now. This can take a few minutes. {check}"
         )
 
-    params = {"base_url": base_url, **({"max_tokens": max_tokens} if max_tokens else {})}
+    params = {"base_url": base_url, **({"max_tokens": max_tokens} if max_tokens is not None else {})}
     messages = [{"role": "system", "content": system}] if system else []
 
     def send(history: list[dict]) -> dict | None:
@@ -510,7 +510,7 @@ def managed_models_create(
     idle_timeout: Annotated[int, typer.Option("--idle-timeout", help="Idle timeout in seconds.")] = 300,
     concurrent: Annotated[
         int | None,
-        typer.Option("--concurrent", help="Concurrent requests per worker (default: the model's tested value).", min=1),
+        typer.Option("--concurrent", help="Concurrent requests per worker (default: the model's tested value)."),
     ] = None,
     detach: Annotated[bool, typer.Option("--detach", help="Skip the wait: print the id and exit.")] = False,
     yes: cli_options.YesOption = False,
@@ -530,16 +530,11 @@ def managed_models_create(
     if model_slug is None:  # Picked from the list: ask for each setting not given as a flag.
         render.managed_settings_help()
         name = render.ask_value("name", "Deployment name:", name)
-        # The server checks the limits; the prompts only ask for whole numbers.
-        min_workers = render.ask_value("min_workers", "Min workers:", min_workers, low=0)
-        # Starting from max(min, 1) prefills a usable value when min was raised above the default.
-        max_workers = render.ask_value("max_workers", "Max workers:", max_workers, low=max(min_workers, 1))
-        idle_timeout = render.ask_value("idle_timeout", "Idle timeout (seconds):", idle_timeout, low=0)
+        min_workers = render.ask_value("min_workers", "Min workers:", min_workers)
+        max_workers = render.ask_value("max_workers", "Max workers:", max_workers)
+        idle_timeout = render.ask_value("idle_timeout", "Idle timeout (seconds):", idle_timeout)
         concurrent = render.ask_value(
-            "concurrent",
-            "Concurrent requests per worker:",
-            concurrent or model.concurrent_requests or 1,
-            low=1,
+            "concurrent", "Concurrent requests per worker:", concurrent or model.concurrent_requests or 1
         )
 
     details = (

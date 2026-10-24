@@ -1148,22 +1148,21 @@ def select_row(message: str, headings: tuple[str, ...], rows: list, values: list
     return choice
 
 
-def ask_value(param: str, message: str, value, *, low: int | None = None):
-    """Ask for a setting, prefilled with its value; a whole number of at least ``low`` when it's given.
+def ask_value(param: str, message: str, value):
+    """Ask for a setting, prefilled with its value; a whole number when the value is one.
 
-    A flag given on the command line is kept without asking. Ctrl+C exits.
+    A flag given on the command line is kept without asking. The server checks the limits. Ctrl-C exits.
     """
     if cli_options.option_was_explicit(param):
         return value
+    number = isinstance(value, int)
 
     def validate(text: str) -> bool | str:
-        if low is None:
-            return bool(text.strip()) or "This can't be empty."
-        return (text.strip().isdigit() and int(text) >= low) or f"Enter a whole number of at least {low}."
+        if number:
+            return text.strip().isdigit() or "Enter a whole number."
+        return bool(text.strip()) or "This can't be empty."
 
-    if low is not None:
-        value = max(value, low)
     answer = questionary.text(message, default=str(value), validate=validate, style=PROMPT_STYLE).ask()
     if answer is None:
         raise typer.Exit()
-    return answer.strip() if low is None else int(answer)
+    return int(answer) if number else answer.strip()

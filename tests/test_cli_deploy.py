@@ -813,18 +813,6 @@ def test_managed_create_settings_skip_flags_given_on_command_line(monkeypatch):
     assert created["idle_timeout"] == 900
 
 
-def test_managed_create_max_workers_prefill_follows_min(monkeypatch):
-    created = _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
-    _stub_select(monkeypatch, lambda choices: choices[0].value)
-    _stub_text(monkeypatch, {"Min workers:": "3"})
-
-    deploy.managed_models_create(detach=True, yes=True)
-
-    # The default max (1) would be below the new min, so the prefill rises to 3.
-    assert created["min_workers"] == 3
-    assert created["max_workers"] == 3
-
-
 def test_managed_create_ctrl_c_in_settings_creates_nothing(monkeypatch):
     created = _install_managed_client(monkeypatch, _catalog(("glm-5.2", "india-noida-01")))
     _stub_select(monkeypatch, lambda choices: choices[0].value)
