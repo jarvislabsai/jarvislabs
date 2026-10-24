@@ -362,7 +362,7 @@ def test_session_json_saves_reply_and_returns_id(monkeypatch, sessions_dir):
     models_cli.models_chat("deepseek", "Hello", json_output=True)
     assert printed[0]["session"] == "abc12345"
     saved = models_cli._load_session("abc12345")
-    assert saved[-1] == {"role": "assistant", "content": "Hi"}
+    assert saved[-1] == {"role": "assistant", "content": "Hi", "reasoning_content": "Hmm"}
 
 
 def test_session_not_saved_when_reply_stopped(monkeypatch, sessions_dir):
@@ -489,3 +489,19 @@ def test_snippets_set_max_tokens():
     out = _capture(render.model_snippets, "glm-5.3", MODELS_API_URL)
     assert "max_tokens=32768" in out
     assert '"max_tokens": 32768' in out
+
+
+def test_stream_reply_keeps_thinking_for_the_history(monkeypatch):
+    monkeypatch.setattr(render, "chat_thinking", lambda text: None)
+    chunks = [{"choices": [{"delta": {"reasoning": "Hm"}}]}, {"choices": [{"delta": {"reasoning": "m"}}]}]
+    chunks.append({"choices": [{"delta": {"content": "Hi"}, "finish_reason": "stop"}]})
+    message = models_cli.stream_reply(chunks)
+    assert message == {"role": "assistant", "content": "Hi", "reasoning_content": "Hmm"}
+
+
+def test_chat_usage_shows_thinking_tokens(monkeypatch):
+    notes = []
+    monkeypatch.setattr(render, "info", notes.append)
+    usage = {"prompt_tokens": 10, "completion_tokens": 50, "completion_tokens_details": {"reasoning_tokens": 38}}
+    render.chat_usage(usage)
+    assert notes == ["\n10 in · 50 out (38 thinking)"]

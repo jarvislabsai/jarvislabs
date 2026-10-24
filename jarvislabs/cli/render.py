@@ -536,7 +536,7 @@ def deployment_running_handoff(base_url: str, model: str | None) -> None:
 
 
 def _openai_snippet(base_url: str, model: str, max_tokens: int | None = None) -> str:
-    limit = f"    max_tokens={max_tokens},  # without a limit, replies stop at 1024 tokens\n" if max_tokens else ""
+    limit = f"    max_tokens={max_tokens},\n" if max_tokens else ""
     return (
         "from openai import OpenAI\n"
         f'client = OpenAI(base_url="{base_url}", api_key="<YOUR_JL_API_KEY>")\n'
@@ -692,6 +692,9 @@ def chat_usage(usage: dict | None, pricing=None) -> None:
         return
     tokens_in, tokens_out = usage["prompt_tokens"], usage["completion_tokens"]
     line = f"\n{tokens_in:,} in · {tokens_out:,} out"
+    thinking = (usage.get("completion_tokens_details") or {}).get("reasoning_tokens")
+    if thinking:
+        line += f" ({thinking:,} thinking)"
     cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
     cached_price = pricing and pricing.cached_input_per_million_tokens
     if pricing and (cached_price is not None or not cached):

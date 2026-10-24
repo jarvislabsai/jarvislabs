@@ -295,7 +295,7 @@ class Deployment(BaseModel):
     args: dict | None = None
     env: dict | None = None
     # Set for managed deployments.
-    managed_model: ManagedModel | None = None
+    managed_model: ManagedModelSummary | None = None
     start_time: datetime | None = None
     end_time: datetime | None = None
     created_at: datetime | None = None
@@ -334,7 +334,7 @@ class DeploymentSummary(BaseModel):
     concurrent_requests: int | None = None
     gpus_per_worker: int | None = None
     error_message: str | None = None
-    managed_model: ManagedModel | None = None
+    managed_model: ManagedModelSummary | None = None
     total_cost: float = 0.0
     currency: str = "USD"
 
@@ -357,14 +357,27 @@ class DeploymentListResult(BaseModel):
     region_errors: list[RegionError] = Field(default_factory=list)
 
 
-class ManagedModel(BaseModel):
+class _ManagedModelFacts(BaseModel):
+    """Facts about a managed model, shared by catalog entries and deployment records."""
+
     model_config = ConfigDict(extra="ignore")
     model_slug: str
     display_name: str | None = None
     description: str | None = None
-    api_model_name: str | None = None
     context_length: int | None = None
     model_card_url: str | None = None
+
+
+class ManagedModelSummary(_ManagedModelFacts):
+    """The managed model behind a deployment (``managed_model`` in a deployment record)."""
+
+    # The model name to send in requests to the deployment.
+    api_model_name: str | None = None
+
+
+class ManagedModel(_ManagedModelFacts):
+    """A catalog entry: a managed model offered in one region."""
+
     region: OptionalRegionCode = None
     gpu_type: str | None = None
     gpus_per_worker: int | None = None

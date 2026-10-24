@@ -15,6 +15,7 @@ from jarvislabs.models import (
     DeploymentSummary,
     ManagedModel,
     ManagedModelListResult,
+    ManagedModelSummary,
     RegionError,
 )
 
@@ -326,7 +327,7 @@ def test_table_long_name_wraps_instead_of_hiding_columns(monkeypatch):
 
 
 def test_deployments_table_shows_type(capture):
-    managed = _summary(deployment_id="dep-managed", managed_model=ManagedModel(model_slug="glm-5.2"))
+    managed = _summary(deployment_id="dep-managed", managed_model=ManagedModelSummary(model_slug="glm-5.2"))
     render.deployments_table(DeploymentListResult(deployments=[_summary(), managed]))
     out = capture.getvalue()
     assert "Type" in out

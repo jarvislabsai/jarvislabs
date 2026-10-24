@@ -141,7 +141,7 @@ def models_chat(
     model = _resolve_model(client, model_id)
     params = {**_thinking_params(model, thinking, effort), "max_tokens": max_tokens}
 
-    def send(history: list[dict]) -> str | None:
+    def send(history: list[dict]) -> dict | None:
         return stream_reply(client.models.chat_stream(model.id, history, **params), model.pricing)
 
     if not text:
@@ -153,14 +153,15 @@ def models_chat(
     messages.append({"role": "user", "content": text})
     if state.json_output:
         response = client.models.chat(model.id, messages, **params)
-        reply = response["choices"][0]["message"].get("content") or ""
-        _save_session(session, [*messages, {"role": "assistant", "content": reply}])
+        message = response["choices"][0]["message"]
+        thinking = message.get("reasoning_content") or message.get("reasoning")
+        _save_session(session, [*messages, assistant_message(message.get("content") or "", thinking)])
         render.print_json({**response, "session": session})
         return
     reply = send(messages)
     if reply is None:
         raise typer.Exit(1)
-    _save_session(session, [*messages, {"role": "assistant", "content": reply}])
+    _save_session(session, [*messages, reply])
     render.info(f"Session {session} · end: jl models chat --end {session}")
 
 
@@ -251,9 +252,19 @@ def _thinking_params(model: ModelInfo, thinking: bool | None, effort: str | None
     return {"chat_template_kwargs": kwargs} if kwargs else {}
 
 
-def stream_reply(chunks: Iterable[dict[str, Any]], pricing: ModelPricing | None = None) -> str | None:
-    """Print a reply as it streams; returns its text, or None when Ctrl-C stopped it or no answer came back."""
-    reply, thought, usage, finish_reason = "", False, None, None
+def assistant_message(content: str, thinking: str | None = None) -> dict:
+    """An assistant turn for the chat history. The thinking goes back to the model on later turns
+    as ``reasoning_content``: some chat templates (e.g. GLM's) use earlier thinking, others drop it."""
+    message = {"role": "assistant", "content": content}
+    if thinking:
+        message["reasoning_content"] = thinking
+    return message
+
+
+def stream_reply(chunks: Iterable[dict[str, Any]], pricing: ModelPricing | None = None) -> dict | None:
+    """Print a reply as it streams; returns it as an assistant message, or None when Ctrl-C stopped it
+    or no answer came back."""
+    reply, thinking, usage, finish_reason = "", "", None, None
     try:
         for chunk in chunks:
             usage = chunk.get("usage") or usage
@@ -261,12 +272,12 @@ def stream_reply(chunks: Iterable[dict[str, Any]], pricing: ModelPricing | None 
             finish_reason = choice.get("finish_reason") or finish_reason
             delta = choice.get("delta") or {}
             # The Token Factory sends both names; a deployment's engine (vLLM) sends only "reasoning".
-            thinking = delta.get("reasoning_content") or delta.get("reasoning")
-            if thinking:
-                render.chat_thinking(thinking)
-                thought = True
+            thought = delta.get("reasoning_content") or delta.get("reasoning")
+            if thought:
+                render.chat_thinking(thought)
+                thinking += thought
             if delta.get("content"):
-                if thought and not reply:
+                if thinking and not reply:
                     render.chat_thinking("\n\n")
                 render.chat_text(delta["content"])
                 reply += delta["content"]
@@ -280,10 +291,10 @@ def stream_reply(chunks: Iterable[dict[str, Any]], pricing: ModelPricing | None 
         render.warning("The reply hit the --max-tokens limit and was cut off. Raise --max-tokens to get all of it.")
     elif not reply:
         render.warning("The model returned no answer.")
-    return reply or None
+    return assistant_message(reply, thinking) if reply else None
 
 
-def interactive_chat(name: str, messages: list[dict], send: Callable[[list[dict]], str | None]) -> None:
+def interactive_chat(name: str, messages: list[dict], send: Callable[[list[dict]], dict | None]) -> None:
     """Chat turn by turn; ``send`` streams one reply to the history and returns it (None if there's none)."""
     render.info(f"Chatting with {name}. Ctrl-C stops a reply · Ctrl-D or /exit quits.")
     while True:
@@ -301,4 +312,4 @@ def interactive_chat(name: str, messages: list[dict], send: Callable[[list[dict]
         if reply is None:
             messages.pop()
         else:
-            messages.append({"role": "assistant", "content": reply})
+            messages.append(reply)

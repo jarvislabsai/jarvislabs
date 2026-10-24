@@ -28,7 +28,16 @@ deploy_app = typer.Typer(
     name="deploy",
     help=(
         "Create and manage serverless model deployments [bold bright_yellow](beta)[/bold bright_yellow].\n\n"
-        + BETA_HELP_NOTICE
+        "[dim]Quick examples:[/dim]\n"
+        "  [bold]jl deploy managed-models list[/bold]           [rgb(100,100,100)]models you can deploy[/rgb(100,100,100)]\n"
+        "  [bold]jl deploy managed-models create[/bold]         [rgb(100,100,100)]pick a model and deploy it[/rgb(100,100,100)]\n"
+        "  [bold]jl deploy list[/bold]                          [rgb(100,100,100)]your deployments[/rgb(100,100,100)]\n"
+        "  [bold]jl deploy get <id>[/bold]                      [rgb(100,100,100)]status, base URL and cost[/rgb(100,100,100)]\n"
+        '  [bold]jl deploy chat <id> "Hello"[/bold]             [rgb(100,100,100)]send a test message[/rgb(100,100,100)]\n'
+        "  [bold]jl deploy logs <id>[/bold]                     [rgb(100,100,100)]live logs[/rgb(100,100,100)]\n"
+        "  [bold]jl deploy update <id> --min-workers 0[/bold]   [rgb(100,100,100)]no GPU cost while idle[/rgb(100,100,100)]\n"
+        "  [bold]jl deploy delete <id>[/bold]                   [rgb(100,100,100)]delete it and stop all billing[/rgb(100,100,100)]\n"
+        "\n" + BETA_HELP_NOTICE
     ),
 )
 app.add_typer(deploy_app, rich_help_panel="[bold bright_yellow]Serverless (Beta)[/bold bright_yellow]")
@@ -424,7 +433,7 @@ def deploy_chat(
         params["max_tokens"] = max_tokens
     messages = [{"role": "system", "content": system}] if system else []
 
-    def send(history: list[dict]) -> str | None:
+    def send(history: list[dict]) -> dict | None:
         return stream_reply(client.models.chat_stream(model, history, **params))
 
     text = read_prompt(prompt)

@@ -27,6 +27,8 @@ app = typer.Typer(
         "  [bold]jl gpus[/bold]                                    [rgb(100,100,100)]GPU availability and pricing[/rgb(100,100,100)]\n"
         "  [bold]jl pause <id>[/bold]                              [rgb(100,100,100)]stop billing, keep data[/rgb(100,100,100)]\n"
         "  [bold]jl destroy <id>[/bold]                            [rgb(100,100,100)]delete permanently[/rgb(100,100,100)]\n"
+        "  [bold]jl models list[/bold]                             [rgb(100,100,100)]pay-per-token models and prices[/rgb(100,100,100)]\n"
+        '  [bold]jl models chat <model> "Hello"[/bold]             [rgb(100,100,100)]call a model, no deployment needed[/rgb(100,100,100)]\n'
         "  [bold]jl deploy managed-models create[/bold]            [rgb(100,100,100)]deploy a ready-made model (pick from a list)[/rgb(100,100,100)]\n\n"
         "[dim]Every command supports[/dim] [bold]--help[/bold] [dim]for details:[/dim]\n"
         "  [dim]jl create --help    jl run --help    jl ssh-key --help[/dim]"

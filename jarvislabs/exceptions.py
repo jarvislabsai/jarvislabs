@@ -86,6 +86,13 @@ def extract_message(payload: dict | list) -> str:
             else:
                 msgs.append(msg)
         return "; ".join(msgs)
+    if isinstance(detail, dict):  # e.g. {"message": "Choose a gpu_type ...", "gpu_types": ["H100", "H200"]}
+        extras = [
+            f"{key}: {', '.join(map(str, value)) if isinstance(value, list) else value}"
+            for key, value in detail.items()
+            if key != "message"
+        ]
+        detail = ". ".join([str(detail.get("message") or "Request failed"), *extras])
     error = payload.get("error")
     if isinstance(error, dict):  # Models API: {"error": {"message": ...}}
         error = error.get("message")

@@ -198,3 +198,8 @@ def test_stream_lines_posts_json():
     lines = list(t.stream_lines("chat/completions", method="POST", json={"a": 1}, base_url="https://example.test"))
     assert lines == ["data: [DONE]"]
     assert seen == {"method": "POST", "body": b'{"a":1}'}
+
+
+def test_structured_detail_reads_as_text():
+    payload = {"detail": {"message": "Choose a gpu_type for this model", "gpu_types": ["H100", "H200"]}}
+    assert extract_message(payload) == "Choose a gpu_type for this model. gpu_types: H100, H200"
