@@ -360,14 +360,18 @@ class Deployments:
         max_workers: int,
         idle_timeout: int,
         concurrent: int | None = None,
+        gpu_type: str | None = None,
     ) -> str:
         """Create a deployment from a managed model and return its id.
 
         The model's recipe sets the GPU, framework, and engine settings; you choose scaling.
+        ``gpu_type`` picks the recipe when the model is offered on more than one GPU type.
         """
         payload = {"name": name, "min_workers": min_workers, "max_workers": max_workers, "idle_timeout": idle_timeout}
         if concurrent is not None:
             payload["concurrent_requests"] = concurrent
+        if gpu_type is not None:
+            payload["gpu_type"] = gpu_type
         base_url = serverless_region_url(normalize_serverless_region(region))
         resp = self._t.request(
             "POST", f"management/managed-models/{model_slug}/create", json=payload, base_url=base_url

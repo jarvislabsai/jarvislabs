@@ -45,5 +45,17 @@ class Models:
                 continue
             chunk = json.loads(line.removeprefix("data: "))
             if "error" in chunk:
-                raise JarvislabsError(chunk["error"]["message"])
+                # OpenAI sends {"error": {"message": ...}}; a deployment sends {"error": true, "message": ...}.
+                error = chunk["error"]
+                raise JarvislabsError(
+                    error["message"] if isinstance(error, dict) else chunk.get("message", "Request failed")
+                )
             yield chunk
+
+    def chat_submit(self, model_id: str, messages: list[dict], *, base_url: str, **params) -> None:
+        """Send a streaming chat request and return once the server accepts it, without waiting for the reply.
+
+        Used to start a worker on a deployment that has scaled to zero.
+        """
+        body = {"model": model_id, "messages": messages, **params, "stream": True}
+        self._t.submit_stream("chat/completions", json=body, base_url=base_url)

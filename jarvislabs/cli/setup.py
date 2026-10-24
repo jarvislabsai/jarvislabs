@@ -56,7 +56,7 @@ def _login_flow(token: str | None) -> Client:
         try:
             client = Client(api_key=existing)
             info = client.account.user_info()
-            render.success(f"Logged in as [bold]{info.name}[/bold]")
+            render.success(f"Logged in as {info.name}")
             if state.yes or not render.confirm("Re-authenticate with a different account?"):
                 return client
         except JarvislabsError:
@@ -64,7 +64,7 @@ def _login_flow(token: str | None) -> Client:
 
     # Prompt for token
     if not token:
-        render.info("Get your API key at: [magenta]https://jarvislabs.ai/settings/api-keys[/magenta]")
+        render.info("Get your API key at: https://jarvislabs.ai/settings/api-keys")
         token = render.console.input("[yellow]?[/yellow] API token: ", password=True).strip()
 
     if not token:
@@ -79,7 +79,7 @@ def _login_flow(token: str | None) -> Client:
 
     config.setdefault("auth", {})["token"] = token
     save_config(config)
-    render.success(f"Logged in as [bold]{info.name}[/bold]")
+    render.success(f"Logged in as {info.name}")
     return client
 
 
@@ -177,7 +177,7 @@ def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
     render.console.print()
 
     if not agents_flag and not render.confirm("Install agent skills?", skip=state.yes):
-        render.info("Skipped. You can run [bold]jl setup[/bold] again later.")
+        render.info("Skipped. You can run jl setup again later.")
         return []
 
     # Determine additional agent-specific installs (validate before any writes)
@@ -274,7 +274,7 @@ def _show_getting_started() -> None:
     instance_text.append("jl list\n", style="bold")
     instance_text.append("Pause     ", style=_MUTED)
     instance_text.append("jl pause <id>", style="bold")
-    instance_text.append("              stops billing, keeps storage\n", style=_MUTED)
+    instance_text.append("              stops GPU billing, keeps storage\n", style=_MUTED)
     instance_text.append("Resume    ", style=_MUTED)
     instance_text.append("jl resume <id>", style="bold")
     instance_text.append("             pick up where you left off\n", style=_MUTED)

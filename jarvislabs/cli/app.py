@@ -25,7 +25,7 @@ app = typer.Typer(
         "  [bold]jl ssh <id>[/bold]                                [rgb(100,100,100)]SSH into an instance[/rgb(100,100,100)]\n"
         "  [bold]jl list[/bold]                                    [rgb(100,100,100)]list all instances[/rgb(100,100,100)]\n"
         "  [bold]jl gpus[/bold]                                    [rgb(100,100,100)]GPU availability and pricing[/rgb(100,100,100)]\n"
-        "  [bold]jl pause <id>[/bold]                              [rgb(100,100,100)]stop billing, keep data[/rgb(100,100,100)]\n"
+        "  [bold]jl pause <id>[/bold]                              [rgb(100,100,100)]stop GPU billing, keep data[/rgb(100,100,100)]\n"
         "  [bold]jl destroy <id>[/bold]                            [rgb(100,100,100)]delete permanently[/rgb(100,100,100)]\n"
         "  [bold]jl models list[/bold]                             [rgb(100,100,100)]pay-per-token models and prices[/rgb(100,100,100)]\n"
         '  [bold]jl models chat <model> "Hello"[/bold]             [rgb(100,100,100)]call a model, no deployment needed[/rgb(100,100,100)]\n'

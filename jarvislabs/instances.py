@@ -410,6 +410,7 @@ class Instances:
                 region,
                 resume_only=True,
                 template=instance.template,
+                require_spot=is_spot,
             )
         if is_spot:
             effective_spot_gpu = gpu_type or instance.gpu_type

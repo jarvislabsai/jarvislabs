@@ -349,6 +349,28 @@ class TestResolveRegion:
         }
         assert _resolve_region(mock_transport, gpu_type="L4", num_gpus=1, is_spot=True) == "europe-01"
 
+    def test_spot_routing_uses_spot_capacity(self, mock_transport):
+        """GPUs on spot-only hosts count for spot even when on-demand has none."""
+        mock_transport.request.return_value = {
+            "server_meta": [
+                {
+                    "gpu_type": "L4",
+                    "region": "india-noida-01",
+                    "num_free_devices": 0,
+                    "spot_num_free_devices": 2,
+                    "spot_price": 0.29,
+                },
+                {
+                    "gpu_type": "L4",
+                    "region": "europe-01",
+                    "num_free_devices": 1,
+                    "spot_num_free_devices": 0,
+                    "spot_price": 0.35,
+                },
+            ]
+        }
+        assert _resolve_region(mock_transport, gpu_type="L4", num_gpus=1, is_spot=True) == "india-noida-01"
+
     def test_spot_routing_raises_when_only_effective_capacity_exists(self, mock_transport):
         mock_transport.request.return_value = {
             "server_meta": [
@@ -1159,6 +1181,13 @@ class TestResumePayload:
         assert payload["is_spot"] is True
         assert "is_reserved" not in payload
         mock_check.assert_called_once()
+
+    @patch("jarvislabs.instances._check_gpu_in_region")
+    def test_resume_spot_with_new_gpu_checks_spot_capacity(self, mock_check, mock_transport):
+        instances = self._setup_resume(mock_transport)
+        instances.resume(10, gpu_type="A100", is_spot=True)
+
+        assert all(call.kwargs.get("require_spot") for call in mock_check.call_args_list)
 
     def test_script_args_defaults_to_empty(self, mock_transport):
         instances = self._setup_resume(mock_transport)

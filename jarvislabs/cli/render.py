@@ -16,6 +16,7 @@ from rich.markup import escape
 from rich.padding import Padding
 from rich.panel import Panel
 from rich.rule import Rule
+from rich.style import Style
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
@@ -112,7 +113,7 @@ def _table(title: str | None = None, **kwargs) -> Table:
 
 
 def _print_detail_table(rows: list[tuple[str, str]], *, spaced: bool = False) -> None:
-    """Print a borderless field/value detail view (shared by instance and deployment detail).
+    """Print a borderless field/value detail view (instance, deployment and model detail).
 
     ``spaced`` adds a blank line after each row, for views with multi-line values.
     """
@@ -160,8 +161,9 @@ def instances_table(instances: list, currency: str = "USD") -> None:
     stdout_console.print(table)
 
 
-def _link_value(url: str | None) -> str:
-    return f"[link={url}][magenta]{url}[/magenta][/link]" if url else "—"
+def _link_value(url: str | None) -> Text | str:
+    # Text, not markup: a URL can contain "[" (e.g. ?filter[a]=1), which markup would misread.
+    return Text(url, style=Style(color="magenta", link=url)) if url else "—"
 
 
 def _service_url_rows(inst) -> list[tuple[str, str]]:
@@ -206,7 +208,7 @@ def instance_detail(inst, currency: str = "USD") -> None:
     ]
 
     if inst.ssh_command:
-        rows.append(("SSH", f"[cyan]{inst.ssh_command}[/cyan]"))
+        rows.append(("SSH", f"[cyan]{escape(inst.ssh_command)}[/cyan]"))
 
     if inst.public_ip:
         rows.append(("Public IP", f"[cyan]{inst.public_ip}[/cyan]"))
@@ -237,7 +239,7 @@ def ssh_keys_table(keys: list) -> None:
 
     for key in keys:
         display_key = key.ssh_key[:40] + "..." if len(key.ssh_key) > 40 else key.ssh_key
-        table.add_row(key.key_id, key.key_name, display_key)
+        table.add_row(key.key_id, escape(key.key_name), display_key)
 
     stdout_console.print(table)
 
@@ -252,7 +254,7 @@ def scripts_table(scripts: list) -> None:
     table.add_column("Name", style="bold")
 
     for script in scripts:
-        table.add_row(str(script.script_id), script.script_name or "—")
+        table.add_row(str(script.script_id), escape(script.script_name or "—"))
 
     stdout_console.print(table)
 
@@ -268,7 +270,7 @@ def templates_table(templates: list) -> None:
     table.add_column("Category", style="dim")
 
     for template in templates:
-        table.add_row(template.id, template.title, template.category or "—")
+        table.add_row(template.id, escape(template.title), template.category or "—")
 
     stdout_console.print(table)
 
@@ -286,7 +288,9 @@ def filesystems_table(filesystems: list) -> None:
 
     for filesystem in filesystems:
         storage = f"{filesystem.storage}GB" if filesystem.storage is not None else "—"
-        table.add_row(str(filesystem.fs_id), filesystem.fs_name or "—", storage, region_label(filesystem.region))
+        table.add_row(
+            str(filesystem.fs_id), escape(filesystem.fs_name or "—"), storage, region_label(filesystem.region)
+        )
 
     stdout_console.print(table)
 
@@ -651,21 +655,19 @@ def model_detail(model, base_url: str) -> None:
 
 
 def model_snippets(model_id: str, base_url: str) -> None:
-    body = json.dumps(
-        {
-            "model": model_id,
-            "messages": [{"role": "user", "content": "Hello"}],
-            "max_tokens": MODELS_DEFAULT_MAX_TOKENS,
-        }
-    )
+    # One field per line, so a narrow terminal doesn't have to wrap the JSON body.
     curl = (
         f"curl {base_url}/chat/completions \\\n"
         '  -H "Authorization: Bearer $JL_API_KEY" \\\n'
         '  -H "Content-Type: application/json" \\\n'
-        f"  -d '{body}'"
+        "  -d '{\n"
+        f'    "model": {json.dumps(model_id)},\n'
+        '    "messages": [{"role": "user", "content": "Hello"}],\n'
+        f'    "max_tokens": {MODELS_DEFAULT_MAX_TOKENS}\n'
+        "  }'"
     )
     python = _openai_snippet(base_url, model_id, MODELS_DEFAULT_MAX_TOKENS)
-    for title, code, lexer in (("Python", python, "python"), ("curl", curl, "bash")):
+    for title, code, lexer in (("curl", curl, "bash"), ("Python", python, "python")):
         stdout_console.print()
         stdout_console.print(Rule(f"[bold]{title}[/bold]", align="left", style="dim"))
         stdout_console.print()
@@ -762,8 +764,6 @@ def _gpu_subtable(gpus: list, sym: str, title: str, *, show_spot: bool) -> None:
         table.add_column("Spot", justify="right")
 
     for gpu in available:
-        spot_price = display_spot_price(gpu)
-        spot_available = getattr(gpu, "num_free_devices", 0) > 0
         row = [
             "[green]●[/green]",
             f"[bold]{gpu.gpu_type}[/bold]",
@@ -774,16 +774,10 @@ def _gpu_subtable(gpus: list, sym: str, title: str, *, show_spot: bool) -> None:
             f"[green]{sym}{gpu.price_per_hour:.2f}[/green]" if gpu.price_per_hour else "—",
         ]
         if show_spot:
-            if spot_price is not None and spot_available:
-                row.append(f"[green]{sym}{spot_price:.2f}[/green]")
-            elif spot_price is not None:
-                row.append(f"[dim]{sym}{spot_price:.2f}[/dim]")
-            else:
-                row.append("—")
+            row.append(_spot_cell(gpu, sym, empty="—"))
         table.add_row(*row)
 
     for gpu in unavailable:
-        spot_price = display_spot_price(gpu)
         row = [
             "[dim]○[/dim]",
             f"[dim]{gpu.gpu_type}[/dim]",
@@ -794,10 +788,19 @@ def _gpu_subtable(gpus: list, sym: str, title: str, *, show_spot: bool) -> None:
             f"[dim]{sym}{gpu.price_per_hour:.2f}[/dim]" if gpu.price_per_hour else "[dim]—[/dim]",
         ]
         if show_spot:
-            row.append(f"[dim]{sym}{spot_price:.2f}[/dim]" if spot_price is not None else "[dim]—[/dim]")
+            row.append(_spot_cell(gpu, sym, empty="[dim]—[/dim]"))
         table.add_row(*row)
 
     stdout_console.print(table)
+
+
+def _spot_cell(gpu, sym: str, *, empty: str) -> str:
+    """Spot price in green when spot GPUs are free (even if on-demand is full), dimmed otherwise."""
+    spot_price = display_spot_price(gpu)
+    if spot_price is None:
+        return empty
+    color = "green" if gpu.spot_free_devices > 0 else "dim"
+    return f"[{color}]{sym}{spot_price:.2f}[/{color}]"
 
 
 def _on_demand_available(gpu) -> bool:
@@ -898,25 +901,25 @@ def jsonable_cpu_meta(cpu_meta: dict) -> dict:
 def success(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[green]✓[/green] {msg}")
+    console.print(f"[green]✓[/green] {escape(msg)}", highlight=False)
 
 
 def error(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[red]✗[/red] {msg}", style="red")
+    console.print(f"[red]✗[/red] {escape(msg)}", style="red", highlight=False)
 
 
-def info(msg: str, style: str = "dim") -> None:
+def info(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[{style}]{msg}[/{style}]")
+    console.print(f"[dim]{escape(msg)}[/dim]", highlight=False)
 
 
 def warning(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[yellow]![/yellow] {msg}")
+    console.print(f"[yellow]![/yellow] {escape(msg)}", highlight=False)
 
 
 # ── Confirmation ─────────────────────────────────────────────────────────────
@@ -934,7 +937,7 @@ def confirm(msg: str, *, skip: bool = False) -> bool:
         die("--json requires --yes")
     try:
         # A Text prompt skips Rich's auto-highlighting, which would color the numbers in msg.
-        response = console.input(Text.from_markup(f"[yellow]?[/yellow] {msg} [dim]\\[y/N][/dim] "))
+        response = console.input(Text.from_markup(f"[yellow]?[/yellow] {escape(msg)} [dim]\\[y/N][/dim] "))
         return response.strip().lower() in ("y", "yes")
     except (KeyboardInterrupt, EOFError):
         console.print()
@@ -1123,6 +1126,8 @@ def select_row(message: str, headings: tuple[str, ...], rows: list, values: list
 
     Rows are plain text: questionary highlights the row under the cursor only for plain-text titles.
     """
+    if not rows:
+        die("There is nothing to choose from.")
     widths = [max(len(cell) for cell in column) for column in zip(headings, *rows, strict=True)]
 
     def pad(cells) -> list[str]:
@@ -1144,24 +1149,21 @@ def select_row(message: str, headings: tuple[str, ...], rows: list, values: list
     return choice
 
 
-def ask_value(param: str, message: str, value, *, low: int | None = None, high: int | None = None):
-    """Ask for a setting, prefilled with its value; a whole number when ``low`` is given (``high`` is optional).
+def ask_value(param: str, message: str, value):
+    """Ask for a setting, prefilled with its value; a whole number when the value is one.
 
-    A flag given on the command line is kept without asking. Ctrl+C exits.
+    A flag given on the command line is kept without asking. The server checks the limits. Ctrl-C exits.
     """
     if cli_options.option_was_explicit(param):
         return value
+    number = isinstance(value, int)
 
     def validate(text: str) -> bool | str:
-        if low is None:
-            return bool(text.strip()) or "This can't be empty."
-        if high is None:
-            return (text.strip().isdigit() and int(text) >= low) or f"Enter a whole number of at least {low}."
-        return (text.strip().isdigit() and low <= int(text) <= high) or f"Enter a whole number from {low} to {high}."
+        if number:
+            return text.strip().isdigit() or "Enter a whole number."
+        return bool(text.strip()) or "This can't be empty."
 
-    if low is not None:
-        value = max(value, low) if high is None else min(max(value, low), high)
     answer = questionary.text(message, default=str(value), validate=validate, style=PROMPT_STYLE).ask()
     if answer is None:
         raise typer.Exit()
-    return answer.strip() if low is None else int(answer)
+    return int(answer) if number else answer.strip()

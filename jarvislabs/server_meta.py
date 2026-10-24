@@ -81,7 +81,7 @@ def _resolve_region(
 def _available_devices(gpu: ServerMetaGPU, *, is_spot: bool) -> int:
     """Return the capacity count that matches the requested billing type."""
     if is_spot:
-        return gpu.num_free_devices
+        return gpu.spot_free_devices
     return gpu.effective_num_free_devices if gpu.effective_num_free_devices is not None else gpu.num_free_devices
 
 

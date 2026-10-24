@@ -1018,7 +1018,7 @@ def test_run_logs_follow_shows_followups(monkeypatch):
     monkeypatch.setattr(run, "_resolve_run_ssh", lambda run_id: (record, ["ssh", "root@example.com"]))
     monkeypatch.setattr(run, "_tail_remote_log", lambda ssh_parts, remote_log, *, follow, tail: 0)
     monkeypatch.setattr(run.render, "info", lambda message: captured.append(message))
-    monkeypatch.setattr(run.render.console, "print", lambda message: None)
+    monkeypatch.setattr(run.render.console, "print", lambda message, **kwargs: None)
     monkeypatch.setattr(state, "json_output", False)
 
     with pytest.raises(SystemExit) as exc:
@@ -1107,7 +1107,7 @@ def test_run_stop_reports_completed_run(monkeypatch):
         ),
     )
     monkeypatch.setattr(run.render, "info", lambda message: captured.append(message))
-    monkeypatch.setattr(run.render.console, "print", lambda message: None)
+    monkeypatch.setattr(run.render.console, "print", lambda message, **kwargs: None)
     monkeypatch.setattr(state, "json_output", False)
 
     run.run_stop("r_done")
@@ -1150,7 +1150,7 @@ def test_run_stop_sends_term_to_running_process(monkeypatch):
     monkeypatch.setattr(run, "_resolve_run_ssh", lambda run_id: (record, ["ssh", "root@example.com"]))
     monkeypatch.setattr(run, "_stop_remote_run", lambda ssh_parts, pid_file, exit_code_file: "stopped")
     monkeypatch.setattr(run.render, "success", lambda message: captured.setdefault("success", message))
-    monkeypatch.setattr(run.render.console, "print", lambda message: None)
+    monkeypatch.setattr(run.render.console, "print", lambda message, **kwargs: None)
     monkeypatch.setattr(state, "json_output", False)
 
     run.run_stop("r_live")

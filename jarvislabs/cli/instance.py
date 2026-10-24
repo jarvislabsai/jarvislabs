@@ -308,7 +308,7 @@ def instance_pause(
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Pause a running instance."""
+    """Pause a running instance. Its storage is still billed while it is paused."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     client = get_client()
     with render.spinner("Checking instance..."):
@@ -461,7 +461,7 @@ def instance_ssh(
         render.die(f"Instance {machine_id} has no SSH command (status: {inst.status}).")
 
     if print_command:
-        render.stdout_console.print(inst.ssh_command)
+        render.stdout_console.print(inst.ssh_command, markup=False, highlight=False)
         return
 
     if state.json_output:

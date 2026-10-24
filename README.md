@@ -3,7 +3,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/jarvislabs)](https://pypi.org/project/jarvislabs/)
 [![License](https://img.shields.io/pypi/l/jarvislabs)](https://github.com/jarvislabsai/jarvislabs/blob/main/LICENSE)
 
-CLI and Python SDK for managing GPU instances on [JarvisLabs.ai](https://jarvislabs.ai).
+CLI and Python SDK for GPU instances, serverless deployments and pay-per-token models on [JarvisLabs.ai](https://jarvislabs.ai).
 
 See the docs on [Jarvislabs Docs](https://docs.jarvislabs.ai/cli/)
 
@@ -125,6 +125,9 @@ jl deploy managed-models create qwen-3.5-4b --name my-qwen --max-workers 2
 # Get the base URL and the model name to use in requests
 jl deploy get <deployment_id>
 
+# Send a test message. With 0 workers, the first call starts a worker; run it again in a few minutes
+jl deploy chat <deployment_id> "Hello"
+
 # Delete when done
 jl deploy delete <deployment_id>
 ```
@@ -137,17 +140,15 @@ Call hosted models directly through an OpenAI-compatible API. Nothing to deploy;
 # See the models and their price per 1M tokens
 jl models list
 
-# Model details plus ready-to-use Python and curl code (omit the ID to pick from a list)
+# Model details plus ready-to-use curl and Python code (omit the ID to pick from a list)
 jl models get <model_id>
 
 # Ask once, or omit the prompt for an interactive chat
 jl models chat <model_id> "Explain KV cache in two lines"
 cat notes.txt | jl models chat <model_id> "Summarize this"
 
-# Multi-turn chat across separate calls (for agents and scripts)
-jl models chat <model_id> "My name is Jay"        # prints a session ID
-jl models chat <model_id> "What is my name?" --session <session_id>
-jl models chat <model_id> "And my age?" -c       # continue the most recent session
+# Send an image (local file or URL) to a model that accepts images
+jl models chat <model_id> "What is in this picture?" --image photo.jpg
 ```
 
 From your own code, use any OpenAI client with base URL `https://models.jarvislabs.net/v1` and your JarvisLabs API key.
@@ -169,7 +170,7 @@ jl vpc create my-net --cidr 10.50.0.0/24 --region IN1
 jl get <id>                  # Shows Jupyter + exposed port URLs
 ```
 
-Every command supports `--help`, `--json` (machine-readable output), and `--yes` (skip confirmations).
+Every command supports `--help`. Most support `--json` (machine-readable output), and commands that ask for confirmation support `--yes` (skip it).
 
 ## Python SDK
 

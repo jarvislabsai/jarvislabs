@@ -13,7 +13,7 @@ import typer
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
-from jarvislabs.cli.models import interactive_chat, read_prompt, stream_reply
+from jarvislabs.cli.models import ImageOption, interactive_chat, read_prompt, stream_reply, user_content
 from jarvislabs.regions import normalize_serverless_region
 
 if TYPE_CHECKING:
@@ -24,8 +24,15 @@ BETA_HELP_NOTICE = (
     "Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]"
 )
 
+# Shown under the help of the commands that take deployment settings. The server checks the limits.
+SETTINGS_DOCS_NOTE = (
+    "For what each setting means and its allowed range, see "
+    "[link=https://docs.jarvislabs.ai/serverless]https://docs.jarvislabs.ai/serverless[/link]"
+)
+
 deploy_app = typer.Typer(
     name="deploy",
+    epilog=SETTINGS_DOCS_NOTE,
     help=(
         "Create and manage serverless model deployments [bold bright_yellow](beta)[/bold bright_yellow].\n\n"
         "[dim]Quick examples:[/dim]\n"
@@ -142,21 +149,23 @@ def _resolve_managed_model(client, model_slug: str | None, region: str | None) -
     return render.select_managed_model(options, result.currency), result.currency
 
 
-@deploy_app.command("create")
+@deploy_app.command("create", epilog=SETTINGS_DOCS_NOTE)
 def deploy_create(
     name: Annotated[str, typer.Option("--name", help="Deployment name.")],
     region: Annotated[str, typer.Option("--region", help="Region (IN1 or IN2).")],
     framework: Annotated[str, typer.Option("--framework", help="vllm | sglang | ollama.")],
     gpu: Annotated[str, typer.Option("--gpu", help="GPU type.")],
     gpus_per_worker: Annotated[int, typer.Option("--gpus-per-worker", help="GPUs per worker.")],
-    min_workers: Annotated[int, typer.Option("--min-workers", help="Minimum workers (0-100).")],
-    max_workers: Annotated[int, typer.Option("--max-workers", help="Maximum workers (0-100).")],
-    idle_timeout: Annotated[int, typer.Option("--idle-timeout", help="Idle timeout in seconds (0-86400).")],
-    wait_time: Annotated[int, typer.Option("--wait-time", help="Wait time in seconds (0-600).")],
-    storage: Annotated[int, typer.Option("--storage", help="Deployment filesystem size in GB (min 50).")],
+    min_workers: Annotated[int, typer.Option("--min-workers", help="Minimum workers.")],
+    max_workers: Annotated[int, typer.Option("--max-workers", help="Maximum workers.")],
+    idle_timeout: Annotated[int, typer.Option("--idle-timeout", help="Idle timeout in seconds.")],
+    wait_time: Annotated[
+        int, typer.Option("--wait-time", help="Seconds a request waits for a free worker before it fails.")
+    ],
+    storage: Annotated[int, typer.Option("--storage", help="Deployment filesystem size in GB.")],
     model: Annotated[str, typer.Option("--model", help="Model id (e.g. a Hugging Face repo id).")],
     concurrent: Annotated[
-        int | None, typer.Option("--concurrent", help="Concurrent requests per worker (default 1).", min=1)
+        int | None, typer.Option("--concurrent", help="Concurrent requests per worker (default 1).")
     ] = None,
     arg: Annotated[
         list[str] | None,
@@ -170,8 +179,6 @@ def deploy_create(
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Create a serverless deployment and poll until running (unless --detach).
-
-    Use --arg to pass extra framework flags as key=value.
 
     [bold bright_yellow]Serverless is in beta. We're actively improving it and would love early feedback. Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]
     """
@@ -273,7 +280,7 @@ def deploy_logs(
     region: RegionHintOption = None,
     tail: Annotated[int, typer.Option("--tail", help="Last N lines from each worker (0 = live only).")] = 100,
     follow: Annotated[
-        bool, typer.Option("--follow/--no-follow", "-f", help="Keep streaming new lines (Ctrl+C to stop).")
+        bool, typer.Option("--follow/--no-follow", "-f", help="Keep streaming new lines (Ctrl-C to stop).")
     ] = True,
     worker: Annotated[
         int | None, typer.Option("--worker", help="Only this worker id (ids shown in `jl deploy get`).")
@@ -283,7 +290,7 @@ def deploy_logs(
     """Stream a deployment's logs, live from its running workers (logs are not stored)."""
     cli_options.apply_command_options(json_output=json_output)
     if state.json_output:
-        render.die("--json is not supported for log streaming.")
+        render.die("jl deploy logs doesn't support --json. Use --no-follow for a one-time read.")
 
     client = get_client()
     # Read the record before streaming: it resolves the region once (so logs()
@@ -322,13 +329,16 @@ def _no_workers_message(status: str, deployment_id: str) -> str:
     return "No workers up yet — logs start once a worker is running. Try again shortly."
 
 
-@deploy_app.command("update")
+@deploy_app.command("update", epilog=SETTINGS_DOCS_NOTE)
 def deploy_update(
     deployment_id: Annotated[str, typer.Argument(help="Deployment id.")],
     name: Annotated[str | None, typer.Option("--name", help="New name.")] = None,
     idle_timeout: Annotated[int | None, typer.Option("--idle-timeout", help="New idle timeout in seconds.")] = None,
     wait_time: Annotated[
-        int | None, typer.Option("--wait-time", help="New wait time in seconds (custom deployments only).")
+        int | None,
+        typer.Option(
+            "--wait-time", help="New wait time: seconds a request waits for a free worker (custom deployments only)."
+        ),
     ] = None,
     min_workers: Annotated[int | None, typer.Option("--min-workers", help="New minimum workers.")] = None,
     max_workers: Annotated[int | None, typer.Option("--max-workers", help="New maximum workers.")] = None,
@@ -349,6 +359,10 @@ def deploy_update(
       [cyan]jl deploy update <id> --min-workers 1 --max-workers 3[/cyan]
     """
     cli_options.apply_command_options(json_output=json_output)
+    if all(value is None for value in (name, idle_timeout, wait_time, min_workers, max_workers, concurrent)):
+        render.die(
+            "Pass at least one of --name, --idle-timeout, --wait-time, --min-workers, --max-workers, --concurrent."
+        )
 
     client = get_client()
     with render.spinner("Updating deployment..."):
@@ -376,7 +390,7 @@ def deploy_delete(
     region: RegionHintOption = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Tear down a deployment."""
+    """Delete a deployment and stop its billing."""
     cli_options.apply_command_options(json_output=json_output, yes=yes)
 
     if not render.confirm(f"Delete deployment {deployment_id}?", skip=state.yes):
@@ -398,14 +412,18 @@ def deploy_chat(
     prompt: Annotated[str | None, typer.Argument(help="Message to send. Omit it for an interactive chat.")] = None,
     system: Annotated[str | None, typer.Option("--system", help="System prompt.")] = None,
     max_tokens: Annotated[
-        int | None, typer.Option("--max-tokens", help="Maximum output tokens (default: the model's limit).", min=1)
+        int | None,
+        typer.Option("--max-tokens", help="Maximum output tokens (default: the model server's default)."),
     ] = None,
+    image: ImageOption = None,
     region: RegionHintOption = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Test a running deployment: send it a message, or chat with it.
 
     The reply streams to stdout; thinking and token usage go to stderr.
+    If no worker is ready, it doesn't wait or send your message: it starts a worker (unless one is already
+    starting) and exits with an error. Try again in a few minutes.
 
     [bold]Examples:[/bold]
 
@@ -417,8 +435,19 @@ def deploy_chat(
 
       [dim]# Full OpenAI-style response as JSON[/dim]
       [cyan]jl deploy chat <id> "Hi" --json[/cyan]
+
+      [dim]# With an image[/dim]
+      [cyan]jl deploy chat <id> "What is in this picture?" --image photo.jpg[/cyan]
+
+    In interactive chat: Ctrl-C stops a reply · Ctrl-D or /exit quits.
     """
     cli_options.apply_command_options(json_output=json_output)
+    text = read_prompt(prompt)
+    if image and not text:
+        render.die("Pass a prompt with --image. See: jl deploy chat --help")
+    content = user_content(text, image)
+    if not text and (state.json_output or not render.can_prompt()):
+        render.die("Pass a prompt. See: jl deploy chat --help")
     client = get_client()
     with render.spinner("Fetching deployment..."):
         deployment = client.deployments.get(deployment_id, region=region)
@@ -428,22 +457,30 @@ def deploy_chat(
         )
 
     model = deployment.served_model
-    params = {"base_url": client.deployments.openai_base_url(deployment_id, region=deployment.region)}
-    if max_tokens:
-        params["max_tokens"] = max_tokens
+    base_url = client.deployments.openai_base_url(deployment_id, region=deployment.region)
+    workers = deployment.workers
+    if not workers.healthy:
+        check = f"Try again shortly. Check progress: jl deploy get {deployment_id}"
+        if workers.provisioning or workers.total:
+            render.die(f"This deployment is starting a worker. This can take a few minutes. {check}")
+        # A worker starts only when a request arrives, so send a tiny one (never the user's prompt) and stop.
+        with render.spinner("Starting a worker..."):
+            client.models.chat_submit(model, [{"role": "user", "content": "ping"}], base_url=base_url, max_tokens=1)
+        render.die(
+            f"No worker was running, so this deployment is starting one now. This can take a few minutes. {check}"
+        )
+
+    params = {"base_url": base_url, **({"max_tokens": max_tokens} if max_tokens is not None else {})}
     messages = [{"role": "system", "content": system}] if system else []
 
     def send(history: list[dict]) -> dict | None:
         return stream_reply(client.models.chat_stream(model, history, **params))
 
-    text = read_prompt(prompt)
     if not text:
-        if state.json_output or not render.can_prompt():
-            render.die("Pass a prompt. See: jl deploy chat --help")
         interactive_chat(f"{deployment.name or deployment_id} ({model})", messages, send)
         return
 
-    messages.append({"role": "user", "content": text})
+    messages.append({"role": "user", "content": content})
     if state.json_output:
         render.print_json(client.models.chat(model, messages, **params))
         return
@@ -463,10 +500,13 @@ def managed_models_list(json_output: cli_options.JsonOption = False) -> None:
     render.managed_models_table(result)
 
 
-@managed_app.command("create")
+@managed_app.command("create", epilog=SETTINGS_DOCS_NOTE)
 def managed_models_create(
     model_slug: Annotated[
-        str | None, typer.Argument(help="Managed model slug. Omit it to pick from a list of available models.")
+        str | None,
+        typer.Argument(
+            help="Managed model slug. Omit it to pick from a list; you are then asked for each setting you didn't pass."
+        ),
     ] = None,
     name: Annotated[str | None, typer.Option("--name", help="Deployment name (default: the model slug).")] = None,
     region: Annotated[
@@ -477,7 +517,7 @@ def managed_models_create(
     idle_timeout: Annotated[int, typer.Option("--idle-timeout", help="Idle timeout in seconds.")] = 300,
     concurrent: Annotated[
         int | None,
-        typer.Option("--concurrent", help="Concurrent requests per worker (default: the model's tested value).", min=1),
+        typer.Option("--concurrent", help="Concurrent requests per worker (default: the model's tested value)."),
     ] = None,
     detach: Annotated[bool, typer.Option("--detach", help="Skip the wait: print the id and exit.")] = False,
     yes: cli_options.YesOption = False,
@@ -497,16 +537,11 @@ def managed_models_create(
     if model_slug is None:  # Picked from the list: ask for each setting not given as a flag.
         render.managed_settings_help()
         name = render.ask_value("name", "Deployment name:", name)
-        # The server checks the limits; the prompts only ask for whole numbers.
-        min_workers = render.ask_value("min_workers", "Min workers:", min_workers, low=0)
-        # Starting from max(min, 1) prefills a usable value when min was raised above the default.
-        max_workers = render.ask_value("max_workers", "Max workers:", max_workers, low=max(min_workers, 1))
-        idle_timeout = render.ask_value("idle_timeout", "Idle timeout (seconds):", idle_timeout, low=0)
+        min_workers = render.ask_value("min_workers", "Min workers:", min_workers)
+        max_workers = render.ask_value("max_workers", "Max workers:", max_workers)
+        idle_timeout = render.ask_value("idle_timeout", "Idle timeout (seconds):", idle_timeout)
         concurrent = render.ask_value(
-            "concurrent",
-            "Concurrent requests per worker:",
-            concurrent or model.concurrent_requests or 1,
-            low=1,
+            "concurrent", "Concurrent requests per worker:", concurrent or model.concurrent_requests or 1
         )
 
     details = (
@@ -527,5 +562,6 @@ def managed_models_create(
             max_workers=max_workers,
             idle_timeout=idle_timeout,
             concurrent=concurrent,
+            gpu_type=model.gpu_type,
         )
     _finish_create(client, deployment_id, model.region, detach=detach)

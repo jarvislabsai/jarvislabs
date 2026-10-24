@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from types import SimpleNamespace
 
 from jarvislabs.cli import commands
+from jarvislabs.models import ServerMetaGPU
 
 
 def test_gpus_shows_eu1_launch_limit_note(monkeypatch):
@@ -80,7 +81,7 @@ def test_resources_non_json_renders_without_error(monkeypatch):
         },
     )
     gpus = [
-        SimpleNamespace(
+        ServerMetaGPU(
             gpu_type="H100",
             region="europe-01",
             num_free_devices=1,
