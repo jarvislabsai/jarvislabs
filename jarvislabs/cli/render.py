@@ -896,7 +896,7 @@ def jsonable_cpu_meta(cpu_meta: dict) -> dict:
 def success(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[green]✓[/green] {msg}")
+    console.print(f"[green]✓[/green] {escape(msg)}")
 
 
 def error(msg: str) -> None:
@@ -908,7 +908,7 @@ def error(msg: str) -> None:
 def info(msg: str, style: str = "dim") -> None:
     if state.json_output:
         return
-    console.print(f"[{style}]{msg}[/{style}]")
+    console.print(f"[{style}]{escape(msg)}[/{style}]")
 
 
 def warning(msg: str) -> None:
@@ -932,7 +932,7 @@ def confirm(msg: str, *, skip: bool = False) -> bool:
         die("--json requires --yes")
     try:
         # A Text prompt skips Rich's auto-highlighting, which would color the numbers in msg.
-        response = console.input(Text.from_markup(f"[yellow]?[/yellow] {msg} [dim]\\[y/N][/dim] "))
+        response = console.input(Text.from_markup(f"[yellow]?[/yellow] {escape(msg)} [dim]\\[y/N][/dim] "))
         return response.strip().lower() in ("y", "yes")
     except (KeyboardInterrupt, EOFError):
         console.print()

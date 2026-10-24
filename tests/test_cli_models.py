@@ -726,8 +726,18 @@ def test_read_stdin_stops_on_a_quiet_open_pipe_after_data(monkeypatch):
         os.close(write)
 
 
-def test_error_text_is_not_read_as_markup(monkeypatch):
+@pytest.mark.parametrize("show", [render.error, render.warning, render.info, render.success])
+def test_message_text_is_not_read_as_markup(monkeypatch, show):
     buf = StringIO()
     monkeypatch.setattr(render, "console", Console(file=buf, color_system=None))
-    render.error("Unknown model: [/bold]")
-    assert "[/bold]" in buf.getvalue()
+    show("echo 'hello [world]' [/]")
+    assert "echo 'hello [world]' [/]" in buf.getvalue()
+
+
+def test_confirm_text_is_not_read_as_markup(monkeypatch):
+    buf = StringIO()
+    console = Console(file=buf, color_system=None)
+    monkeypatch.setattr(console, "input", lambda prompt, **k: console.print(prompt, end="") or "n")
+    monkeypatch.setattr(render, "console", console)
+    assert render.confirm("Delete deployment [/]?") is False
+    assert "Delete deployment [/]?" in buf.getvalue()
