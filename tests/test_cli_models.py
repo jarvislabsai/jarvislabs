@@ -483,3 +483,9 @@ def test_chat_usage_without_prices_shows_tokens(monkeypatch):
     monkeypatch.setattr(render, "info", notes.append)
     render.chat_usage({"prompt_tokens": 10, "completion_tokens": 5})
     assert notes == ["\n10 in · 5 out"]
+
+
+def test_snippets_set_max_tokens():
+    out = _capture(render.model_snippets, "glm-5.3", MODELS_API_URL)
+    assert "max_tokens=32768" in out
+    assert '"max_tokens": 32768' in out

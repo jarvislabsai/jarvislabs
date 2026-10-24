@@ -22,7 +22,7 @@ from rich.text import Text
 from rich.theme import Theme
 
 from jarvislabs.cli import options as cli_options, state
-from jarvislabs.constants import EUROPE_REGION, REGION_CODE_TO_REGION, REGION_DISPLAY_CODES
+from jarvislabs.constants import EUROPE_REGION, MODELS_DEFAULT_MAX_TOKENS, REGION_CODE_TO_REGION, REGION_DISPLAY_CODES
 from jarvislabs.instances import is_cpu_vm
 from jarvislabs.regions import region_code
 
@@ -535,13 +535,15 @@ def deployment_running_handoff(base_url: str, model: str | None) -> None:
     )
 
 
-def _openai_snippet(base_url: str, model: str) -> str:
+def _openai_snippet(base_url: str, model: str, max_tokens: int | None = None) -> str:
+    limit = f"    max_tokens={max_tokens},  # without a limit, replies stop at 1024 tokens\n" if max_tokens else ""
     return (
         "from openai import OpenAI\n"
         f'client = OpenAI(base_url="{base_url}", api_key="<YOUR_JL_API_KEY>")\n'
         "resp = client.chat.completions.create(\n"
         f'    model="{model}",\n'
         '    messages=[{"role": "user", "content": "Hello"}],\n'
+        f"{limit}"
         ")\n"
         "print(resp.choices[0].message.content)"
     )
@@ -649,14 +651,21 @@ def model_detail(model, base_url: str) -> None:
 
 
 def model_snippets(model_id: str, base_url: str) -> None:
-    body = json.dumps({"model": model_id, "messages": [{"role": "user", "content": "Hello"}]})
+    body = json.dumps(
+        {
+            "model": model_id,
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": MODELS_DEFAULT_MAX_TOKENS,
+        }
+    )
     curl = (
         f"curl {base_url}/chat/completions \\\n"
         '  -H "Authorization: Bearer $JL_API_KEY" \\\n'
         '  -H "Content-Type: application/json" \\\n'
         f"  -d '{body}'"
     )
-    for title, code, lexer in (("Python", _openai_snippet(base_url, model_id), "python"), ("curl", curl, "bash")):
+    python = _openai_snippet(base_url, model_id, MODELS_DEFAULT_MAX_TOKENS)
+    for title, code, lexer in (("Python", python, "python"), ("curl", curl, "bash")):
         stdout_console.print()
         stdout_console.print(Rule(f"[bold]{title}[/bold]", align="left", style="dim"))
         stdout_console.print()

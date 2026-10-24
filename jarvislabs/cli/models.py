@@ -15,7 +15,7 @@ import typer
 
 from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
-from jarvislabs.constants import MODELS_API_URL
+from jarvislabs.constants import MODELS_API_URL, MODELS_DEFAULT_MAX_TOKENS
 from jarvislabs.exceptions import NotFoundError
 
 if TYPE_CHECKING:
@@ -66,7 +66,9 @@ def models_chat(
     model_id: ModelIdArgument = None,
     prompt: Annotated[str | None, typer.Argument(help="Message to send. Omit it for an interactive chat.")] = None,
     system: Annotated[str | None, typer.Option("--system", help="System prompt.")] = None,
-    max_tokens: Annotated[int, typer.Option("--max-tokens", help="Maximum output tokens.", min=1)] = 32768,
+    max_tokens: Annotated[
+        int, typer.Option("--max-tokens", help="Maximum output tokens.", min=1)
+    ] = MODELS_DEFAULT_MAX_TOKENS,
     thinking: Annotated[bool | None, typer.Option("--thinking/--no-thinking", help="Turn thinking on or off.")] = None,
     effort: Annotated[str | None, typer.Option("--effort", help="Thinking effort, e.g. low or high.")] = None,
     session: Annotated[
