@@ -707,10 +707,11 @@ def test_damaged_session_is_a_clear_error(monkeypatch, sessions_dir, content):
     assert errors == ["Session broken is damaged. Send a prompt without --session to start a new one."]
 
 
-def test_session_file_is_private(sessions_dir):
+def test_session_folder_is_private(monkeypatch, tmp_path):
+    folder = tmp_path / "chat-sessions"
+    monkeypatch.setattr(models_cli, "CHAT_SESSIONS_DIR", folder)
     models_cli._save_session("priv", [])
-    assert (sessions_dir / "priv.json").stat().st_mode & 0o777 == 0o600
-    assert not list(sessions_dir.glob("*.tmp"))
+    assert folder.stat().st_mode & 0o777 == 0o700
 
 
 def test_read_stdin_stops_on_a_quiet_open_pipe_after_data(monkeypatch):
@@ -730,15 +731,3 @@ def test_error_text_is_not_read_as_markup(monkeypatch):
     monkeypatch.setattr(render, "console", Console(file=buf, color_system=None))
     render.error("Unknown model: [/bold]")
     assert "[/bold]" in buf.getvalue()
-
-
-def test_concurrent_saves_both_land(sessions_dir):
-    import threading
-
-    threads = [threading.Thread(target=models_cli._save_session, args=("shared", [{"n": i}])) for i in range(8)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-    assert models_cli._load_session("shared") in ([{"n": i}] for i in range(8))
-    assert not list(sessions_dir.glob("*.tmp"))

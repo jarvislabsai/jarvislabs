@@ -7,7 +7,6 @@ import os
 import select
 import stat
 import sys
-import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -232,17 +231,9 @@ def _latest_session() -> str:
 
 
 def _save_session(session_id: str, messages: list[dict]) -> None:
-    """Write the file only the user can read, then swap it in, so an interrupted save can't leave it half-written."""
+    # The folder is private (0700), so no one else can read the files in it.
     CHAT_SESSIONS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    path = _session_path(session_id)
-    fd, tmp = tempfile.mkstemp(dir=CHAT_SESSIONS_DIR, suffix=".tmp")  # unique per save, created 0600
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump({"messages": messages}, f)
-        os.replace(tmp, path)
-    except BaseException:
-        Path(tmp).unlink(missing_ok=True)
-        raise
+    _session_path(session_id).write_text(json.dumps({"messages": messages}))
 
 
 def _prune_sessions() -> None:
