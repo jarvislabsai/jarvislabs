@@ -31,7 +31,9 @@ app = typer.Typer(
         '  [bold]jl models chat <model> "Hello"[/bold]             [rgb(100,100,100)]call a model, no deployment needed[/rgb(100,100,100)]\n'
         "  [bold]jl deploy managed-models create[/bold]            [rgb(100,100,100)]deploy a ready-made model (pick from a list)[/rgb(100,100,100)]\n\n"
         "[dim]Every command supports[/dim] [bold]--help[/bold] [dim]for details:[/dim]\n"
-        "  [dim]jl create --help    jl run --help    jl ssh-key --help[/dim]"
+        "  [dim]jl create --help    jl run --help    jl ssh-key --help[/dim]\n\n"
+        "[dim]Using a coding agent? Run[/dim] [bold]jl setup[/bold] [dim]to install the jl skill. "
+        "It teaches your agent how to use jl.[/dim]"
     ),
     rich_markup_mode="rich",
     pretty_exceptions_enable=False,
