@@ -69,8 +69,8 @@ def status(
         return
 
     render.account_status(info, bal, metrics, sym)
-    if cli["hint"]:
-        render.warning(cli["hint"])
+    if hint := update.status_hint(cli):
+        render.warning(hint)
 
 
 @app.command(rich_help_panel="Resources")

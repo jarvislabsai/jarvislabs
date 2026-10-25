@@ -119,23 +119,26 @@ def latest_version() -> str | None:
 
 
 def cli_status() -> dict:
-    """Version and skill state for `jl status`. `hint` is plain text for agents that have no jl skill."""
+    """Version and skill state for `jl status`."""
     current, latest = current_version(), latest_version()
-    update_available, skill_current = is_newer(latest, current), setup.skills_current()
-    hints = []
-    if update_available:
-        hints.append(f"jl {latest} is available. Run jl update.")
-    elif skill_current is False:
-        hints.append("The jl agent skill is out of date. Run jl update.")
-    if skill_current is None:
-        hints.append("No jl agent skill is installed. Run jl setup to add one.")
     return {
         "version": current,
         "latest": latest,
-        "update_available": update_available,
-        "skill_current": skill_current,
-        "hint": " ".join(hints) or None,
+        "update_available": is_newer(latest, current),
+        "skill_current": setup.skills_current(),
     }
+
+
+def status_hint(cli: dict) -> str | None:
+    """The line `jl status` prints when jl or the agent skill needs attention."""
+    hints = []
+    if cli["update_available"]:
+        hints.append(f"jl {cli['latest']} is available. Run jl update.")
+    elif cli["skill_current"] is False:
+        hints.append("The jl agent skill is out of date. Run jl update.")
+    if cli["skill_current"] is None:
+        hints.append("No jl agent skill is installed. Run jl setup to add one.")
+    return " ".join(hints) or None
 
 
 def _update_message(current: str, latest: str) -> str:

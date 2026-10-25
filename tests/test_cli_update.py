@@ -425,7 +425,6 @@ def test_status_json_includes_cli_block(monkeypatch, capsys):
         "latest": "0.2.19",
         "update_available": True,
         "skill_current": False,
-        "hint": "jl 0.2.19 is available. Run jl update.",
     }
 
 
@@ -443,11 +442,11 @@ def test_status_json_includes_cli_block(monkeypatch, capsys):
         ("0.2.18", BUNDLED, None),
     ],
 )
-def test_cli_status_hint(monkeypatch, latest, skill, hint):
+def test_status_hint(monkeypatch, latest, skill, hint):
     _fake_pypi(monkeypatch, latest=latest)
     if skill is not None:
         _write_skill(setup.UNIVERSAL_PATH, skill)
-    assert update.cli_status()["hint"] == hint
+    assert update.status_hint(update.cli_status()) == hint
 
 
 def test_help_tells_agents_to_install_the_skill():
