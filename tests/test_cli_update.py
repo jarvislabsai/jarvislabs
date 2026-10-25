@@ -114,6 +114,13 @@ def test_latest_version_falls_back_to_old_cache_when_pypi_fails(monkeypatch):
     assert update.latest_version() == "0.2.19"
 
 
+@pytest.mark.parametrize("checked_at", [time.time(), 0])
+def test_latest_version_is_never_older_than_installed(monkeypatch, checked_at):
+    update._write_cache({"checked_at": checked_at, "latest_version": "0.2.17"})
+    _fake_pypi(monkeypatch, latest=None)
+    assert update.latest_version() == "0.2.18"
+
+
 def test_checks_disabled_by_env(monkeypatch):
     monkeypatch.setenv("JL_NO_UPDATE_CHECK", "1")
     update._write_cache({"checked_at": time.time(), "latest_version": "0.2.19"})
@@ -294,17 +301,41 @@ def test_refresh_skills_writes_symlinked_copy_once():
     assert (claude_dir / "SKILL.md").read_text() == BUNDLED
 
 
+def test_refresh_skills_warns_when_a_skill_cannot_be_written(monkeypatch):
+    universal = _write_skill(setup.UNIVERSAL_PATH, "old")
+    warnings = []
+    monkeypatch.setattr(setup.render, "warning", warnings.append)
+
+    def denied(content, path):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(setup, "_install_skill_to_path", denied)
+
+    assert setup.refresh_skills() == []
+    assert warnings == [f"Could not update the agent skill at {universal}: Permission denied"]
+
+
 # ── jl update ────────────────────────────────────────────────────────────────
+
+
+class _Calls(list):
+    installs: str
 
 
 @pytest.fixture()
 def runs(monkeypatch):
-    """Record subprocess.run calls instead of running them."""
-    calls = []
+    """Record subprocess.run calls instead of running them. The installer "installs" version runs.installs."""
+    calls = _Calls()
+    calls.installs = "0.2.19"
+    installed = ["0.2.18"]
 
     def fake_run(cmd, **kwargs):
         calls.append(cmd)
+        if cmd[0] != sys.argv[0]:  # the installer, not the new jl
+            installed[0] = calls.installs
         return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(update, "current_version", lambda: installed[0])
 
     monkeypatch.setattr(update.subprocess, "run", fake_run)
     monkeypatch.setattr(update, "_is_editable", lambda: False)
@@ -331,6 +362,24 @@ def test_update_installs_then_refreshes_skills_with_new_jl(monkeypatch, runs):
     assert runs == [["uv", "tool", "install", "jarvislabs@latest"], [sys.argv[0], "update", "--skills-only"]]
 
 
+def test_update_fails_when_installer_did_not_upgrade(monkeypatch, runs):
+    _fake_pypi(monkeypatch, latest="0.2.19")
+    runs.installs = "0.2.18"
+    with pytest.raises(SystemExit) as exc:
+        update.update()
+    assert exc.value.code == 1
+    assert [sys.argv[0], "update", "--skills-only"] not in runs
+
+
+def test_update_reports_the_version_the_installer_installed(monkeypatch, runs):
+    _fake_pypi(monkeypatch, latest="0.2.19")
+    runs.installs = "0.2.20"
+    successes = []
+    monkeypatch.setattr(update.render, "success", successes.append)
+    update.update()
+    assert successes == ["Updated jl to 0.2.20."]
+
+
 def test_update_fails_when_installer_fails(monkeypatch, runs):
     _fake_pypi(monkeypatch, latest="0.2.19")
     monkeypatch.setattr(update.subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1))
@@ -355,10 +404,12 @@ def test_update_warns_when_new_jl_cannot_start(monkeypatch, runs):
     warnings = []
     monkeypatch.setattr(update.render, "warning", warnings.append)
 
+    install = update.subprocess.run  # the fixture's fake installer
+
     def run(cmd, **kwargs):
         if cmd[0] == sys.argv[0]:
             raise PermissionError(cmd[0])
-        return subprocess.CompletedProcess(cmd, 0)
+        return install(cmd, **kwargs)
 
     monkeypatch.setattr(update.subprocess, "run", run)
     update.update()

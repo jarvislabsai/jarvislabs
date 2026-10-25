@@ -120,14 +120,19 @@ def skills_current() -> bool | None:
 def refresh_skills() -> list[Path]:
     """Overwrite installed skill files that differ from the bundled one. Never creates new files."""
     content = _load_bundled_skill()
-    stale = _stale_skill_paths(content)
-    for path in stale:
-        _install_skill_to_path(content, path)
+    refreshed = []
+    for path in _stale_skill_paths(content):
+        try:
+            _install_skill_to_path(content, path)
+        except OSError as e:
+            render.warning(f"Could not update the agent skill at {path}: {e.strerror or e}")
+            continue
+        refreshed.append(path)
         # No wrapping: agents read this path, and a long path would be split across lines.
         render.console.print(
             f"[green]✓[/green] Refreshed agent skill: {escape(str(path))}", soft_wrap=True, highlight=False
         )
-    return stale
+    return refreshed
 
 
 # ── Agent selection ──────────────────────────────────────────────────────────
