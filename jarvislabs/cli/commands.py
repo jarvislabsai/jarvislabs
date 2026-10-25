@@ -69,12 +69,8 @@ def status(
         return
 
     render.account_status(info, bal, metrics, sym)
-    if cli["update_available"]:
-        render.console.print(update.update_message(cli["version"], cli["latest"]), highlight=False)
-    elif cli["skill_current"] is False:
-        render.console.print(
-            "[yellow]Agent skill is out of date.[/yellow] Run: [bold]jl update[/bold]", highlight=False
-        )
+    if hint := update.status_hint(cli):
+        render.console.print(hint, highlight=False)
 
 
 @app.command(rich_help_panel="Resources")

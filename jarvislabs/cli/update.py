@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from importlib.metadata import distribution, version
 from pathlib import Path
@@ -19,7 +20,6 @@ from typing import Annotated
 
 import typer
 from platformdirs import user_cache_dir
-from rich.markup import escape
 
 from jarvislabs.cli import render, setup, state
 from jarvislabs.cli.app import app
@@ -29,6 +29,8 @@ _PYPI_URL = f"https://pypi.org/pypi/{_PKG}/json"
 _CACHE_FILE = Path(user_cache_dir("jl")) / "update_check.json"
 _TTL = 86_400
 _TIMEOUT = 3.0
+# The background PyPI check and the notice both update the cache in the same process.
+_cache_lock = threading.Lock()
 
 
 # ── Cache ────────────────────────────────────────────────────────────────────
@@ -56,6 +58,11 @@ def _write_cache(data: dict) -> None:
                 os.unlink(tmp)
 
 
+def _update_cache(**fields) -> None:
+    with _cache_lock:
+        _write_cache({**_read_cache(), **fields})
+
+
 def _cache_is_fresh(cache: dict) -> bool:
     return time.time() - cache.get("checked_at", 0) < _TTL
 
@@ -73,10 +80,12 @@ def current_version() -> str:
 
 def _parse_version(v: str | None) -> tuple[int, ...] | None:
     """Parse 'X.Y.Z' into (X, Y, Z). Returns None for anything else, including dev builds."""
+    if not v:
+        return None
     try:
         parts = tuple(int(x) for x in v.strip().split("."))
         return parts if len(parts) >= 2 else None
-    except (ValueError, AttributeError):
+    except ValueError:
         return None
 
 
@@ -95,17 +104,8 @@ def _fetch_latest() -> str | None:
         latest = resp.json()["info"]["version"]
     except Exception:
         return None
-    cache = _read_cache()
-    cache.update(checked_at=time.time(), latest_version=latest)
-    _write_cache(cache)
+    _update_cache(checked_at=time.time(), latest_version=latest)
     return latest
-
-
-def cached_latest() -> str | None:
-    """Latest version from the cache, without any network call."""
-    if _checks_disabled():
-        return None
-    return _read_cache().get("latest_version")
 
 
 def latest_version() -> str | None:
@@ -130,40 +130,53 @@ def cli_status() -> dict:
     }
 
 
-def update_message(current: str, latest: str) -> str:
+def _update_message(current: str, latest: str) -> str:
     return f"[yellow]Update available:[/yellow] {current} → {latest}. Run: [bold]jl update[/bold]"
+
+
+def status_hint(cli: dict) -> str | None:
+    """The line `jl status` prints when the CLI or the agent skill is out of date."""
+    if cli["update_available"]:
+        return _update_message(cli["version"], cli["latest"])
+    if cli["skill_current"] is False:
+        return "[yellow]Agent skill is out of date.[/yellow] Run: [bold]jl update[/bold]"
+    return None
+
+
+def version_line() -> str:
+    """`jl --version` output. Mentions a newer version if the cache knows one (no network call)."""
+    current = current_version()
+    latest = None if _checks_disabled() else _read_cache().get("latest_version")
+    available = f" ({latest} available, run jl update)" if is_newer(latest, current) else ""
+    return f"jl {current}{available}"
 
 
 # ── Daily notice ─────────────────────────────────────────────────────────────
 
 
 def _notice_enabled() -> bool:
-    return not _checks_disabled() and sys.stderr.isatty()
+    return not _checks_disabled() and sys.stderr is not None and sys.stderr.isatty()
 
 
 def start_background_check() -> None:
     """Refresh the cache from PyPI in a background thread if it is more than a day old."""
-    if not _notice_enabled() or _cache_is_fresh(_read_cache()):
-        return
-    import threading
-
-    threading.Thread(target=_fetch_latest, daemon=True).start()
+    # The update check must never break the command the user ran.
+    with contextlib.suppress(Exception):
+        if _notice_enabled() and not _cache_is_fresh(_read_cache()):
+            threading.Thread(target=_fetch_latest, daemon=True).start()
 
 
 def print_notice() -> None:
     """Print the update notice after a command, at most once a day."""
-    try:
+    with contextlib.suppress(Exception):
         if not _notice_enabled() or state.json_output:
             return
         cache = _read_cache()
         current, latest = current_version(), cache.get("latest_version")
         if not is_newer(latest, current) or time.time() - cache.get("notified_at", 0) < _TTL:
             return
-        render.console.print(f"\n{update_message(current, latest)}", highlight=False)
-        cache["notified_at"] = time.time()
-        _write_cache(cache)
-    except Exception:
-        pass
+        render.console.print(f"\n{_update_message(current, latest)}", highlight=False)
+        _update_cache(notified_at=time.time())
 
 
 # ── jl update ────────────────────────────────────────────────────────────────
@@ -197,12 +210,9 @@ def install_command() -> list[str]:
     return [sys.executable, "-m", "pip", "install", "--upgrade", _PKG]
 
 
-def _refresh_skills() -> None:
-    for path in setup.refresh_skills():
-        # No wrapping: agents read this path, and a long path would be split across lines.
-        render.console.print(
-            f"[green]✓[/green] Refreshed agent skill: {escape(str(path))}", soft_wrap=True, highlight=False
-        )
+def _command_text(cmd: list[str]) -> str:
+    """The command as the user's shell expects it."""
+    return subprocess.list2cmdline(cmd) if sys.platform == "win32" else shlex.join(cmd)
 
 
 @app.command(rich_help_panel="Account")
@@ -211,7 +221,7 @@ def update(
 ) -> None:
     """Update jl to the latest version and refresh the installed agent skills."""
     if skills_only:
-        _refresh_skills()
+        setup.refresh_skills()
         return
 
     if _is_editable():
@@ -225,11 +235,11 @@ def update(
 
     if not is_newer(latest, current):
         render.success(f"jl {current} is up to date.")
-        _refresh_skills()
+        setup.refresh_skills()
         return
 
     cmd = install_command()
-    command_text = shlex.join(cmd)
+    command_text = _command_text(cmd)
     render.console.print(f"Updating jl {current} → {latest}", highlight=False)
 
     if sys.platform == "win32":
@@ -248,7 +258,10 @@ def update(
 
     # This process still has the old code loaded, so the new version refreshes the skills. Run the jl
     # launcher, not `python -m jarvislabs`: -m imports from the current directory first.
-    refresh = subprocess.run([sys.argv[0], "update", "--skills-only"])
-    if refresh.returncode != 0:
+    try:
+        refreshed = subprocess.run([sys.argv[0], "update", "--skills-only"]).returncode == 0
+    except OSError:
+        refreshed = False
+    if not refreshed:
         render.warning("Could not refresh the agent skills. Run jl update again.")
     render.success(f"Updated jl to {latest}.")

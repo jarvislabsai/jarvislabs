@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Annotated
 import questionary
 import typer
 from rich import box
+from rich.markup import escape
 from rich.panel import Panel
 from rich.text import Text
 
@@ -86,16 +87,12 @@ def _login_flow(token: str | None) -> Client:
 # ── Skill loading ────────────────────────────────────────────────────────────
 
 
-def _read_bundled_skill() -> str:
-    import importlib.resources
-
-    return (importlib.resources.files("jarvislabs.skills") / "SKILL.md").read_text(encoding="utf-8")
-
-
 def _load_bundled_skill() -> str:
     """Load SKILL.md bundled with the package."""
+    import importlib.resources
+
     try:
-        return _read_bundled_skill()
+        return (importlib.resources.files("jarvislabs.skills") / "SKILL.md").read_text(encoding="utf-8")
     except Exception:
         render.die("Could not find SKILL.md. Try reinstalling jarvislabs.")
 
@@ -103,28 +100,33 @@ def _load_bundled_skill() -> str:
 def _installed_skill_paths() -> list[Path]:
     """Skill files that exist on disk, once each (~/.claude/skills/jarvislabs can be a symlink to ~/.agents)."""
     paths: dict[Path, Path] = {}
-    for path in [UNIVERSAL_PATH, *(p for _label, p in ADDITIONAL_AGENTS.values())]:
-        path = path.expanduser()
+    for path in (p.expanduser() for p in [UNIVERSAL_PATH, *(p for _label, p in ADDITIONAL_AGENTS.values())]):
         if path.is_file():
             paths.setdefault(path.resolve(), path)
     return list(paths.values())
 
 
+def _stale_skill_paths(content: str) -> list[Path]:
+    return [p for p in _installed_skill_paths() if p.read_text(encoding="utf-8", errors="replace") != content]
+
+
 def skills_current() -> bool | None:
     """True if every installed skill file matches the bundled one. None if no skill is installed."""
-    paths = _installed_skill_paths()
-    if not paths:
+    if not _installed_skill_paths():
         return None
-    content = _read_bundled_skill()
-    return all(path.read_text(encoding="utf-8", errors="replace") == content for path in paths)
+    return not _stale_skill_paths(_load_bundled_skill())
 
 
 def refresh_skills() -> list[Path]:
     """Overwrite installed skill files that differ from the bundled one. Never creates new files."""
-    content = _read_bundled_skill()
-    stale = [path for path in _installed_skill_paths() if path.read_text(encoding="utf-8", errors="replace") != content]
+    content = _load_bundled_skill()
+    stale = _stale_skill_paths(content)
     for path in stale:
         _install_skill_to_path(content, path)
+        # No wrapping: agents read this path, and a long path would be split across lines.
+        render.console.print(
+            f"[green]✓[/green] Refreshed agent skill: {escape(str(path))}", soft_wrap=True, highlight=False
+        )
     return stale
 
 

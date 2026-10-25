@@ -43,12 +43,11 @@ def _global_flags(
     ctx: typer.Context,
     version: Annotated[bool, typer.Option("--version", help="Show version and exit.")] = False,
 ) -> None:
+    # Imported here, not at the top: update.py imports `app` from this module.
     from jarvislabs.cli import update
 
     if version:
-        current, latest = update.current_version(), update.cached_latest()
-        available = f" ({latest} available, run jl update)" if update.is_newer(latest, current) else ""
-        typer.echo(f"jl {current}{available}")
+        typer.echo(update.version_line())
         raise typer.Exit()
 
     # If no subcommand was given (and --version wasn't handled above), show help
