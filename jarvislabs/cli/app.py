@@ -31,7 +31,9 @@ app = typer.Typer(
         '  [bold]jl models chat <model> "Hello"[/bold]             [rgb(100,100,100)]call a model, no deployment needed[/rgb(100,100,100)]\n'
         "  [bold]jl deploy managed-models create[/bold]            [rgb(100,100,100)]deploy a ready-made model (pick from a list)[/rgb(100,100,100)]\n\n"
         "[dim]Every command supports[/dim] [bold]--help[/bold] [dim]for details:[/dim]\n"
-        "  [dim]jl create --help    jl run --help    jl ssh-key --help[/dim]"
+        "  [dim]jl create --help    jl run --help    jl ssh-key --help[/dim]\n\n"
+        "[dim]Using a coding agent? Run[/dim] [bold]jl setup[/bold] [dim]to install the jl skill. "
+        "It teaches your agent how to use jl.[/dim]"
     ),
     rich_markup_mode="rich",
     pretty_exceptions_enable=False,
@@ -43,16 +45,23 @@ def _global_flags(
     ctx: typer.Context,
     version: Annotated[bool, typer.Option("--version", help="Show version and exit.")] = False,
 ) -> None:
-    if version:
-        from importlib.metadata import version as pkg_version
+    # Imported here, not at the top: update.py imports `app` from this module.
+    from jarvislabs.cli import update
 
-        typer.echo(f"jl {pkg_version('jarvislabs')}")
+    if version:
+        typer.echo(update.version_line())
         raise typer.Exit()
 
     # If no subcommand was given (and --version wasn't handled above), show help
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit()
+
+    # `jl status` and `jl update` report updates themselves. After `jl update`, the notice would also
+    # announce the version that was just replaced.
+    if ctx.invoked_subcommand not in ("status", "update"):
+        update.start_background_check()
+        ctx.call_on_close(update.print_notice)
 
 
 def get_client() -> Client:
@@ -66,14 +75,9 @@ def get_client() -> Client:
 def main() -> None:
     """Entry point for `jl` command (wired via pyproject.toml [project.scripts])."""
     # Command modules import `app` from this module, so they can only load after it exists.
-    from jarvislabs.cli import commands, deploy, instance, models, run, setup  # noqa: F401
-    from jarvislabs.cli.update_check import finish_update_check, start_update_check
-
-    start_update_check()
+    from jarvislabs.cli import commands, deploy, instance, models, run, setup, update  # noqa: F401
 
     try:
         app()
     except JarvislabsError as e:
         die(str(e))
-    finally:
-        finish_update_check()
