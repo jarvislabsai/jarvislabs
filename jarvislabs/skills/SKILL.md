@@ -13,7 +13,7 @@ This guide explains how each part works. It does not list every flag. To see the
 
 **Run `jl status --json` first.** Run it once per session, before any other `jl` command. If you are not logged in, run `jl setup --token <token> --yes`, or set the `JL_API_KEY` environment variable. `JL_API_KEY` takes priority over the saved token.
 
-**Check for updates.** If `cli.update_available` is `true` or `cli.skill_current` is `false` in the `jl status --json` output, tell the user what is out of date and that `jl update` updates both the CLI and this guide. Ask before you run `jl update`. If the user says no, do not ask again in this session. After `jl update`, read the `SKILL.md` path that it prints, and follow the new guide.
+**Check for updates.** If `cli.update_available` is `true` or `cli.skill_current` is `false` in the `jl status --json` output, tell the user what is out of date and that `jl update` updates both the CLI and this guide. Ask before you run `jl update`, and run it without `--json`. If the user says no, do not ask again in this session. After `jl update`, read the `SKILL.md` path that it prints, and follow the new guide.
 
 **Use `--json` in scripts.** With `--json`, a command prints machine-readable JSON. When a command fails, it prints `{"error": "<message>"}` and exits with code 1. `jl exec --json` is different. Read its `exit_code`. Commands that ask for confirmation, such as `create`, `pause` and `destroy`, also need `--yes` when you use `--json`.
 
