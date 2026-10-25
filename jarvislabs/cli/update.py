@@ -114,8 +114,12 @@ def latest_version() -> str | None:
         return None
     cache = _read_cache()
     if _cache_is_fresh(cache):
-        return cache.get("latest_version")
-    return _fetch_latest() or cache.get("latest_version")
+        latest = cache.get("latest_version")
+    else:
+        latest = _fetch_latest() or cache.get("latest_version")
+    # After an upgrade made without `jl update`, the cache can hold a version older than the installed one.
+    current = current_version()
+    return current if is_newer(current, latest) else latest
 
 
 def cli_status() -> dict:
@@ -257,6 +261,10 @@ def update(
         render.die(f"{cmd[0]} was not found. Run this command yourself: {command_text}")
     if result.returncode != 0:
         render.die(f"Update failed. Run this command yourself to see the details: {command_text}")
+    # The installer can exit with 0 without installing anything new, for example for a pinned pipx package.
+    new_version = current_version()  # reads the package metadata from disk again, so it sees the new install
+    if new_version == current:
+        render.die(f"jl is still {current} after the update. Run this command yourself to see why: {command_text}")
 
     # This process still has the old code loaded, so the new version refreshes the skills. Run the jl
     # launcher, not `python -m jarvislabs`: -m imports from the current directory first.
@@ -266,4 +274,4 @@ def update(
         refreshed = False
     if not refreshed:
         render.warning("Could not refresh the agent skills. Run jl update again.")
-    render.success(f"Updated jl to {latest}.")
+    render.success(f"Updated jl to {new_version}.")
