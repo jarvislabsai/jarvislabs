@@ -43,16 +43,24 @@ def _global_flags(
     ctx: typer.Context,
     version: Annotated[bool, typer.Option("--version", help="Show version and exit.")] = False,
 ) -> None:
-    if version:
-        from importlib.metadata import version as pkg_version
+    from jarvislabs.cli import update
 
-        typer.echo(f"jl {pkg_version('jarvislabs')}")
+    if version:
+        current, latest = update.current_version(), update.cached_latest()
+        available = f" ({latest} available, run jl update)" if update.is_newer(latest, current) else ""
+        typer.echo(f"jl {current}{available}")
         raise typer.Exit()
 
     # If no subcommand was given (and --version wasn't handled above), show help
     if ctx.invoked_subcommand is None:
         typer.echo(ctx.get_help())
         raise typer.Exit()
+
+    # `jl status` and `jl update` report updates themselves. After `jl update`, the notice would also
+    # announce the version that was just replaced.
+    if ctx.invoked_subcommand not in ("status", "update"):
+        update.start_background_check()
+        ctx.call_on_close(update.print_notice)
 
 
 def get_client() -> Client:
@@ -66,14 +74,9 @@ def get_client() -> Client:
 def main() -> None:
     """Entry point for `jl` command (wired via pyproject.toml [project.scripts])."""
     # Command modules import `app` from this module, so they can only load after it exists.
-    from jarvislabs.cli import commands, deploy, instance, models, run, setup  # noqa: F401
-    from jarvislabs.cli.update_check import finish_update_check, start_update_check
-
-    start_update_check()
+    from jarvislabs.cli import commands, deploy, instance, models, run, setup, update  # noqa: F401
 
     try:
         app()
     except JarvislabsError as e:
         die(str(e))
-    finally:
-        finish_update_check()

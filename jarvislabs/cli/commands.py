@@ -5,7 +5,7 @@ from typing import Annotated
 
 import typer
 
-from jarvislabs.cli import options as cli_options, render, state
+from jarvislabs.cli import options as cli_options, render, state, update
 from jarvislabs.cli.app import app, get_client
 from jarvislabs.config import load_config, save_config
 from jarvislabs.constants import EUROPE_GPU_TYPES, EUROPE_REGION, INDIA_NOIDA_REGION
@@ -54,6 +54,7 @@ def status(
         metrics = client.account.resource_metrics()
         currency = client.account.currency()
         sym = render.currency_symbol(currency)
+        cli = update.cli_status()
 
     if state.json_output:
         render.print_json(
@@ -62,11 +63,18 @@ def status(
                 "balance": bal.model_dump(),
                 "resources": metrics.model_dump(),
                 "currency": currency,
+                "cli": cli,
             }
         )
         return
 
     render.account_status(info, bal, metrics, sym)
+    if cli["update_available"]:
+        render.console.print(update.update_message(cli["version"], cli["latest"]), highlight=False)
+    elif cli["skill_current"] is False:
+        render.console.print(
+            "[yellow]Agent skill is out of date.[/yellow] Run: [bold]jl update[/bold]", highlight=False
+        )
 
 
 @app.command(rich_help_panel="Resources")

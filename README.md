@@ -15,11 +15,13 @@ See the docs on [Jarvislabs Docs](https://docs.jarvislabs.ai/cli/)
 uv tool install jarvislabs
 ```
 
-To upgrade:
+To update the CLI and the agent skills that `jl setup` installed:
 
 ```bash
-uv tool upgrade jarvislabs
+jl update
 ```
+
+Versions before 0.2.19 do not have `jl update`. Update those once with `uv tool install jarvislabs@latest`.
 
 ### As a library
 
