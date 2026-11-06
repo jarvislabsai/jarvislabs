@@ -64,12 +64,14 @@ function Install-Jl {
     # Marks jl setup's run so it hands off to jl connect instead of printing its guide.
     # irm | iex runs in the user's session, so the marker comes off again however jl setup ends.
     $env:JL_FROM_INSTALLER = '1'
-    try { jl setup } finally { Remove-Item Env:JL_FROM_INSTALLER -ErrorAction SilentlyContinue }
-    # 130: Ctrl-C at one of jl's questions. The user stopped it, so it ends without an error.
-    if ($LASTEXITCODE -eq 130) { return }
-    if ($LASTEXITCODE) { throw '`jl setup` failed. Run it again, then `jl connect`.' }
-    jl connect
-    # The connect flow's own Next: is the ending; the next-steps block is for a skipped setup only.
+    try {
+        jl setup
+        # 130: Ctrl-C at one of jl's questions. The user stopped it, so it ends without an error.
+        if ($LASTEXITCODE -eq 130) { return }
+        if ($LASTEXITCODE) { throw '`jl setup` failed. Run it again, then `jl connect`.' }
+        jl connect
+        # The connect flow's own Next: is the ending; the next-steps block is for a skipped setup only.
+    } finally { Remove-Item Env:JL_FROM_INSTALLER -ErrorAction SilentlyContinue }
 }
 
 Install-Jl

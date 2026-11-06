@@ -1061,12 +1061,20 @@ def test_the_picker_uses_ascii_separators_when_marks_are_ascii(subscribed, scree
     assert "Space toggles | Enter continues | type to filter" in lines
 
 
-def test_connect_opens_with_a_heading_for_the_phase(subscribed, opencode_config):
+def test_connect_opens_with_a_heading_for_the_phase(subscribed, opencode_config, monkeypatch):
+    monkeypatch.setenv("JL_FROM_INSTALLER", "1")
     result = runner.invoke(app, ["connect", "opencode", "--dry-run"])
 
     assert result.exit_code == 0, result.output
     assert result.stderr.startswith("\nCONNECT TOOLS")
     assert "Sets up the Jarvislabs provider in your coding tools." in result.stderr
+
+
+def test_standalone_connect_has_no_phase_heading(subscribed, opencode_config):
+    result = runner.invoke(app, ["connect", "opencode", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert "CONNECT TOOLS" not in result.stderr
 
 
 def test_connect_shows_the_test_reply_or_the_server_error(subscribed, opencode_config, monkeypatch):
@@ -1725,7 +1733,8 @@ def test_connect_without_a_subscription_offers_subscribe_or_wallet(unsubscribed,
     assert "! No subscription found\n  Just subscribed? Give it a minute, then run jl connect again.\n" in result.output
     assert picker.offered == [["Subscribe now", "Continue on wallet", "Not now"]]
     assert unsubscribed.opened == ["https://jarvislabs.ai/products/coding-plan"]
-    assert "After paying, run jl connect" in result.output
+    assert "Next: jl connect" in result.output
+    assert "after paying, connect your tools" in result.output
     assert "jl will add the Jarvislabs provider" not in result.output
     assert [call for call in unsubscribed.calls if call[0] == "POST"] == []
     assert not opencode_config.exists()

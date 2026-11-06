@@ -44,7 +44,12 @@ def subscription_show(ctx: typer.Context, json_output: cli_options.JsonOption = 
     if state.json_output:
         render.print_json({"subscription": usage})
         return
+    if usage is None:
+        render.warning("No subscription", "Run `jl subscribe` to get a plan.")
+        render.next_step("get a plan", ["jl subscribe"])
+        return
     render.subscription_usage(usage)
+    render.next_step("manage or cancel", ["jl subscription manage"])
 
 
 @subscription_app.command("use-balance")
@@ -86,7 +91,7 @@ def subscribe() -> None:
     """Open the page where you subscribe to a Models API plan."""
     cli_options.apply_command_options()
     _open(SUBSCRIBE_URL)
-    render.info("After paying, run jl connect.")
+    render.next_step("after paying, connect your tools", ["jl connect"])
 
 
 def _open(url: str) -> None:

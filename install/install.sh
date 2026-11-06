@@ -96,7 +96,7 @@ setup_and_connect() {
     [ -r "$t" ] || t=/dev/tty
     # Marks jl setup's run so it hands off to jl connect instead of printing its guide.
     JL_FROM_INSTALLER=1 jl setup <"$t" || return
-    jl connect <"$t" || return
+    JL_FROM_INSTALLER=1 jl connect <"$t" || return
     setup_done=1
 }
 

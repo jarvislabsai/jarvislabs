@@ -33,6 +33,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import hashlib
+import os
 import re
 import shlex
 import socket
@@ -185,7 +186,9 @@ def connect(
         _revoke_unused_key(client, kept)
         render.success(f"Revoked this machine's key {kept.name}. No tools are connected, so jl made no new one.")
         return
-    if not (printed or only_rotate):
+    if not (printed or only_rotate) and os.environ.get("JL_FROM_INSTALLER"):
+        # The heading belongs to the guided installer flow. A standalone connect starts at its picker,
+        # the same way disconnect starts at its preview.
         render.rule("CONNECT TOOLS")
         render.console.print(Text("Sets up the Jarvislabs provider in your coding tools.", "dim"))
     with render.spinner("Checking your subscription..."):
@@ -370,7 +373,9 @@ def _disconnect_many(chosen: list[Harness], *, yes: bool) -> None:
         plans.append((harness, plan_disconnect(harness, record), record))
     if not plans:
         return
-    render.change_rows([_row(plan) for _, plan, _ in plans], "Remove jl's setup", f"{len(plans)} tool{'s' if len(plans) != 1 else ''}")
+    render.change_rows(
+        [_row(plan) for _, plan, _ in plans], "Remove jl's setup", f"{len(plans)} tool{'s' if len(plans) != 1 else ''}"
+    )
     for harness, _, record in plans:
         if record.untracked:
             render.warning(

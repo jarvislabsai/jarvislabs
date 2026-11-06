@@ -34,24 +34,24 @@ def test_install_scripts_mark_their_setup_run():
     sh = (SCRIPTS / "install.sh").read_text()
     ps1 = (SCRIPTS / "install.ps1").read_text()
 
-    # On jl setup's command line only, so neither jl connect nor the user's shell sees it.
+    # On both guided commands, so the installer's connect keeps its header; the user's shell never sees it.
     assert (
-        '\n    JL_FROM_INSTALLER=1 jl setup <"$t" || return\n    jl connect <"$t" || return\n    setup_done=1\n' in sh
+        '\n    JL_FROM_INSTALLER=1 jl setup <"$t" || return\n'
+        '    JL_FROM_INSTALLER=1 jl connect <"$t" || return\n'
+        "    setup_done=1\n" in sh
     )
     # irm | iex runs in the user's own session, so the marker is removed again whatever jl setup does.
-    assert (
-        "\n    $env:JL_FROM_INSTALLER = '1'\n"
-        "    try { jl setup } finally { Remove-Item Env:JL_FROM_INSTALLER -ErrorAction SilentlyContinue }\n"
-    ) in ps1
-    assert ps1.index("Remove-Item Env:JL_FROM_INSTALLER") < ps1.index("\n    jl connect\n")
+    assert ("\n    $env:JL_FROM_INSTALLER = '1'\n    try {\n        jl setup\n") in ps1
+    # The marker covers connect too, then comes off whatever happens.
+    assert ps1.index("        jl connect\n") < ps1.index("} finally { Remove-Item Env:JL_FROM_INSTALLER")
 
 
 def test_installer_ctrl_c_stops_quietly():
     ps1 = (SCRIPTS / "install.ps1").read_text()
 
     # jl exits 130 when Ctrl-C answers one of its questions: the user stopped it, so no error block.
-    setup = ps1.index("    try { jl setup }")
-    stop = ps1.index("    if ($LASTEXITCODE -eq 130) { return }\n", setup)
+    setup = ps1.index("        jl setup\n")
+    stop = ps1.index("        if ($LASTEXITCODE -eq 130) { return }\n", setup)
     assert stop < ps1.index("throw '`jl setup` failed.", setup)
     # And the user stopped it, so the window ends on jl's own words, not on a new set of next steps.
     assert "Show-JlNext" not in ps1[stop:]
@@ -70,7 +70,7 @@ def test_install_ps1_says_what_to_run_next():
     # On every path that installed jl, including the one that skips setup.
     assert "if ($env:JL_SKIP_SETUP) { Show-JlNext; return }" in ps1
     # After a successful connect, jl's own Next: is the ending; no second block.
-    assert "\n    jl connect\n    # The connect flow's own Next: is the ending" in ps1
+    assert "\n        jl connect\n        # The connect flow's own Next: is the ending" in ps1
     # irm | iex runs in the user's session, so the normal next step needs no new terminal.
     assert "Open a new terminal, then:" not in ps1
 

@@ -85,6 +85,28 @@ def test_use_balance_sets_spill_over(server):
     assert "Use balance is on" in result.output
 
 
+def test_subscription_without_a_plan_points_at_subscribe(server):
+    server.routes[("GET", "subscription/usage")] = NotFoundError("This account has no active subscription.")
+
+    result = runner.invoke(app, ["subscription"])
+
+    assert result.exit_code == 0, result.output
+    assert "No subscription" in result.output
+    assert "Next: jl subscribe" in result.output
+    assert "get a plan" in result.output
+
+
+def test_subscription_with_a_plan_points_at_manage(server):
+    server.routes[("GET", "subscription/usage")] = USAGE
+
+    result = runner.invoke(app, ["subscription"])
+
+    assert result.exit_code == 0, result.output
+    assert "Pro" in result.output
+    assert "Next: jl subscription manage" in result.output
+    assert "manage or cancel" in result.output
+
+
 def test_manage_opens_the_billing_page(server, opened):
     server.routes[("POST", "subscription/portal")] = {"url": "https://billing.example.com/session/test_1"}
 
@@ -103,7 +125,8 @@ def test_subscribe_opens_the_subscribe_page(opened, monkeypatch):
     assert result.exit_code == 0, result.output
     assert opened == ["https://jarvislabs.ai/products/coding-plan"]
     assert "https://jarvislabs.ai/products/coding-plan" in result.output
-    assert "After paying, run jl connect" in result.output
+    assert "Next: jl connect" in result.output
+    assert "after paying, connect your tools" in result.output
 
 
 @pytest.mark.parametrize(
