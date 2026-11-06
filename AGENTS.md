@@ -11,6 +11,7 @@
 ## Formatting
 
 - Ruff is configured in `pyproject.toml`. Run `uv run ruff format . && uv run ruff check --fix .` after major code changes or before committing.
+- Human output follows `DESIGN.md`: help layers, setup/connect/status rules, colour, space and voice.
 
 ## Tooling
 
