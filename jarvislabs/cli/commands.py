@@ -127,14 +127,19 @@ def status(
         return
 
     render.account_status(info, bal, metrics, sym)
+    render.console.print()
     if usage_error:
         render.warning(f"Subscription: unavailable right now ({usage_error})")
     else:
         render.subscription_usage(usage)
+    render.console.print()
     # Default to what the user can act on: connected tools, and installed ones jl can connect. The
     # rest is catalog, one flag away.
     shown = [row for row in harnesses if all_tools or row["connected"] or row["printed"] or row["installed"]]
-    render.harness_status(shown)
+    if shown:
+        render.harness_status(shown)
+    else:
+        render.info("No coding tools installed.")
     hidden = len(harnesses) - len(shown)
     if hidden:
         render.hint_line(f"{hidden} more tools available: `jl status --all`")

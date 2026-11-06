@@ -1058,6 +1058,7 @@ def rule(title: str = "") -> None:
         return
     console.print()
     console.print(Rule(Text(title, "bold") if title else "", style=CHROME_STYLE, align="left"))
+    console.print()
 
 
 def heading(title: str, note: str = "") -> None:

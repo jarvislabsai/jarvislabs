@@ -662,10 +662,12 @@ def _continue_on_wallet(wallet: bool, dry_run: bool) -> None:
         dry_run: --dry-run was passed: the choice isn't saved.
     """
     if wallet or wallet_chosen():
+        render.console.print()
         render.warning(
             "On wallet (no subscription)",
             "Requests are charged to your wallet. Run `jl subscribe` for a plan.",
         )
+        render.console.print()
         return
     if state.yes or not _can_ask():
         render.die(f"{NO_SUBSCRIPTION_FOUND} To pay from your wallet instead, run jl connect --wallet.")
