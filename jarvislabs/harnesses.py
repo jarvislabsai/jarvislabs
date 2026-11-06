@@ -545,9 +545,9 @@ def _find(program: str) -> str | None:
 
     The installers add these folders to the shell profile, so a terminal opened before the install
     doesn't have them on PATH yet: OpenCode's and Kilo's scripts install into ~/.opencode/bin and
-    ~/.kilo/bin, pi's into ~/.pi/agent/bin when no folder it prefers is on PATH, and npm under nvm
-    into the Node.js version's own bin folder, newest first. On Windows, the registry's Path (the one
-    a new terminal gets) is searched too, before those folders.
+    ~/.kilo/bin, pi's into ~/.pi/agent/bin when no folder it prefers is on PATH, Kimi Code's into
+    ~/.kimi-code/bin, and npm under nvm into the Node.js version's own bin folder, newest first. On
+    Windows, the registry's Path (the one a new terminal gets) is searched too, before those folders.
     """
     found = shutil.which(program)
     if found:
@@ -565,7 +565,13 @@ def _find(program: str) -> str | None:
         reverse=True,
     )
     home = Path.home()
-    folders = [home / ".opencode" / "bin", home / ".kilo" / "bin", home / ".pi" / "agent" / "bin", *versions]
+    folders = [
+        home / ".opencode" / "bin",
+        home / ".kilo" / "bin",
+        home / ".pi" / "agent" / "bin",
+        home / ".kimi-code" / "bin",
+        *versions,
+    ]
     # path=, not a path in program: only then does Windows try .exe and .cmd (PATHEXT) on Python 3.10.
     return shutil.which(program, path=os.pathsep.join(map(str, folders)))
 
@@ -864,6 +870,54 @@ def _cline_data_dir() -> Path:
         return Path(data_dir).expanduser()
     cline_dir = os.environ.get("CLINE_DIR", "").strip()
     return (Path(cline_dir) if cline_dir else Path.home() / ".cline").expanduser() / "data"
+
+
+def _kimi(setup: Setup) -> tuple[ConfigEdit, ...]:
+    # Kimi Code reads ~/.kimi-code/config.toml, or the same file under KIMI_CODE_HOME.
+    folder = Path(os.environ.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code")
+    values: dict[KeyPath, object] = {
+        ("providers", PROVIDER_ID): {
+            "type": "openai",
+            "base_url": setup.base_url,
+            "api_key": setup.api_key,
+        }
+    }
+    for model in setup.models:
+        alias = f"{PROVIDER_ID}/{model.id}"
+        entry: dict[str, object] = {
+            "provider": PROVIDER_ID,
+            "model": model.id,
+            # Required by Kimi Code; a model without one would fail at startup.
+            "max_context_size": _limits(model)[0],
+        }
+        if model.name:
+            entry["display_name"] = model.name
+        capabilities = _kimi_capabilities(model)
+        if capabilities:
+            entry["capabilities"] = capabilities
+        values[("models", alias)] = entry
+    if setup.default_model:
+        # An alias from models above, so Kimi Code finds it at startup.
+        values[("default_model",)] = f"{PROVIDER_ID}/{setup.default_model}"
+    return (ConfigEdit(folder / "config.toml", "toml", values),)
+
+
+def _kimi_capabilities(model: ModelInfo) -> list[str]:
+    """Return Kimi Code's capability tags for a catalog model, in a stable order.
+
+    Kimi Code infers some capabilities from the model name; these add what the catalog knows for
+    models it doesn't recognise, and never remove anything.
+    """
+    tags = []
+    if model.capabilities.tool_calling:
+        tags.append("tool_use")
+    if model.thinking.supported:
+        # A model that reasons without a toggle is always thinking; one with a toggle can be turned off.
+        tags.append("thinking" if model.thinking.supports_toggle else "always_thinking")
+    for tag, modality in (("image_in", "image"), ("video_in", "video"), ("audio_in", "audio")):
+        if modality in model.input_modalities:
+            tags.append(tag)
+    return tags
 
 
 def _cline(setup: Setup) -> tuple[ConfigEdit, ...]:
@@ -1236,6 +1290,15 @@ HARNESSES: tuple[Harness, ...] = (
         launch=("pi",),
         writer=_pi,
         install_url="https://pi.dev/docs/latest/quickstart",
+    ),
+    Harness(
+        id="kimi",
+        name="Kimi Code",
+        kind="cli",
+        support="connect",
+        launch=("kimi",),
+        writer=_kimi,
+        install_url="https://moonshotai.github.io/kimi-code/en/guides/getting-started.html",
     ),
     Harness(
         id="cline",

@@ -1311,7 +1311,7 @@ def test_status_lists_connected_tools_first_then_installed_then_the_rest(subscri
     panel = result.output[result.output.index("Coding tools") :]
     rows = [re.split(r"\s{2,}", line.strip("│ ")) for line in panel.splitlines() if line.strip("│ ") and line[0] == "│"]
     states = [row[1] for row in rows]
-    assert states == ["connected", *["installed"] * 9, *["not installed"] * 2]
+    assert states == ["connected", *["installed"] * 10, *["not installed"] * 2]
 
 
 def test_status_says_a_connected_tool_was_uninstalled(subscribed, opencode_config, monkeypatch):

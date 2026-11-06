@@ -166,6 +166,33 @@ model = "o4-mini"
 """
 
 
+def test_setting_the_same_toml_tables_again_leaves_the_text_unchanged():
+    # jl re-runs the plan after connect (to refresh the catalog) and on every later connect; each
+    # run must not add another blank line between the tables it rewrites.
+    values = {
+        ("providers", "jarvislabs"): {"type": "openai", "base_url": "https://x", "api_key": "k"},
+        ("models", "jarvislabs/a"): {"provider": "jarvislabs", "model": "a", "max_context_size": 1},
+        ("models", "jarvislabs/b"): {"provider": "jarvislabs", "model": "b", "max_context_size": 1},
+        ("default_model",): "jarvislabs/a",
+    }
+    once = edit_config("", "toml", values)
+
+    assert edit_config(once, "toml", values) == once
+
+
+def test_deleting_the_last_toml_table_leaves_no_trailing_blank_line():
+    # jl's tables start after a blank line; without one after them, deleting the last must take
+    # that blank line with it, or the file ends with one more newline than before.
+    original = '# Mine\ndefault_model = "kimi-code/k3"\ntelemetry = false\n'
+    added = {
+        ("providers", "jarvislabs"): {"type": "openai"},
+        ("models", "jarvislabs/x"): {"provider": "jarvislabs"},
+    }
+    connected = edit_config(original, "toml", added)
+
+    assert edit_config(connected, "toml", {}, delete=added) == original
+
+
 @pytest.mark.parametrize(
     ("text", "fmt", "replaced", "added"),
     [

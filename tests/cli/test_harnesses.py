@@ -9,6 +9,12 @@ import shutil
 import sys
 
 import pytest
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
+
 from typer.testing import CliRunner
 
 from jarvislabs import config
@@ -203,6 +209,65 @@ def test_connect_writes_each_json_family_harness_in_its_own_format(subscribed, t
         "extraBody": {"max_tokens": 32768},
     }
     assert read_json(junie / "config.json") == {"model": "custom:jarvislabs-deepseek-v4.1-flash-1017"}
+
+
+def test_connect_writes_kimi_code_config_in_toml(subscribed, tmp_path, monkeypatch):
+    subscribed.routes[("GET", "models")] = CATALOG
+
+    result = runner.invoke(app, ["connect", "kimi", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    written = tomllib.loads((tmp_path / ".kimi-code" / "config.toml").read_text())
+    assert written == {
+        # Kimi Code requires the default to be one of the aliases below.
+        "default_model": "jarvislabs/deepseek-v4.1-flash-1017",
+        "providers": {"jarvislabs": {"type": "openai", "base_url": URL, "api_key": KEY}},
+        "models": {
+            "jarvislabs/deepseek-v4.1-flash-1017": {
+                "provider": "jarvislabs",
+                "model": "deepseek-v4.1-flash-1017",
+                "max_context_size": 1048576,
+                "display_name": "DeepSeek V4.1 Flash",
+                "capabilities": ["tool_use", "image_in", "video_in"],
+            },
+            "jarvislabs/glm-5.3": {
+                "provider": "jarvislabs",
+                "model": "glm-5.3",
+                "max_context_size": 230000,
+                "display_name": "GLM-5.3",
+                # The catalog says it reasons and has no toggle, so it always thinks.
+                "capabilities": ["tool_use", "always_thinking"],
+            },
+            "jarvislabs/gemma-3-1b-it": {
+                "provider": "jarvislabs",
+                "model": "gemma-3-1b-it",
+                "max_context_size": 32768,
+                "display_name": "Gemma 3 1B IT",
+            },
+        },
+    }
+    # jl reads the same file back, so status can name the default.
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+    status = runner.invoke(app, ["status"])
+    assert status.exit_code == 0, status.output
+    assert re.search(r"✓ Kimi Code\s+connected\s+default deepseek-v4\.1-flash-1017", status.output)
+
+
+def test_kimi_keeps_the_users_config_and_follows_kimi_code_home(subscribed, tmp_path, monkeypatch):
+    elsewhere = tmp_path / "kimi-home"
+    elsewhere.mkdir()
+    original = '# Mine\ndefault_model = "kimi-code/k3"\ntelemetry = false\n'
+    (elsewhere / "config.toml").write_text(original)
+    monkeypatch.setenv("KIMI_CODE_HOME", str(elsewhere))
+
+    result = runner.invoke(app, ["connect", "kimi", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    written = (elsewhere / "config.toml").read_text()
+    assert "# Mine" in written
+    assert "telemetry = false" in written
+    assert 'default_model = "jarvislabs/deepseek-v4.1-flash-1017"' in written
+    assert not (tmp_path / ".kimi-code").exists()
 
 
 def test_pi_thinking_levels_map_to_supported_efforts(subscribed, tmp_path):

@@ -297,7 +297,12 @@ def _toml_assign(container: Container | Table, key: str, value: object) -> None:
     if isinstance(old, Table):
         trailing, indent = _toml_pop_trailing(_toml_tail(old)), old.trivia.indent
         container[key] = value
-        _toml_tail(container[key]).extend(trailing)
+        tail = _toml_tail(container[key])
+        # The new table already ends with the blank line that separated the old one from the next
+        # table; copying that blank line too would add one more on every rewrite.
+        while trailing and tail and isinstance(trailing[-1][1], Whitespace) and isinstance(tail[-1][1], Whitespace):
+            trailing.pop()
+        tail.extend(trailing)
         container[key].trivia.indent = indent
         return
     previous = _toml_previous(container, key) if old is None else None
@@ -315,7 +320,26 @@ def _toml_delete(container: Container | Table, key: str) -> None:
         previous_tail = _toml_tail(previous)
         _toml_pop_trailing(previous_tail)
         previous_tail.extend(trailing)
+    body = _toml_body(container)
+    place = next(i for i, (k, _) in enumerate(body) if k is not None and k.key == key)
     del container[key]
+    if not isinstance(item, Table) or not isinstance(container, Container):
+        return
+    # The last table's blank line separates it from what is above; with nothing below it is a
+    # trailing blank line the file didn't have. Older tables keep theirs for the one after, and a
+    # table's own body is not the end of the file.
+    rest = [entry for entry in body[place + 1 :] if not isinstance(entry[1], Null)]
+    if rest:
+        return
+    before = place - 1
+    while before >= 0 and isinstance(body[before][1], Null):
+        before -= 1
+    if before >= 0 and isinstance(body[before][1], Whitespace):
+        leftover = body[before][1].s[:-1]
+        if leftover:
+            body[before] = (None, Whitespace(leftover))
+        else:
+            body.pop(before)
 
 
 # YAML, on ruamel.yaml's round-trip mode. Indentation is one setting per file, so it is

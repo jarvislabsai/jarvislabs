@@ -161,6 +161,20 @@ def test_disconnect_restores_replaced_values_and_keeps_later_edits(
     assert opencode_config.read_text() == original.replace("tokyonight", "gruvbox")
 
 
+def test_disconnect_gives_back_kimi_codes_config(subscribed: MagicMock, tmp_path: Path) -> None:
+    path = tmp_path / ".kimi-code" / "config.toml"
+    path.parent.mkdir(parents=True)
+    original = '# Mine\ndefault_model = "kimi-code/k3"\ntelemetry = false\n'
+    path.write_text(original)
+    runner.invoke(app, ["connect", "kimi", "--yes"])
+
+    result = runner.invoke(app, ["disconnect", "kimi", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # The user's provider, default and comments are back; jl's models are gone.
+    assert path.read_text() == original
+
+
 def test_disconnect_previews_a_removal_row_and_names_the_tool(subscribed: MagicMock, opencode_config: Path) -> None:
     opencode_config.write_text('{\n  "model": "anthropic/claude-sonnet-4"\n}\n')
     runner.invoke(app, ["connect", "opencode", "--yes"])
