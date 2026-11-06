@@ -339,11 +339,8 @@ def _picked_harnesses(connection: Connection | None) -> list[Harness]:
             choices=[questionary.Choice(harness.name, harness.id) for harness in connected],
             use_search_filter=True,
             use_jk_keys=False,  # j and k must type into the filter
-            # The hint of connect's picker: Space ticks, Enter continues, typing filters.
-            instruction=(
-                f"\n  Space ticks{render.MARKS['sep']}Enter goes on with the ticked tools"
-                f"{render.MARKS['sep']}type to filter"
-            ),
+            # The hint of connect's picker: Space toggles, Enter continues, typing filters.
+            instruction=(f"\n  Space toggles{render.MARKS['sep']}Enter continues{render.MARKS['sep']}type to filter"),
             style=render.PROMPT_STYLE,
         )
     )
@@ -595,10 +592,7 @@ def _pick_harnesses(show_all: bool = False) -> list[Harness]:
             use_jk_keys=False,  # j and k must type into the filter
             # On its own line: Enter continues with the ticked rows, not the highlighted one. Replaces
             # questionary's own help, which names ctrl-a for both toggling and inverting.
-            instruction=(
-                f"\n  Space ticks{render.MARKS['sep']}Enter goes on with the ticked tools"
-                f"{render.MARKS['sep']}type to filter"
-            ),
+            instruction=(f"\n  Space toggles{render.MARKS['sep']}Enter continues{render.MARKS['sep']}type to filter"),
             style=render.PROMPT_STYLE,
         )
     )

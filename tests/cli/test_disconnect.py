@@ -72,7 +72,7 @@ def test_disconnect_without_a_tool_asks_which_connected_tools(subscribed: MagicM
     (question,) = terminal.questions
     assert question.message == "Disconnect which tool?"
     assert [choice.title for choice in question.choices] == ["OpenCode", "Aider"]
-    assert f"Space ticks{render.MARKS['sep']}Enter goes on with the ticked tools" in question.instruction
+    assert f"Space toggles{render.MARKS['sep']}Enter continues" in question.instruction
     assert "? Disconnect OpenCode?" in result.output
     assert connected() == {"aider"}
 

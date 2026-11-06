@@ -87,8 +87,9 @@ def choose_marks() -> dict[str, str]:
 
 
 MARKS = choose_marks()
-# questionary's checkbox reads these when it draws each row.
-questionary.prompts.common.INDICATOR_SELECTED = MARKS["ticked"]
+# questionary's checkbox reads these when it draws each row. A check reads as "chosen"; the filled
+# dot is for availability tables.
+questionary.prompts.common.INDICATOR_SELECTED = MARKS["ok"]
 questionary.prompts.common.INDICATOR_UNSELECTED = MARKS["unticked"]
 
 
@@ -1404,7 +1405,8 @@ PROMPT_STYLE = questionary.Style(
         ("qmark", "fg:ansicyan bold"),
         ("question", "bold"),
         ("pointer", "fg:ansicyan bold"),
-        ("highlighted", "fg:ansicyan bold"),  # the row under the cursor
+        ("highlighted", "bold"),  # the row under the cursor
+        ("selected", "noreverse fg:ansicyan"),  # the check and its row
         ("answer", "fg:ansicyan bold"),
         ("instruction", "fg:ansibrightblack"),
         ("disabled", "fg:ansibrightblack"),

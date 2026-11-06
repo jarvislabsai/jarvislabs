@@ -1048,7 +1048,7 @@ def test_the_picker_says_space_ticks_and_enter_continues(subscribed, screen):
 
     assert result.exit_code == 0, result.output
     lines = [line.strip() for line in _drawn(screen).splitlines()]
-    assert "Space ticks · Enter goes on with the ticked tools · type to filter" in lines
+    assert "Space toggles · Enter continues · type to filter" in lines
 
 
 def test_the_picker_uses_ascii_separators_when_marks_are_ascii(subscribed, screen, monkeypatch):
@@ -1058,7 +1058,7 @@ def test_the_picker_uses_ascii_separators_when_marks_are_ascii(subscribed, scree
 
     assert result.exit_code == 0, result.output
     lines = [line.strip() for line in _drawn(screen).splitlines()]
-    assert "Space ticks | Enter goes on with the ticked tools | type to filter" in lines
+    assert "Space toggles | Enter continues | type to filter" in lines
 
 
 def test_connect_opens_with_a_heading_for_the_phase(subscribed, opencode_config):

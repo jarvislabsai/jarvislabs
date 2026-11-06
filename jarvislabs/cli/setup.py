@@ -186,7 +186,7 @@ def _select_additional_agents_interactive() -> list[str]:
     question = questionary.checkbox(
         "Extra agent folders (optional):",
         choices=choices,
-        instruction=f"\n  Space ticks{render.MARKS['sep']}Enter goes on with the ticked agents",
+        instruction=f"\n  Space toggles{render.MARKS['sep']}Enter continues",
         style=render.PROMPT_STYLE,
     )
     return render.answer(question)
