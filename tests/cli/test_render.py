@@ -56,6 +56,24 @@ def test_a_command_in_a_hint_is_in_the_accent(coloured):
     assert re.search(r"\x1b\[[0-9;]*36mjl connect goose\x1b\[0m", coloured.getvalue())
 
 
+def test_info_and_hints_are_not_faint(coloured):
+    # Sanctioned dim sites are tertiary only: borders, legends, IDs, paths, unavailable rows and
+    # confirm choices. Instructions and hints are never faint.
+    assert render.theme.styles["info"].dim is None
+    assert render.theme.styles["hint"].dim is None
+    assert render.theme.styles["hint"].color.name == "default"
+
+    render.info("Resolving changes")
+    render.hint_line("run `jl connect`")
+
+    out = coloured.getvalue()
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+    assert "Resolving changes" in plain
+    assert "run jl connect" in plain
+    # SGR 2 is dim: instructions are never the faintest text on screen.
+    assert "\x1b[2m" not in out
+
+
 def test_an_error_colours_its_mark_not_its_message(coloured):
     render.error("Test request failed")
 
@@ -141,8 +159,8 @@ def test_change_rows_align_mark_name_and_files_with_notes_under_the_files(out):
 def test_next_step_names_the_commands_to_type(out):
     render.next_step("start a tool in this folder:", ["opencode", "cline -i"])
 
-    # 40 columns: the commands wrap, hanging under the text after "Next:".
-    assert out.getvalue().splitlines() == ["Next: start a tool in this folder:", "      opencode · cline -i"]
+    # 40 columns: the commands wrap, hanging under the text after "Next:", with a blank line before it.
+    assert out.getvalue().splitlines() == ["", "Next: start a tool in this folder:", "      opencode · cline -i"]
 
 
 def test_a_heading_opens_a_phase_after_a_blank_line(out):

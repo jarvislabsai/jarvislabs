@@ -421,7 +421,7 @@ def _test_request(api_key: str, model: str) -> None:
             f"Test request to {model} failed", f"{e}\nYour tools are set up; they work once requests go through."
         )
         raise typer.Exit(1) from None
-    render.success(f"Test request: {model} replied in {time.monotonic() - started:.1f} s")
+    render.info(f"API test passed in {time.monotonic() - started:.1f} s")
 
 
 def _start_command(harness: Harness) -> str:
@@ -463,7 +463,7 @@ def _stop_without_a_tool() -> None:
     coming = [h for h in HARNESSES if h.support == "coming_soon"]
     lines = [
         render._hint("Install one of these, then run `jl connect`:"),
-        *(Text.assemble((f"{h.name:<{width}}  ", "bold"), (h.install_url, "hint")) for h in offered),
+        *(Text.assemble((f"{h.name:<{width}}  ", "bold"), (h.install_url, "accent")) for h in offered),
     ]
     if coming:
         names = ", ".join(h.name for h in coming[:-1])

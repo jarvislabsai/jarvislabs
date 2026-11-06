@@ -144,13 +144,28 @@ def test_setup_from_the_installer_skips_the_guide(typed: list[str], monkeypatch:
 def test_setup_guide_lists_connect_in_the_quick_reference(typed: list[str]) -> None:
     typed += ["jarvis-key"]
 
-    result = runner.invoke(app, ["setup"], input="n\n")
+    result = runner.invoke(app, ["setup", "--guide"], input="n\n")
 
     assert result.exit_code == 0, result.output
-    guide = result.output[result.output.index("get started") :]
+    guide = result.output[result.output.index("Get started") :]
     quick_reference = guide[guide.index("quick reference") :]
     assert "$ jl connect" in quick_reference
     assert "─ coding tools ─" not in guide
+    assert result.output.splitlines()[-1] == "Next: connect your coding tools: jl connect"
+
+
+def test_setup_ends_with_connect_and_keeps_the_guide_opt_in(typed: list[str]) -> None:
+    typed += ["jarvis-key"]
+
+    result = runner.invoke(app, ["setup"], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    assert lines[-1] == "Next: connect your coding tools: jl connect"
+    assert lines[-2] == ""
+    assert "Get started" in result.output
+    assert "jl setup --guide" in result.output
+    assert "quick reference" not in result.output
 
 
 def test_enter_at_install_agent_skills_installs_them(

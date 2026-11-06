@@ -53,13 +53,13 @@ BORDER_STYLE = "dim"
 # user's, red failed or removed, cyan (accent) where the user acts and every command to type.
 theme = Theme(
     {
-        "info": "dim",
+        "info": "default",
         "success": "green",
         "warning": "yellow",
         "error": "bold red",
         "title": "bold",
         "accent": "cyan",
-        "hint": "dim",
+        "hint": "default",
     }
 )
 
@@ -132,8 +132,8 @@ def account_status(info, bal, metrics, sym: str) -> None:
 
     panel = Panel(
         content,
-        title=f"[bold cyan]{MARKS['badge']}Account[/bold cyan]",
-        border_style="cyan",
+        title=f"[bold]{MARKS['badge']}Account[/bold]",
+        border_style=BORDER_STYLE,
         box=box.ROUNDED,
         padding=(1, 2),
         expand=False,
@@ -169,7 +169,7 @@ def subscription_usage(usage: SubscriptionUsage | None) -> None:
     table.add_row("Running now", f"{usage.slots.in_use} of {usage.slots.limit} requests")
     table.add_row("Use balance", "on" if usage.use_balance else "off")
     stdout_console.print(
-        Panel(table, title="[bold cyan]Subscription[/bold cyan]", border_style="cyan", padding=(1, 2), expand=False)
+        Panel(table, title="[bold]Subscription[/bold]", border_style=BORDER_STYLE, padding=(1, 2), expand=False)
     )
 
 
@@ -194,7 +194,7 @@ def harness_status(rows: list[dict[str, Any]]) -> None:
                 Text(f"jl disconnect {row['id']}", "accent"),
             )
         elif row["connected"]:
-            default = Text.assemble(("default ", "hint"), row["default_model"]) if row["default_model"] else ""
+            default = Text.assemble(("default ", "dim"), row["default_model"]) if row["default_model"] else ""
             table.add_row(Text.assemble((MARKS["ok"] + " ", "success"), (name, "bold")), "connected", default)
         elif row["printed"]:
             table.add_row(Text("  " + name), "config printed", "")
@@ -202,10 +202,10 @@ def harness_status(rows: list[dict[str, Any]]) -> None:
             table.add_row(Text("  " + name), "installed", Text(f"jl connect {row['id']}", "accent"))
         else:
             table.add_row(
-                Text("  " + name, "hint"), Text("not installed", "hint"), Text(f"jl connect {row['id']}", "accent")
+                Text("  " + name, "dim"), Text("not installed", "dim"), Text(f"jl connect {row['id']}", "accent")
             )
     stdout_console.print(
-        Panel(table, title="[bold cyan]Coding tools[/bold cyan]", border_style="cyan", padding=(1, 2), expand=False)
+        Panel(table, title="[bold]Coding tools[/bold]", border_style=BORDER_STYLE, padding=(1, 2), expand=False)
     )
 
 
@@ -1027,7 +1027,7 @@ def error(msg: str | Text, hint: str | None = None) -> None:
 def info(msg: str) -> None:
     if state.json_output:
         return
-    console.print(f"[dim]{escape(msg)}[/dim]", highlight=False)
+    console.print(Text(msg, style="info"), highlight=False)
 
 
 def warning(msg: str | Text, hint: str | Text | None = None) -> None:
@@ -1036,14 +1036,14 @@ def warning(msg: str | Text, hint: str | Text | None = None) -> None:
 
 
 def hint_line(msg: str) -> None:
-    """Print a dim hint, indented two spaces, each `command` in it in the accent."""
+    """Print a hint, indented two spaces, each `command` in it in the accent."""
     if state.json_output:
         return
     _hang(Text("  "), _hint(msg), console)
 
 
 def heading(title: str, note: str = "") -> None:
-    """Print a blank line, then a bold heading that opens a phase, with an optional dim note after it."""
+    """Print a blank line, then a bold heading that opens a phase, with an optional note after it."""
     if state.json_output:
         return
     console.print()
@@ -1071,6 +1071,7 @@ def next_step(text: str, commands: Sequence[str]) -> None:
     for i, command in enumerate(commands):
         body.append(MARKS["sep"] if i else " ", "hint")
         body.append(command, "accent")
+    console.print()
     _hang(Text("Next: ", "bold"), body, console)
 
 
@@ -1111,7 +1112,7 @@ class Row:
         name: The tool.
         detail: What the row says after the tool, such as the files it changes.
         warning: A yellow line under the detail: what the change replaces of the user's.
-        note: A dim line under the detail.
+        note: A secondary line under the detail.
     """
 
     change: Change
@@ -1127,12 +1128,12 @@ def change_rows(rows: Sequence[Row], title: str = "", note: str = "") -> None:
     Args:
         rows: The rows.
         title: A bold heading; with none, neither heading nor legend is printed.
-        note: A dim note after the heading, such as the facts every row shares.
+        note: A note after the heading, such as the facts every row shares.
     """
     if title:
         _headline(title, note, stdout_console)
         kinds = {row.change for row in rows}
-        stdout_console.print(Text("  ".join(text for c, text in _LEGEND.items() if c in kinds), "hint"))
+        stdout_console.print(Text("  ".join(text for c, text in _LEGEND.items() if c in kinds), "dim"))
         stdout_console.print()
     width = max(len(row.name) for row in rows)
     for row in rows:
@@ -1201,7 +1202,7 @@ def confirm(msg: str, *, skip: bool = False, default: bool = False, optional: bo
     try:
         choices = "Y/n" if default else "y/N"
         # A Text prompt skips Rich's auto-highlighting, which would color the numbers in msg.
-        response = console.input(Text.assemble(("? ", ACCENT_BOLD), (msg, "bold"), (f" ({choices}) ", "hint")))
+        response = console.input(Text.assemble(("? ", ACCENT_BOLD), (msg, "bold"), (f" ({choices}) ", "dim")))
         answer = response.strip().lower()
         return answer in ("y", "yes") if answer else default
     except KeyboardInterrupt:

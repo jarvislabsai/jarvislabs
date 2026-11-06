@@ -440,6 +440,14 @@ def test_connect_never_starts_a_tool(subscribed, opencode_config, terminal, monk
     assert started == []
 
 
+def ends_with_next_step(result, commands):
+    """Assert the run ends with the next actions, after the blank line that separates them from the block above."""
+    lines = result.output.splitlines()
+    assert lines[-1] == f"Next: start a tool in your project folder: {commands}"
+    assert lines[-2] == ""
+    assert "\n\n\nNext:" not in result.output  # one blank line, not two
+
+
 def test_connect_ends_with_how_to_start_each_tool(subscribed, opencode_config, terminal, tmp_path):
     put_cline_on_path(tmp_path)
 
@@ -447,6 +455,11 @@ def test_connect_ends_with_how_to_start_each_tool(subscribed, opencode_config, t
 
     assert result.exit_code == 0, result.output
     assert result.output.endswith("Next: start a tool in your project folder: opencode · cline -i\n")
+    ends_with_next_step(result, "opencode · cline -i")
+    # One result, not two endings: the test is a secondary line, not a second ✓.
+    assert "API test passed in " in result.output
+    assert "Test request:" not in result.output
+    assert not re.search(r"✓ API test passed", result.output)
 
 
 def test_the_picker_ticks_installed_harnesses_and_lists_coming_soon_last(subscribed, opencode_config, terminal):
@@ -532,7 +545,7 @@ def test_pi_links_its_quickstart():
     assert pi.install_url == "https://pi.dev/docs/latest/quickstart"
 
 
-def test_no_tool_install_rows_show_names_bold_and_urls_dim(subscribed, tmp_path, monkeypatch):
+def test_no_tool_install_rows_show_names_bold_and_urls_accent(subscribed, tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path / "nothing-installed"))
     buffer = io.StringIO()
     console = Console(file=buffer, force_terminal=True, color_system="standard", theme=render.theme)
@@ -543,7 +556,7 @@ def test_no_tool_install_rows_show_names_bold_and_urls_dim(subscribed, tmp_path,
 
     out = buffer.getvalue()
     assert re.search(r"\x1b\[1mOpenCode  \x1b\[0m", out)
-    assert re.search(r"\x1b\[2mhttps://opencode\.ai/docs/#install\x1b\[0m", out)
+    assert re.search(r"\x1b\[36mhttps://opencode\.ai/docs/#install\x1b\[0m", out)
 
 
 def test_no_tool_installed_with_no_coming_soon_tools_skips_the_using_line(subscribed, tmp_path, monkeypatch):
@@ -808,7 +821,7 @@ def test_a_missing_harness_doesnt_stop_the_other_harnesses(subscribed, opencode_
     assert result.exit_code == 0, result.output
     assert read_json(opencode_config)["model"] == "jarvislabs/deepseek-v4.1-flash-1017"
     assert set(config.load_connection().harnesses) == {"opencode"}
-    assert "deepseek-v4.1-flash-1017 replied in" in said(result)
+    assert "API test passed in" in said(result)
 
 
 def test_a_skipped_tool_links_its_install_page(subscribed, opencode_config, terminal):
@@ -1073,7 +1086,10 @@ def test_connect_shows_the_test_reply_or_the_server_error(subscribed, opencode_c
     result = runner.invoke(app, ["connect", "opencode", "--yes"])
 
     assert result.exit_code == 0, result.output
-    assert re.search(r"✓ Test request: deepseek-v4\.1-flash-1017 replied in \d+\.\d s", result.output)
+    assert re.search(r"API test passed in \d+\.\d s", result.output)
+    # The old second ✓ is gone: the test is a secondary line, not a competing success.
+    assert "Test request:" not in result.output
+    assert not re.search(r"✓ API test passed", result.output)
     # One tiny request to the default model, sent with this machine's key, not the Jarvis key.
     [(_, _, body)] = [call for call in subscribed.calls if call[1] == "chat/completions"]
     assert body["model"] == "deepseek-v4.1-flash-1017"
@@ -1130,6 +1146,10 @@ def test_a_single_tool_ends_with_its_start_command(subscribed, opencode_config, 
 
     assert result.exit_code == 0, result.output
     assert result.output.endswith("Next: start a tool in your project folder: opencode\n")
+    ends_with_next_step(result, "opencode")
+    assert "API test passed in " in result.output
+    assert "Test request:" not in result.output
+    assert not re.search(r"✓ API test passed", result.output)
 
 
 @pytest.mark.parametrize("in_terminal", [True, False], ids=["terminal", "no-terminal"])
@@ -1144,6 +1164,18 @@ def test_several_tools_not_started_get_one_line(
 
     assert result.exit_code == 0, result.output
     assert result.output.endswith("Next: start a tool in your project folder: opencode · cline -i\n")
+    ends_with_next_step(result, "opencode · cline -i")
+
+
+def test_a_two_tool_connect_fits_one_screen(subscribed, opencode_config, terminal, tmp_path):
+    put_cline_on_path(tmp_path)
+
+    result = runner.invoke(app, ["connect", "opencode", "cline", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # DESIGN.md rule 42: the default success view is one screen. This counts every line a 2-tool connect prints
+    # (16 lines here), so one extra line of ceremony fails the budget rather than drifting silently.
+    assert len(result.output.splitlines()) <= 20, result.output
 
 
 def test_connect_yes_help_names_what_it_does(server):
