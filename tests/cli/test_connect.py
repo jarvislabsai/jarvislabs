@@ -441,8 +441,9 @@ def test_connect_never_starts_a_tool(subscribed, opencode_config, terminal, monk
 def ends_with_next_step(result, commands):
     """Assert the run ends with the next actions, after the blank line that separates them from the block above."""
     lines = result.output.splitlines()
-    assert lines[-1] == f"Next: start a tool in your project folder: {commands}"
-    assert lines[-2] == ""
+    assert lines[-2] == f"Next: {commands}"
+    assert lines[-1] == "      start a tool in your project folder"
+    assert lines[-3] == ""
     assert "\n\n\nNext:" not in result.output  # one blank line, not two
 
 
@@ -452,7 +453,6 @@ def test_connect_ends_with_how_to_start_each_tool(subscribed, opencode_config, t
     result = runner.invoke(app, ["connect", "opencode", "cline", "--yes"])
 
     assert result.exit_code == 0, result.output
-    assert result.output.endswith("Next: start a tool in your project folder: opencode · cline -i\n")
     ends_with_next_step(result, "opencode · cline -i")
     # One result, not two endings: the test is a secondary line, not a second ✓.
     assert "API test passed in " in result.output
@@ -488,7 +488,7 @@ def test_an_empty_picker_says_how_to_come_back(subscribed, opencode_config, term
     result = runner.invoke(app, ["connect"])
 
     assert result.exit_code == 0, result.output
-    assert result.output.endswith("Next: set up a coding tool when you want: jl connect\n")
+    assert result.output.endswith("Next: jl connect\n      set up a coding tool when you want\n")
     assert [call for call in subscribed.calls if call[0] == "POST"] == []
     assert not opencode_config.exists()
 
@@ -707,7 +707,8 @@ def test_a_vscode_extension_ends_with_how_to_open_vs_code(subscribed, terminal, 
     assert result.exit_code == 0, result.output
     assert read_json(tmp_path / "kilo" / "kilo.jsonc")
     assert terminal.asked == []
-    assert "Next: start a tool in your project folder: open VS Code" in said(result)
+    assert "Next: open VS Code" in said(result)
+    assert "start a tool in your project folder" in said(result)
 
 
 def test_uninstalled_tools_are_disabled_in_the_picker(subscribed, opencode_config, terminal):
@@ -1123,7 +1124,6 @@ def test_a_single_tool_ends_with_its_start_command(subscribed, opencode_config, 
     result = runner.invoke(app, ["connect", "opencode"], input="y\n")
 
     assert result.exit_code == 0, result.output
-    assert result.output.endswith("Next: start a tool in your project folder: opencode\n")
     ends_with_next_step(result, "opencode")
     assert "API test passed in " in result.output
     assert "Test request:" not in result.output
@@ -1141,7 +1141,6 @@ def test_several_tools_not_started_get_one_line(
     result = runner.invoke(app, ["connect", "opencode", "cline", *([] if in_terminal else ["--yes"])], input="y\n")
 
     assert result.exit_code == 0, result.output
-    assert result.output.endswith("Next: start a tool in your project folder: opencode · cline -i\n")
     ends_with_next_step(result, "opencode · cline -i")
 
 
@@ -1337,7 +1336,7 @@ def test_status_ends_with_what_to_run_next(subscribed, opencode_config):
     result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 0, result.output
-    assert result.output.rstrip().endswith("Next: connect a tool: jl connect")
+    assert result.output.endswith("Next: jl connect\n      connect a tool\n")
 
 
 @pytest.fixture()
@@ -1727,7 +1726,7 @@ def test_not_now_at_the_pay_question_leaves_without_changes(unsubscribed, openco
     result = runner.invoke(app, ["connect", "opencode"])
 
     assert result.exit_code == 0, result.output
-    assert result.output.endswith("Next: set up a coding tool when you want: jl connect\n")
+    assert result.output.endswith("Next: jl connect\n      set up a coding tool when you want\n")
     assert [call for call in unsubscribed.calls if call[0] in ("POST", "DELETE")] == []
     # No wallet choice saved either, so the next jl connect asks again.
     assert not config.config_path().exists()

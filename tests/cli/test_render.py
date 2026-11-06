@@ -159,8 +159,8 @@ def test_change_rows_align_mark_name_and_files_with_notes_under_the_files(out):
 def test_next_step_names_the_commands_to_type(out):
     render.next_step("start a tool in this folder:", ["opencode", "cline -i"])
 
-    # 40 columns: the commands wrap, hanging under the text after "Next:", with a blank line before it.
-    assert out.getvalue().splitlines() == ["", "Next: start a tool in this folder:", "      opencode · cline -i"]
+    # The command comes first, the explanation under it, with a blank line before.
+    assert out.getvalue().splitlines() == ["", "Next: opencode · cline -i", "      start a tool in this folder"]
 
 
 def test_a_heading_opens_a_phase_after_a_blank_line(out):
@@ -197,7 +197,7 @@ def test_next_step_uses_the_ascii_separator_when_marks_are_ascii(out, monkeypatc
 
     render.next_step("start a tool in this folder:", ["opencode", "cline -i"])
 
-    assert out.getvalue().splitlines()[-1] == "      opencode | cline -i"
+    assert out.getvalue().splitlines()[-2:] == ["Next: opencode | cline -i", "      start a tool in this folder"]
 
 
 def test_an_empty_wrapped_line_has_no_trailing_spaces(out):

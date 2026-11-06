@@ -13,7 +13,7 @@ from jarvislabs.exceptions import JarvislabsError
 app = typer.Typer(
     name="jl",
     help=(
-        "[bold cyan]⚡ Jarvislabs[/bold cyan]  [bold]GPU cloud[/bold]\n"
+        "[bold cyan]Jarvislabs[/bold cyan]  [bold]GPU cloud[/bold]\n"
         "Create GPU instances, run jobs, and call models.\n\n"
         "[bold]Start here[/bold]\n"
         "  [bold cyan]jl gpus[/bold cyan]                      see GPUs and prices\n"

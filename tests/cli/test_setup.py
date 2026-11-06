@@ -148,8 +148,9 @@ def test_setup_ends_with_a_neutral_next_step(typed: list[str]) -> None:
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
-    assert lines[-1] == "Next: see all commands: jl --help"
-    assert lines[-2] == ""
+    assert lines[-2] == "Next: jl --help"
+    assert lines[-1] == "      see all commands"
+    assert lines[-3] == ""
     assert "GET STARTED" in result.output
     assert "quick reference" not in result.output
 

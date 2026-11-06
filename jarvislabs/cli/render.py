@@ -68,8 +68,8 @@ theme = Theme(
 console = Console(stderr=True, theme=theme)
 stdout_console = Console(theme=theme)
 
-UNICODE_MARKS = {"ok": "✓", "bad": "✗", "ticked": "●", "unticked": "○", "badge": "⚡ ", "sep": " · "}
-ASCII_MARKS = {"ok": "+", "bad": "x", "ticked": "[*]", "unticked": "[ ]", "badge": "", "sep": " | "}
+UNICODE_MARKS = {"ok": "✓", "bad": "✗", "ticked": "●", "unticked": "○", "sep": " · "}
+ASCII_MARKS = {"ok": "+", "bad": "x", "ticked": "[*]", "unticked": "[ ]", "sep": " | "}
 # The theme's accent, bold, for the "?" that opens a prompt.
 ACCENT_BOLD = theme.styles["accent"] + Style(bold=True)
 
@@ -134,7 +134,7 @@ def account_status(info, bal, metrics, sym: str) -> None:
 
     panel = Panel(
         content,
-        title=f"[bold cyan]{MARKS['badge']}Account[/bold cyan]",
+        title="[bold cyan]Account[/bold cyan]",
         border_style=CHROME_STYLE,
         box=box.ROUNDED,
         padding=(1, 2),
@@ -1085,12 +1085,10 @@ def next_step(text: str, commands: Sequence[str]) -> None:
     """
     if state.json_output:
         return
-    body = Text(text)
-    for i, command in enumerate(commands):
-        body.append(MARKS["sep"] if i else " ", "hint")
-        body.append(command, "accent")
+    joined = Text(MARKS["sep"].join(commands), ACCENT_BOLD)
     console.print()
-    _hang(Text("Next: ", "bold"), body, console)
+    _hang(Text("Next: ", "bold"), joined, console)
+    _hang(Text("      "), Text(text.rstrip(":"), "dim"), console)
 
 
 def short_path(path: Path) -> str:
