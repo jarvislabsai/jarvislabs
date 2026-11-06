@@ -177,7 +177,7 @@ def connect(
         return
     if not (printed or only_rotate):
         render.rule("CONNECT TOOLS")
-        render.info("Connect the tools installed on this machine to the Models API.")
+        render.console.print(Text("Connect the tools installed on this machine to the Models API.", "dim"))
     with render.spinner("Checking your subscription..."):
         usage = client.subscription.usage()
     if usage is None:
@@ -512,8 +512,9 @@ def _stop_if_up_to_date(connection: Connection | None, models: tuple[ModelInfo, 
     except JarvislabsError:
         # A config jl can't read is a change to plan, not a reason to stop before the picker.
         return
-    count = len(installed_tools)
-    render.success(f"All {count} tools are connected and up to date")
+    names = [harness.name for harness in installed_tools]
+    label = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    render.success(f"{label} {'is' if len(names) == 1 else 'are'} connected and up to date")
     render.next_step("check or change them:", ["jl status", "jl disconnect <tool>"])
     raise typer.Exit()
 
@@ -661,7 +662,10 @@ def _continue_on_wallet(wallet: bool, dry_run: bool) -> None:
         dry_run: --dry-run was passed: the choice isn't saved.
     """
     if wallet or wallet_chosen():
-        render.info(ON_WALLET)
+        line = Text("On wallet (no subscription). Run ", "dim")
+        line.append("jl subscribe", render.ACCENT_BOLD)
+        line.append(" to get a plan.", "dim")
+        render.console.print(line)
         return
     if state.yes or not _can_ask():
         render.die(f"{NO_SUBSCRIPTION_FOUND} To pay from your wallet instead, run jl connect --wallet.")

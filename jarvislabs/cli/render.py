@@ -1176,7 +1176,7 @@ def change_row(row: Row, width: int, out: Console) -> None:
 def _status(mark: str, style: str, msg: str | Text, hint: str | Text | None) -> None:
     if state.json_output:
         return
-    _hang(Text(mark + " ", style), msg if isinstance(msg, Text) else Text(msg), console)
+    _hang(Text(mark + " ", style), msg if isinstance(msg, Text) else Text(msg, "bold"), console)
     if hint:
         _hang(Text("  "), _hint(hint), console)
 

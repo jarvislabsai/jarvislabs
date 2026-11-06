@@ -1184,7 +1184,7 @@ def test_a_repeat_connect_with_nothing_to_change_says_up_to_date(subscribed, ope
     result = runner.invoke(app, ["connect"])
 
     assert result.exit_code == 0, result.output
-    assert "All 1 tools are connected and up to date" in said(result)
+    assert "OpenCode is connected and up to date" in said(result)
     assert "jl status" in said(result)
     assert "jl disconnect <tool>" in said(result)
     assert "jl disconnect opencode" not in said(result)

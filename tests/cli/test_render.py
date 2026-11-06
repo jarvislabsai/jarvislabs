@@ -78,7 +78,7 @@ def test_an_error_colours_its_mark_not_its_message(coloured):
     render.error("Test request failed")
 
     line = coloured.getvalue()
-    assert line.endswith("Test request failed\n")
+    assert re.sub(r"\x1b\[[0-9;]*m", "", line).endswith("Test request failed\n")
     assert "\x1b[1;31m" in line.split("Test request")[0]
 
 
