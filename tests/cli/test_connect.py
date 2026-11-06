@@ -314,9 +314,7 @@ def test_the_first_connect_saves_a_backup_once(subscribed, opencode_config):
     assert second.exit_code == 0, second.output
     assert backup.read_text() == original
     # Under the tool's row, the home folder as ~.
-    assert (
-        "✓ OpenCode  connected\n            your old config is at ~/opencode/opencode.json.jl-backup\n" in first.output
-    )
+    assert "✓ OpenCode  added\n            your old config is at ~/opencode/opencode.json.jl-backup\n" in first.output
     assert "jl-backup" not in second.output
     assert config.load_connection().harnesses["opencode"].backups == (backup,)
 
@@ -465,7 +463,7 @@ def test_connect_ends_with_how_to_start_each_tool(subscribed, opencode_config, t
 def test_the_picker_ticks_installed_harnesses_and_lists_coming_soon_last(subscribed, opencode_config, terminal):
     terminal.picked = ["opencode"]
 
-    result = runner.invoke(app, ["connect", "--yes"])
+    result = runner.invoke(app, ["connect", "--all", "--yes"])
 
     assert result.exit_code == 0, result.output
     assert terminal.picker.use_search_filter
@@ -715,7 +713,7 @@ def test_a_vscode_extension_ends_with_how_to_open_vs_code(subscribed, terminal, 
 def test_uninstalled_tools_are_disabled_in_the_picker(subscribed, opencode_config, terminal):
     terminal.picked = ["opencode"]
 
-    result = runner.invoke(app, ["connect", "--yes"])
+    result = runner.invoke(app, ["connect", "--all", "--yes"])
 
     assert result.exit_code == 0, result.output
     rows = {choice.value: choice.disabled for choice in terminal.picker.choices}
@@ -951,56 +949,10 @@ def test_a_programs_output_is_read_as_utf8_whatever_the_code_page(monkeypatch):
     assert harnesses._output(["crush", "--version"]) == "crush version 0.99.0 (C:\\Users\\Álvaro)\n"
 
 
-def after_the_picker(monkeypatch, picks, answers):
-    """Tick ``picks`` in successive pickers, and answer ``answers`` to "Connect …?" after each, in a terminal.
-
-    Every harness is on PATH (the server fixture), so the first picker opens with all of them
-    ticked. Returns the IDs shown ticked in each picker, and the questions asked with their defaults.
-    """
-    monkeypatch.setattr(render, "can_prompt", lambda: True)
-    picks, answers = iter(picks), iter(answers)
-    shown_ticked, asked = [], []
-
-    def checkbox(message, choices, **kwargs):
-        shown_ticked.append([choice.value for choice in choices if choice.checked])
-        picked = next(picks)
-        return SimpleNamespace(ask=lambda: picked)
-
-    def confirm(message, **kwargs):
-        asked.append((message, kwargs.get("default")))
-        answer = next(answers)
-        return SimpleNamespace(ask=lambda: answer)
-
-    monkeypatch.setattr(questionary, "checkbox", checkbox)
-    monkeypatch.setattr(questionary, "confirm", confirm)
-    return shown_ticked, asked
-
-
-def test_the_picker_asks_before_going_on(subscribed, monkeypatch):
-    _, asked = after_the_picker(monkeypatch, [["opencode", "pi"]], [True])
-
-    result = runner.invoke(app, ["connect", "--dry-run"])
-
-    assert result.exit_code == 0, result.output
-    assert asked == [("Connect these 2?", True)]
-    previewed = [line.split()[1] for line in result.stdout.splitlines() if line.startswith("+ ") and "~/" in line]
-    assert previewed == ["OpenCode", "pi"]
-
-
-def test_n_after_the_picker_reopens_it_with_the_users_ticks(subscribed, monkeypatch):
-    shown_ticked, _ = after_the_picker(monkeypatch, [["opencode", "pi"], ["opencode", "pi"]], [False, True])
-
-    result = runner.invoke(app, ["connect", "--dry-run"])
-
-    assert result.exit_code == 0, result.output
-    # The installed ones first, then the user's own ticks.
-    assert len(shown_ticked[0]) > 2
-    assert shown_ticked[1] == ["opencode", "pi"]
-
-
-def test_ctrl_c_after_the_picker_aborts_with_130(subscribed, monkeypatch):
+def test_ctrl_c_in_the_picker_aborts_with_130(subscribed, monkeypatch):
     # questionary answers None to Ctrl-C.
-    after_the_picker(monkeypatch, [["opencode"]], [None])
+    monkeypatch.setattr(render, "can_prompt", lambda: True)
+    monkeypatch.setattr(questionary, "checkbox", lambda *args, **kwargs: SimpleNamespace(ask=lambda: None))
 
     result = runner.invoke(app, ["connect"])
 
@@ -1008,7 +960,34 @@ def test_ctrl_c_after_the_picker_aborts_with_130(subscribed, monkeypatch):
     assert [call for call in subscribed.calls if call[0] == "POST"] == []
 
 
-def test_yes_skips_the_question_after_the_picker(subscribed, monkeypatch):
+def test_the_picker_lists_only_installed_tools_by_default(subscribed, terminal):
+    terminal.picked = ["opencode"]
+
+    result = runner.invoke(app, ["connect", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert [choice.value for choice in terminal.picker.choices] == ["opencode"]
+    assert "Other tools: jl connect --all lists them" in result.output
+
+
+def test_the_picker_connects_the_ticks_without_asking_again(subscribed, monkeypatch):
+    monkeypatch.setattr(render, "can_prompt", lambda: True)
+    monkeypatch.setattr(
+        questionary,
+        "checkbox",
+        lambda message, choices, **kwargs: SimpleNamespace(ask=lambda: ["opencode", "pi"]),
+    )
+    # The picker's Enter is the answer; there is no second "Connect these 2?".
+    monkeypatch.setattr(questionary, "confirm", lambda *args, **kwargs: pytest.fail("asked again"))
+
+    result = runner.invoke(app, ["connect", "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    previewed = [line.split()[1] for line in result.stdout.splitlines() if line.startswith("+ ") and "~/" in line]
+    assert previewed == ["OpenCode", "pi"]
+
+
+def test_yes_writes_without_another_question(subscribed, monkeypatch):
     monkeypatch.setattr(render, "can_prompt", lambda: True)
     monkeypatch.setattr(questionary, "checkbox", lambda message, choices, **kwargs: SimpleNamespace(ask=lambda: ["pi"]))
     monkeypatch.setattr(questionary, "confirm", lambda message, **kwargs: pytest.fail(f"asked {message!r}"))
@@ -1021,9 +1000,8 @@ def test_yes_skips_the_question_after_the_picker(subscribed, monkeypatch):
 
 @pytest.fixture
 def screen(monkeypatch):
-    """The real picker, drawn into the returned buffer; Enter accepts the ticked rows, and yes goes on."""
+    """The real picker, drawn into the returned buffer; Enter accepts the ticked rows."""
     monkeypatch.setattr(render, "can_prompt", lambda: True)
-    monkeypatch.setattr(questionary, "confirm", lambda message, **kwargs: SimpleNamespace(ask=lambda: True))
     screen = io.StringIO()
     real_checkbox = questionary.checkbox
 
@@ -1045,7 +1023,7 @@ def _drawn(screen: io.StringIO) -> str:
 
 
 def test_a_coming_soon_row_shows_its_docs_link_in_one_pair_of_brackets(subscribed, screen):
-    result = runner.invoke(app, ["connect", "--dry-run"])
+    result = runner.invoke(app, ["connect", "--all", "--dry-run"])
 
     assert result.exit_code == 0, result.output
     drawn = _drawn(screen)
@@ -1299,7 +1277,7 @@ def test_status_lists_harnesses_and_their_connection(
         runner.invoke(app, ["connect", "opencode", "--yes", "--model", "glm-5.3"])
     monkeypatch.setattr(shutil, "which", lambda name, path=None: f"/usr/bin/{name}" if on_path else None)
 
-    result = runner.invoke(app, ["status"])
+    result = runner.invoke(app, ["status"] if connected else ["status", "--all"])
 
     assert result.exit_code == 0, result.output
     (line,) = [line for line in result.output.splitlines() if "OpenCode" in line]
@@ -1310,7 +1288,7 @@ def test_status_lists_connected_tools_first_then_installed_then_the_rest(subscri
     runner.invoke(app, ["connect", "pi", "--yes"])
     # Every CLI tool is on PATH (the server fixture); no VS Code extension is installed.
 
-    result = runner.invoke(app, ["status"])
+    result = runner.invoke(app, ["status", "--all"])
 
     assert result.exit_code == 0, result.output
     panel = result.output[result.output.index("Coding tools") :]
@@ -1335,20 +1313,31 @@ def test_status_says_a_connected_tool_was_uninstalled(subscribed, opencode_confi
 def test_status_not_installed_rows_name_their_command(subscribed, monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda name, path=None: None)
 
-    result = runner.invoke(app, ["status"])
+    result = runner.invoke(app, ["status", "--all"])
 
     assert result.exit_code == 0, result.output
     row = next(line for line in result.output.splitlines() if "OpenCode" in line)
     assert re.split(r"\s{2,}", row.strip("│ ")) == ["OpenCode", "not installed", "jl connect opencode"]
 
 
+def test_status_hides_tools_that_are_not_installed(subscribed, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name, path=None: None)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "OpenCode" not in result.output
+    assert re.search(r"\d+ more tools available: jl status --all", result.output)
+
+    full = runner.invoke(app, ["status", "--all"])
+    assert "OpenCode" in full.output
+
+
 def test_status_ends_with_what_to_run_next(subscribed, opencode_config):
     result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 0, result.output
-    assert result.output.rstrip().endswith(
-        f"Next: connect the tools you have, or just one: jl connect{render.MARKS['sep']}jl connect <tool>"
-    )
+    assert result.output.rstrip().endswith("Next: connect a tool: jl connect")
 
 
 @pytest.fixture()

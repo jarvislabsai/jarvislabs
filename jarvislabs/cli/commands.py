@@ -52,6 +52,7 @@ def logout(
 @app.command(rich_help_panel="Account")
 def status(
     json_output: cli_options.JsonOption = False,
+    all_tools: Annotated[bool, typer.Option("--all", help="Also list tools that aren't installed.")] = False,
 ) -> None:
     """See every coding tool: connected, installed, or where to get it."""
     cli_options.apply_command_options(json_output=json_output)
@@ -106,7 +107,13 @@ def status(
         render.warning(f"Subscription: unavailable right now ({usage_error})")
     else:
         render.subscription_usage(usage)
-    render.harness_status(harnesses)
+    # Default to what the user can act on: connected tools, and installed ones jl can connect. The
+    # rest is catalog, one flag away.
+    shown = [row for row in harnesses if all_tools or row["connected"] or row["printed"] or row["installed"]]
+    render.harness_status(shown)
+    hidden = len(harnesses) - len(shown)
+    if hidden:
+        render.hint_line(f"{hidden} more tools available: `jl status --all`")
     if switch_available:
         render.warning(
             "These tools pay from your wallet",
@@ -114,7 +121,8 @@ def status(
         )
     if hint := update.status_hint(cli):
         render.warning(hint)
-    render.next_step("connect the tools you have, or just one:", ["jl connect", "jl connect <tool>"])
+    next_command = "connect another tool:" if recorded else "connect a tool:"
+    render.next_step(next_command, ["jl connect"])
 
 
 @app.command(rich_help_panel="Resources")

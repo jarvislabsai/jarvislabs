@@ -36,10 +36,18 @@ function Install-Jl {
     }
 
     Write-Host 'Installing jl...'
-    uv tool install --upgrade $spec
-    if ($LASTEXITCODE) { throw 'Installing jl failed.' }
+    $installLog = New-TemporaryFile
+    uv tool install --upgrade $spec *> $installLog
+    if ($LASTEXITCODE) {
+        Get-Content $installLog
+        Remove-Item $installLog
+        throw 'Installing jl failed.'
+    }
+    if ($env:JL_VERBOSE) { Get-Content $installLog }
+    Remove-Item $installLog
+    Write-Host 'jl installed.'
     $bin = (Resolve-Path (uv tool dir --bin)).Path
-    uv tool update-shell
+    uv tool update-shell *> $null
     if ($LASTEXITCODE) { Write-Host "Add $bin to your PATH." }
     # irm | iex runs in the user's session, so jl also runs in this window, unlike after install.sh.
     $env:Path = "$bin;$env:Path"
@@ -61,7 +69,7 @@ function Install-Jl {
     if ($LASTEXITCODE -eq 130) { return }
     if ($LASTEXITCODE) { throw '`jl setup` failed. Run it again, then `jl connect`.' }
     jl connect
-    Show-JlNext
+    # The connect flow's own Next: is the ending; the next-steps block is for a skipped setup only.
 }
 
 Install-Jl

@@ -184,6 +184,10 @@ def harness_status(rows: list[dict[str, Any]]) -> None:
         rows: One dict per harness, with the keys id, name, installed, connected, printed and default_model.
     """
     table = Table.grid(padding=(0, 2))
+    # One row per tool, never wrapped: a broken "config printed" reads as two states.
+    table.add_column(no_wrap=True)
+    table.add_column(no_wrap=True)
+    table.add_column(no_wrap=True)
     for row in sorted(rows, key=lambda r: (not r["connected"], not r["printed"], not r["installed"])):
         name = row["name"]
         if row["connected"] and not row["installed"]:

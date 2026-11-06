@@ -114,6 +114,7 @@ def connect(
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Print the changes and make none: no file or key.")
     ] = False,
+    show_all: Annotated[bool, typer.Option("--all", help="List tools that aren't installed too.")] = False,
     yes: Annotated[
         bool,
         typer.Option(
@@ -193,7 +194,7 @@ def connect(
     else:
         if not named and kept and kept.kind == kind:
             _stop_if_up_to_date(kept, models, client)
-        chosen = _ready(named or _pick_harnesses(), skipped=skipped)
+        chosen = _ready(named or _pick_harnesses(show_all), skipped=skipped)
 
     if printed:
         connection, new_key = _machine_key(client, kind, rotate_key)
@@ -250,11 +251,12 @@ def connect(
         replaced = connection.harnesses[harness.id] = apply(plan, previous)
         save_connection(connection)
         connected.append(harness)
+        label = "added" if previous is None else "updated"
         backups = [b for b in replaced.backups if not previous or b not in previous.backups]
         notes = [f"your old config is at {', '.join(render.short_path(b) for b in backups)}"] if backups else []
         if harness.note:
             notes.append(harness.note.format(model=default))
-        render.change_row(render.Row("ok", harness.name, "connected", note="\n".join(notes)), width, render.console)
+        render.change_row(render.Row("ok", harness.name, label, note="\n".join(notes)), width, render.console)
     if new_key:
         # The old key is revoked: every connected harness still holding it gets the new one.
         refreshed = refresh_connected()
@@ -268,6 +270,7 @@ def connect(
         raise typer.Exit(1)
     _test_request(connection.token, default)
     if connected:
+        render.hint_line("Add another tool: `jl connect`")
         render.next_step("start a tool in your project folder:", [_start_command(h) for h in connected])
 
 
@@ -514,26 +517,26 @@ def _stop_if_up_to_date(connection: Connection | None, models: tuple[ModelInfo, 
     raise typer.Exit()
 
 
-def _pick_harnesses() -> list[Harness]:
-    """Ask which harnesses to connect: installed ones first and ticked, then the rest, which can't be ticked.
+def _pick_harnesses(show_all: bool = False) -> list[Harness]:
+    """Ask which on-machine harnesses to connect: the installed ones, ticked.
 
-    The ones not installed, then the coming-soon ones, are listed under a heading each, with the
-    command that names where to get the harness or its docs. Nothing ticked says how to come back
-    and exits 0. After the picker, asks whether to
-    go on with the ticked harnesses (not with --yes); a no reopens the picker with the same ones
-    ticked.
+    Tools that aren't installed, and coming-soon ones, are left out unless ``show_all``; one line
+    names the flag. Nothing ticked says how to come back and exits 0.
+
+    Args:
+        show_all: List the tools that aren't installed and the coming-soon ones too.
 
     Returns:
         The harnesses picked.
 
     Raises:
-        typer.Exit: Nothing ticked; with 130, Ctrl-C at either question.
+        typer.Exit: Nothing ticked; with 130, Ctrl-C.
     """
     supported = [h for h in HARNESSES if h.support == "connect"]
     ticked = [h for h in supported if installed(h)]
-    checked = {h.id for h in ticked}
-    while True:
-        choices: list[questionary.Choice] = [questionary.Choice(h.name, h.id, checked=h.id in checked) for h in ticked]
+    choices: list[questionary.Choice] = [questionary.Choice(h.name, h.id, checked=True) for h in ticked]
+    hidden = [h for h in HARNESSES if h not in ticked]
+    if show_all:
         groups = (
             ("Not installed: run the command to see where to get it", [h for h in supported if h not in ticked]),
             ("Coming soon: run the command for its docs", [h for h in HARNESSES if h.support == "coming_soon"]),
@@ -543,36 +546,26 @@ def _pick_harnesses() -> list[Harness]:
                 choices.append(questionary.Separator(heading))
                 # questionary puts the reason in brackets.
                 choices += [questionary.Choice(h.name, h.id, disabled=f"jl connect {h.id}") for h in group]
-        picked = render.answer(
-            questionary.checkbox(
-                "Connect which tools?",
-                choices=choices,
-                use_search_filter=True,
-                use_jk_keys=False,  # j and k must type into the filter
-                # On its own line: Enter continues with the ticked rows, not the highlighted one. Replaces
-                # questionary's own help, which names ctrl-a for both toggling and inverting.
-                instruction=(
-                    f"\n  Space ticks{render.MARKS['sep']}Enter goes on with the ticked tools"
-                    f"{render.MARKS['sep']}type to filter"
-                ),
-                style=render.PROMPT_STYLE,
-            )
-        )
-        if not picked:
-            _leave_for_now()
-        chosen = [h for h in HARNESSES if h.id in picked]
-        if state.yes:
-            return chosen
-        go_on = questionary.confirm(
-            f"Connect {chosen[0].name}?" if len(chosen) == 1 else f"Connect these {len(chosen)}?",
-            default=True,
-            # Replaces questionary's (Y/n).
-            instruction="(Y/n, n goes back to the list) ",
+    elif hidden:
+        render.hint_line("Other tools: `jl connect --all` lists them")
+    picked = render.answer(
+        questionary.checkbox(
+            "Connect which tools?",
+            choices=choices,
+            use_search_filter=True,
+            use_jk_keys=False,  # j and k must type into the filter
+            # On its own line: Enter continues with the ticked rows, not the highlighted one. Replaces
+            # questionary's own help, which names ctrl-a for both toggling and inverting.
+            instruction=(
+                f"\n  Space ticks{render.MARKS['sep']}Enter goes on with the ticked tools"
+                f"{render.MARKS['sep']}type to filter"
+            ),
             style=render.PROMPT_STYLE,
         )
-        if render.answer(go_on):
-            return chosen
-        checked = set(picked)
+    )
+    if not picked:
+        _leave_for_now()
+    return [h for h in HARNESSES if h.id in picked]
 
 
 def _install_hint(harness: Harness) -> str:

@@ -26,15 +26,28 @@ main() {
     fi
 
     echo "Installing jl..."
-    uv tool install --upgrade "$spec"
+    # uv's package list and progress are noise before the product appears. Keep them for a failure,
+    # and for JL_VERBOSE=1; otherwise the install is one line and one check.
+    log="$(mktemp)"
+    if ! uv tool install --upgrade "$spec" >"$log" 2>&1; then
+        cat "$log" >&2
+        rm -f "$log"
+        echo "Installing jl failed." >&2
+        return 1
+    fi
+    if [ -n "${JL_VERBOSE:-}" ]; then cat "$log"; fi
+    rm -f "$log"
+    echo "✓ jl installed"
     bin="$(uv tool dir --bin)"
     # uv can report the bin folder with ".." in it (e.g. ~/.local/share/../bin); resolve it, or the
     # comparisons below miss that this is the jl the window already runs.
     bin="$(cd "$bin" && pwd)"
-    if uv tool update-shell; then
+    if uv tool update-shell >/dev/null 2>&1; then
         next_step="jl is installed. Open a new terminal, then:"
     else
-        next_step="Add $bin to your PATH to run jl from a new terminal."
+        # Say it now: when setup and connect run, this is the only PATH message left before them.
+        echo "Add $bin to your PATH to run jl from a new terminal."
+        next_step=""
     fi
     PATH="$bin:$PATH"
     # An older jl earlier on the PATH would run in a new terminal instead of the one just installed.
@@ -45,14 +58,21 @@ main() {
     fi
 
     status=0
+    setup_done=0
     setup_and_connect || status=$?
-    case "$start_path" in
-        # Nothing to say about PATH: typing jl in this window already finds it.
-        *":$bin:"*) next_step="jl is installed. Next:" ;;
-    esac
-    echo "$next_step"
-    echo "  jl status    see your coding tools"
-    echo "  jl connect   connect another one"
+    # When setup and connect ran, the product's own Next: is the ending. The closing lines are for a
+    # skipped or failed setup, so the user still knows how to come back.
+    if [ "$setup_done" -eq 0 ]; then
+        case "$start_path" in
+            # Nothing to say about PATH: typing jl in this window already finds it.
+            *":$bin:"*) next_step="jl is installed. Next:" ;;
+        esac
+        if [ -n "$next_step" ]; then
+            echo "$next_step"
+        fi
+        echo "  jl status    see your coding tools"
+        echo "  jl connect   connect another one"
+    fi
     return "$status"
 }
 
@@ -76,7 +96,8 @@ setup_and_connect() {
     [ -r "$t" ] || t=/dev/tty
     # Marks jl setup's run so it hands off to jl connect instead of printing its guide.
     JL_FROM_INSTALLER=1 jl setup <"$t" || return
-    jl connect <"$t"
+    jl connect <"$t" || return
+    setup_done=1
 }
 
 main "$@"

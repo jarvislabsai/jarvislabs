@@ -35,7 +35,9 @@ def test_install_scripts_mark_their_setup_run():
     ps1 = (SCRIPTS / "install.ps1").read_text()
 
     # On jl setup's command line only, so neither jl connect nor the user's shell sees it.
-    assert '\n    JL_FROM_INSTALLER=1 jl setup <"$t" || return\n    jl connect <"$t"\n' in sh
+    assert (
+        '\n    JL_FROM_INSTALLER=1 jl setup <"$t" || return\n    jl connect <"$t" || return\n    setup_done=1\n' in sh
+    )
     # irm | iex runs in the user's own session, so the marker is removed again whatever jl setup does.
     assert (
         "\n    $env:JL_FROM_INSTALLER = '1'\n"
@@ -51,8 +53,8 @@ def test_installer_ctrl_c_stops_quietly():
     setup = ps1.index("    try { jl setup }")
     stop = ps1.index("    if ($LASTEXITCODE -eq 130) { return }\n", setup)
     assert stop < ps1.index("throw '`jl setup` failed.", setup)
-    # And the user stopped it, so the window ends on jl's own words, not on the next steps.
-    assert stop < ps1.rindex("Show-JlNext")
+    # And the user stopped it, so the window ends on jl's own words, not on a new set of next steps.
+    assert "Show-JlNext" not in ps1[stop:]
 
 
 def test_install_ps1_says_what_to_run_next():
@@ -67,8 +69,8 @@ def test_install_ps1_says_what_to_run_next():
     ) in ps1
     # On every path that installed jl, including the one that skips setup.
     assert "if ($env:JL_SKIP_SETUP) { Show-JlNext; return }" in ps1
-    # Last, whatever jl connect printed.
-    assert "\n    jl connect\n    Show-JlNext\n}" in ps1
+    # After a successful connect, jl's own Next: is the ending; no second block.
+    assert "\n    jl connect\n    # The connect flow's own Next: is the ending" in ps1
     # irm | iex runs in the user's session, so the normal next step needs no new terminal.
     assert "Open a new terminal, then:" not in ps1
 
@@ -129,21 +131,16 @@ NEXT_STEPS = ["  jl status    see your coding tools", "  jl connect   connect an
 
 
 @posix_only
-@pytest.mark.parametrize("on_path", [False, True], ids=["not-on-path", "on-path"])
-def test_the_installer_says_to_open_a_new_terminal(tmp_path, on_path):
+def test_a_finished_install_does_not_add_a_second_next_step(tmp_path):
     script, env = fake_install(tmp_path, 'echo "jl $1 ran"\n')
-    if on_path:
-        env["PATH"] = env["JL_BIN"] + ":" + env["PATH"]
 
     output, code = run_in_a_terminal(["/bin/sh", *script], env)
 
     assert code == 0
-    assert "jl connect ran" in output
-    # Last: what the user types next is jl, in this window or in a new one.
-    first = "jl is installed. Next:" if on_path else "jl is installed. Open a new terminal, then:"
-    assert output.splitlines()[-3:] == [first, *NEXT_STEPS]
-    # The jl this window runs is the one just installed.
-    assert "Another jl at" not in output
+    # jl connect's own Next: is the ending; the installer does not print another block after it.
+    assert output.splitlines()[-1] == "jl connect ran"
+    assert "jl is installed. Next:" not in output
+    assert "jl status    see your coding tools" not in output
 
 
 @posix_only
@@ -157,7 +154,7 @@ def test_a_uv_bin_path_with_dots_does_not_look_like_another_jl(tmp_path):
 
     assert code == 0
     assert "Another jl at" not in output
-    assert output.splitlines()[-3] == "jl is installed. Next:"
+    assert output.splitlines()[-1] == "jl connect ran"
 
 
 @posix_only
@@ -209,11 +206,9 @@ def test_the_installer_says_to_add_jls_folder_when_uv_cant(tmp_path):
     output, code = run_in_a_terminal(["/bin/sh", *script], env)
 
     assert code == 0
-    assert output.splitlines()[-3:] == [
-        f"Add {env['JL_BIN']} to your PATH to run jl from a new terminal.",
-        *NEXT_STEPS,
-    ]
-    assert "Open a new terminal" not in output
+    assert f"Add {env['JL_BIN']} to your PATH to run jl from a new terminal." in output
+    assert output.splitlines()[-1] == "jl connect ran"
+    assert "Open a new terminal, then:" not in output
 
 
 @posix_only
