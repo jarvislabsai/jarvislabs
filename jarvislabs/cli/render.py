@@ -132,7 +132,7 @@ def account_status(info, bal, metrics, sym: str) -> None:
 
     panel = Panel(
         content,
-        title=f"[bold]{MARKS['badge']}Account[/bold]",
+        title=f"[bold cyan]{MARKS['badge']}Account[/bold cyan]",
         border_style=BORDER_STYLE,
         box=box.ROUNDED,
         padding=(1, 2),
@@ -169,7 +169,9 @@ def subscription_usage(usage: SubscriptionUsage | None) -> None:
     table.add_row("Running now", f"{usage.slots.in_use} of {usage.slots.limit} requests")
     table.add_row("Use balance", "on" if usage.use_balance else "off")
     stdout_console.print(
-        Panel(table, title="[bold]Subscription[/bold]", border_style=BORDER_STYLE, padding=(1, 2), expand=False)
+        Panel(
+            table, title="[bold cyan]Subscription[/bold cyan]", border_style=BORDER_STYLE, padding=(1, 2), expand=False
+        )
     )
 
 
@@ -209,7 +211,9 @@ def harness_status(rows: list[dict[str, Any]]) -> None:
                 Text("  " + name, "dim"), Text("not installed", "dim"), Text(f"jl connect {row['id']}", "accent")
             )
     stdout_console.print(
-        Panel(table, title="[bold]Coding tools[/bold]", border_style=BORDER_STYLE, padding=(1, 2), expand=False)
+        Panel(
+            table, title="[bold cyan]Coding tools[/bold cyan]", border_style=BORDER_STYLE, padding=(1, 2), expand=False
+        )
     )
 
 
@@ -1051,7 +1055,7 @@ def rule(title: str = "") -> None:
     if state.json_output:
         return
     console.print()
-    console.print(Rule(Text(title, "bold") if title else "", style="dim", align="left"))
+    console.print(Rule(Text(title, "bold accent") if title else "", style="dim", align="left"))
 
 
 def heading(title: str, note: str = "") -> None:

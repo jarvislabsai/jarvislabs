@@ -50,7 +50,7 @@ def test_setup_shows_the_one_line_header_otherwise(terminal, saved_key, columns,
     result = runner.invoke(app, args, input="n\nn\n")
 
     assert result.exit_code == 0, result.output
-    assert "\nJarvislabs CLI setup  jl " in result.output
+    assert "\nJarvislabs CLI setup\n" in result.output
     assert WORDMARK_TOP_ROW not in result.output
 
 

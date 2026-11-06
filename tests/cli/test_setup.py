@@ -129,7 +129,7 @@ def test_setup_stops_after_three_wrong_keys(typed: list[str]) -> None:
     assert "auth" not in config.load_config()
 
 
-def test_setup_from_the_installer_skips_the_guide(typed: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_setup_from_the_installer_skips_the_next_steps(typed: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
     typed += ["jarvis-key"]
     monkeypatch.setenv("JL_FROM_INSTALLER", "1")
 
@@ -141,19 +141,7 @@ def test_setup_from_the_installer_skips_the_guide(typed: list[str], monkeypatch:
     assert "Next:" not in result.output
 
 
-def test_setup_guide_lists_connect_in_the_quick_reference(typed: list[str]) -> None:
-    result = runner.invoke(app, ["setup", "--guide"])
-
-    assert result.exit_code == 0, result.output
-    assert "Logged in as" not in result.output
-    assert "Install agent skills?" not in result.output
-    guide = result.output[result.output.index("Get started") :]
-    quick_reference = guide[guide.index("quick reference") :]
-    assert "$ jl connect" in quick_reference
-    assert "─ coding tools ─" not in guide
-
-
-def test_setup_ends_with_a_neutral_next_step_and_keeps_the_guide_opt_in(typed: list[str]) -> None:
+def test_setup_ends_with_a_neutral_next_step(typed: list[str]) -> None:
     typed += ["jarvis-key"]
 
     result = runner.invoke(app, ["setup"], input="n\n")
@@ -163,7 +151,6 @@ def test_setup_ends_with_a_neutral_next_step_and_keeps_the_guide_opt_in(typed: l
     assert lines[-1] == "Next: see all commands: jl --help"
     assert lines[-2] == ""
     assert "Get started" in result.output
-    assert "jl setup --guide" in result.output
     assert "quick reference" not in result.output
 
 

@@ -9,9 +9,7 @@ from typing import TYPE_CHECKING, Annotated
 
 import questionary
 import typer
-from rich import box
 from rich.markup import escape
-from rich.panel import Panel
 from rich.text import Text
 
 from jarvislabs.cli import options as cli_options, render, state
@@ -293,157 +291,21 @@ def _show_next_steps() -> None:
         render.console.print(
             Text.assemble("  ", (command.ljust(width), "bold accent"), "  ", (detail, "dim")), highlight=False
         )
-    render.hint_line("Full walkthrough: `jl setup --guide`")
-
-
-def _show_getting_started() -> None:
-    """Show getting started guide with Rich panels."""
-    con = render.stdout_console
-
-    con.print()
-
-    from rich.console import Group
-
-    # ── Workflow overview
-    workflow = Text()
-    workflow.append("\n")
-    workflow.append("  write code", style="bold")
-    workflow.append("  →  ", style="dim")
-    workflow.append("run on GPU", style="bold")
-    workflow.append("  →  ", style="dim")
-    workflow.append("monitor", style="bold")
-    workflow.append("  →  ", style="dim")
-    workflow.append("iterate", style="bold")
-    workflow.append("\n")
-
-    # ── Using with coding agents
-    agent_text = Text()
-    agent_text.append("Your coding agents can now use jl to manage GPU instances,\n")
-    agent_text.append("run experiments, and monitor training. Just ask them:\n")
-    agent_text.append("\n")
-    agent_text.append('"Run my training script train.py on an A100 GPU.\n', style="italic")
-    agent_text.append(" Monitor the loss and let me know when it's done.\"\n", style="italic")
-    agent_text.append("\n")
-    agent_text.append("The agent will create instances, upload code, start runs,\n")
-    agent_text.append("monitor logs, and clean up — all using jl commands.")
-
-    # ── Instance lifecycle
-    instance_text = Text()
-    instance_text.append("Containers", style="bold")
-    instance_text.append("  Pre-configured with PyTorch, Jupyter, and IDE. ")
-    instance_text.append("Default.\n")
-    instance_text.append("VMs       ", style="bold")
-    instance_text.append("  Bare-metal SSH access. Use ")
-    instance_text.append("--vm", style="bold")
-    instance_text.append(".\n\n")
-    instance_text.append("Create    ", style="dim")
-    instance_text.append("jl create --gpu A100\n", style="bold")
-    instance_text.append("Create VM ", style="dim")
-    instance_text.append("jl create --gpu A100-80GB --vm\n", style="bold")
-    instance_text.append("List      ", style="dim")
-    instance_text.append("jl list\n", style="bold")
-    instance_text.append("Pause     ", style="dim")
-    instance_text.append("jl pause <id>", style="bold")
-    instance_text.append("              stops GPU billing, keeps storage\n")
-    instance_text.append("Resume    ", style="dim")
-    instance_text.append("jl resume <id>", style="bold")
-    instance_text.append("             pick up where you left off\n")
-    instance_text.append("Destroy   ", style="dim")
-    instance_text.append("jl destroy <id>", style="bold")
-    instance_text.append("            deletes instance + all data\n")
-    instance_text.append("\n")
-    instance_text.append("Tip: always destroy instances you no longer need to stop billing.", style="italic")
-
-    # ── Run management
-    run_text = Text()
-    run_text.append("Run a file     ", style="dim")
-    run_text.append("jl run train.py --gpu A100\n", style="bold")
-    run_text.append("Run a project  ", style="dim")
-    run_text.append("jl run . --script train.py --on <id>\n", style="bold")
-    run_text.append("Check logs     ", style="dim")
-    run_text.append("jl run logs <run_id> --tail 50\n", style="bold")
-    run_text.append("Stop a run     ", style="dim")
-    run_text.append("jl run stop <run_id>\n", style="bold")
-    run_text.append("List runs      ", style="dim")
-    run_text.append("jl run list --status running", style="bold")
-
-    # ── Quick reference
-    quick = Text()
-    quick.append("$ jl gpus", style="bold")
-    quick.append("                  available GPUs and pricing\n", style="dim")
-    quick.append("$ jl status", style="bold")
-    quick.append("                balance, plan usage and coding tools\n", style="dim")
-    quick.append("$ jl connect", style="bold")
-    quick.append("               connect your coding tools\n", style="dim")
-    quick.append("$ jl <command> --help", style="bold")
-    quick.append("   help for any command\n", style="dim")
-    quick.append("  e.g. ", style="dim")
-    quick.append("jl create --help", style="bold")
-    quick.append("  ", style="dim")
-    quick.append("jl run --help", style="bold")
-    quick.append("  ", style="dim")
-    quick.append("jl ssh-key --help", style="bold")
-
-    # ── Wrap everything in one outer panel
-    con.print(
-        Panel(
-            Group(
-                workflow,
-                Panel(
-                    agent_text,
-                    title="[bold]using with coding agents[/bold]",
-                    border_style=render.BORDER_STYLE,
-                    box=box.ROUNDED,
-                    padding=(0, 1),
-                    expand=False,
-                ),
-                Panel(
-                    instance_text,
-                    title="[bold]instance lifecycle[/bold]",
-                    border_style=render.BORDER_STYLE,
-                    box=box.ROUNDED,
-                    padding=(0, 1),
-                    expand=False,
-                ),
-                Panel(
-                    run_text,
-                    title="[bold]run management[/bold]",
-                    border_style=render.BORDER_STYLE,
-                    box=box.ROUNDED,
-                    padding=(0, 1),
-                    expand=False,
-                ),
-                Panel(
-                    quick,
-                    title="[bold]quick reference[/bold]",
-                    border_style=render.BORDER_STYLE,
-                    box=box.ROUNDED,
-                    padding=(0, 1),
-                    expand=False,
-                ),
-            ),
-            title="[bold]Get started[/bold]",
-            border_style=render.BORDER_STYLE,
-            box=box.ROUNDED,
-            padding=(0, 1),
-        )
-    )
+    render.hint_line("See every command: `jl --help`")
 
 
 def _show_header() -> None:
-    """Print the wordmark and version on a first-time setup, else the one-line header.
+    """Print the wordmark on a first-time setup, else the one-line header.
 
     The wordmark needs an interactive terminal at least 80 columns wide, and no --yes.
     """
-    from jarvislabs.cli import update  # update.py imports this module
-
     first_time = not load_config().get("auth", {}).get("token")
     if first_time and not state.yes and render.can_prompt() and render.console.width >= 80:
         render.console.print()
         render.console.print(WORDMARK, markup=False, highlight=False, end="")
         render.console.print()
     else:
-        render.heading("Jarvislabs CLI setup", f"jl {update.current_version()}")
+        render.heading("Jarvislabs CLI setup")
 
 
 # ── Command ──────────────────────────────────────────────────────────────────
@@ -458,16 +320,10 @@ def setup(
             "--agents", help="Comma-separated additional agents: claude-code,all (.agents/skills always installed)"
         ),
     ] = None,
-    guide: Annotated[bool, typer.Option("--guide", help="Show the full getting-started guide.")] = False,
     yes: cli_options.YesOption = False,
 ) -> None:
     """Set up the Jarvislabs CLI: authenticate and install agent skills."""
     cli_options.apply_command_options(yes=yes)
-
-    # The guide is documentation, not a setup run: no login, no skill prompts, no writes.
-    if guide:
-        _show_getting_started()
-        return
 
     _show_header()
 
