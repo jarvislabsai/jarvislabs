@@ -202,6 +202,9 @@ def test_ctrl_c_in_setup_aborts_with_130(typed: list[str], monkeypatch: pytest.M
     typed += ["jarvis-key"]
     if question == "skills":
         ctrl_c_at(monkeypatch, "Install agent skills?")
+    else:
+        # One extra agent has no picker now, so give it a second row to Ctrl-C on.
+        monkeypatch.setitem(setup.ADDITIONAL_AGENTS, "other-agent", ("Other Agent", None))
     # questionary's questions answer None to Ctrl-C.
     monkeypatch.setattr(setup.questionary, "checkbox", lambda message, choices, **kwargs: MagicMock(ask=lambda: None))
 

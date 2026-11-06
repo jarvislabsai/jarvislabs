@@ -210,17 +210,32 @@ def test_install_skill_to_path_overwrites_existing(tmp_path):
 # ── _select_additional_agents_interactive ────────────────────────────────────
 
 
-def test_select_additional_agents_interactive_returns_selection(monkeypatch):
-    monkeypatch.setattr(
-        setup.questionary, "checkbox", lambda message, choices, **kw: MagicMock(ask=lambda: ["claude-code"])
-    )
-    result = setup._select_additional_agents_interactive()
-    assert result == ["claude-code"]
+def _add_second_agent(monkeypatch):
+    """Give the picker a second row, so the interactive path is exercised."""
+    monkeypatch.setitem(setup.ADDITIONAL_AGENTS, "other-agent", ("Other Agent", None))
+
+
+def test_a_single_extra_agent_is_installed_without_a_question(monkeypatch, tmp_path):
+    (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(setup.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", lambda name: None)
+    monkeypatch.setattr(setup.questionary, "checkbox", lambda *args, **kwargs: pytest.fail("asked a one-row picker"))
+
+    assert setup._select_additional_agents_interactive() == ["claude-code"]
+
+
+def test_a_single_extra_agent_not_on_the_machine_is_skipped(monkeypatch, tmp_path):
+    monkeypatch.setattr(setup.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", lambda name: None)
+    monkeypatch.setattr(setup.questionary, "checkbox", lambda *args, **kwargs: pytest.fail("asked a one-row picker"))
+
+    assert setup._select_additional_agents_interactive() == []
 
 
 def test_select_additional_agents_interactive_exits_on_ctrl_c(monkeypatch):
     import typer
 
+    _add_second_agent(monkeypatch)
     monkeypatch.setattr(setup.questionary, "checkbox", lambda message, choices, **kw: MagicMock(ask=lambda: None))
     with pytest.raises(typer.Exit):
         setup._select_additional_agents_interactive()
@@ -231,6 +246,7 @@ def test_the_skills_picker_ticks_installed_agents(monkeypatch, tmp_path):
     (tmp_path / ".claude").mkdir()
     monkeypatch.setattr(setup.Path, "home", lambda: tmp_path)
     monkeypatch.setattr(setup.shutil, "which", lambda name: None)
+    _add_second_agent(monkeypatch)
     seen = {}
 
     def checkbox(message, choices, **kwargs):
@@ -249,6 +265,7 @@ def test_the_skills_picker_says_space_ticks_and_enter_continues(monkeypatch, tmp
     """The picker's hint says Space ticks, and Enter goes on with the ticked agents."""
     monkeypatch.setattr(setup.Path, "home", lambda: tmp_path)
     monkeypatch.setattr(setup.shutil, "which", lambda name: None)
+    _add_second_agent(monkeypatch)
     seen = {}
 
     def checkbox(message, choices, **kwargs):

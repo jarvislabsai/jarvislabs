@@ -1047,11 +1047,11 @@ def hint_line(msg: str) -> None:
 
 
 def rule(title: str = "") -> None:
-    """Print a blank line and a dim divider that opens a phase, with an optional bold title."""
+    """Print a blank line and a dim divider that opens a phase, with a bold title."""
     if state.json_output:
         return
     console.print()
-    console.print(Rule(f"[bold]{title}[/bold]" if title else "", style="dim", align="left"))
+    console.print(Rule(Text(title, "bold") if title else "", style="dim", align="left"))
 
 
 def heading(title: str, note: str = "") -> None:

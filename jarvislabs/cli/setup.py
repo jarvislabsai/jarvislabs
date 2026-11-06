@@ -169,15 +169,20 @@ def _agent_on_machine(key: str) -> bool:
 
 
 def _select_additional_agents_interactive() -> list[str]:
-    """Interactive multi-select for additional agent-specific paths. Returns selected agent keys.
+    """Return the additional agent-specific paths to install for.
 
-    Each agent that is on the machine starts ticked, and Enter goes on with the ticked agents.
+    With one agent there is no question: it is installed when it is on the machine. A picker with a
+    single row is worse than no picker. More agents get the multi-select, each detected one ticked.
     """
     if not ADDITIONAL_AGENTS:
         return []
 
+    detected = [key for key in ADDITIONAL_AGENTS if _agent_on_machine(key)]
+    if len(ADDITIONAL_AGENTS) == 1:
+        return detected
+
     choices = [
-        questionary.Choice(title=label, value=key, checked=_agent_on_machine(key))
+        questionary.Choice(title=label, value=key, checked=key in detected)
         for key, (label, _) in ADDITIONAL_AGENTS.items()
     ]
     question = questionary.checkbox(
@@ -285,7 +290,9 @@ def _show_next_steps() -> None:
     )
     width = max(len(command) for command, _ in rows)
     for command, detail in rows:
-        render.console.print(Text.assemble("  ", (command.ljust(width), "accent"), "  ", detail), highlight=False)
+        render.console.print(
+            Text.assemble("  ", (command.ljust(width), "bold accent"), "  ", (detail, "dim")), highlight=False
+        )
     render.hint_line("Full walkthrough: `jl setup --guide`")
 
 
