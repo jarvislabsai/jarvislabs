@@ -429,6 +429,8 @@ def test_connect_list_names_every_tool(server):
         assert harness.id in result.output
         assert harness.name in result.output
     assert "print only" in result.output
+    # The whole list is data, so a pipe gets the legend too.
+    assert "connect: jl writes the config" in result.stdout
     assert server.calls == []
 
 

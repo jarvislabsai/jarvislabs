@@ -552,7 +552,11 @@ def _print_harnesses() -> None:
     for row in rows:
         label = "connect" if row["support"] == "connect" else "print only"
         render.stdout_console.print(f"  {row['id']:<16} {row['name']:<22} {label}")
-    render.hint_line("connect: jl writes the config · print only: jl prints it to paste by hand")
+    # On stdout with the rows: --list is data, so piping it must keep the whole list.
+    render.stdout_console.print(
+        f"  connect: jl writes the config{render.MARKS['sep']}print only: jl prints it to paste by hand",
+        style="dim",
+    )
 
 
 def _start_command(harness: Harness) -> str:
