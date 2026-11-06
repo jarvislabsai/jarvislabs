@@ -464,6 +464,11 @@ def setup(
     """Set up the Jarvislabs CLI: authenticate and install agent skills."""
     cli_options.apply_command_options(yes=yes)
 
+    # The guide is documentation, not a setup run: no login, no skill prompts, no writes.
+    if guide:
+        _show_getting_started()
+        return
+
     _show_header()
 
     # Step 1: Authentication
@@ -472,12 +477,9 @@ def setup(
     # Step 2: Skill installation
     _skill_install_flow(agents)
 
-    # Show account status, then either the short next steps or the full walkthrough on request.
-    # The install scripts run jl connect next, so either would only sit between the two.
+    # Show account status, then the short next steps.
+    # The install scripts run jl connect next, so they would only sit between the two.
     _show_account_status(client)
     if not os.environ.get("JL_FROM_INSTALLER"):
-        if guide:
-            _show_getting_started()
-        else:
-            _show_next_steps()
+        _show_next_steps()
         render.next_step("see all commands:", ["jl --help"])
