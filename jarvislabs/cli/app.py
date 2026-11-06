@@ -22,18 +22,15 @@ app = typer.Typer(
     help=(
         "[bold cyan]Jarvislabs[/bold cyan]  [bold]GPU cloud[/bold]\n\n"
         "Create GPU instances, run jobs, and call models.\n\n"
-        "[bold]Start here[/bold]\n"
-        "  [bold cyan]jl gpus[/bold cyan]                      see GPUs and prices\n"
-        "  [bold cyan]jl create --gpu A100[/bold cyan]         start a container (Jupyter, IDE)\n"
-        "  [bold cyan]jl run train.py --gpu A100[/bold cyan]   run a script on a fresh GPU\n"
-        "  [bold cyan]jl models list[/bold cyan]               pay-per-token models and prices\n\n"
-        "[bold]Instances[/bold]\n"
-        "  Containers  pre-configured with PyTorch, Jupyter and IDE\n"
-        "  VMs         bare-metal SSH; add --vm\n\n"
-        "[bold]More[/bold]\n"
-        "  [bold cyan]jl deploy managed-models create[/bold cyan]   serve a ready-made model\n"
-        "  [bold cyan]jl setup[/bold cyan]                          install the jl skill for coding agents\n\n"
-        "Every command has --help, e.g. jl create --help."
+        "[bold]Common tasks[/bold]\n"
+        "  [bold cyan]jl gpus[/bold cyan]                        see GPUs and prices\n"
+        "  [bold cyan]jl create --gpu A100[/bold cyan]           start a container\n"
+        "  [bold cyan]jl run train.py --gpu A100[/bold cyan]     run a script on a fresh GPU\n"
+        "  [bold cyan]jl pause <id>[/bold cyan]                  stop billing, keep the disk\n"
+        "  [bold cyan]jl models list[/bold cyan]                 call a model without a deployment\n\n"
+        "Containers come with PyTorch, Jupyter and an IDE; VMs give SSH access (--vm).\n\n"
+        "Using a coding agent? Run jl setup to install the jl skill.\n\n"
+        "Use jl <command> --help for details."
     ),
     rich_markup_mode="rich",
     pretty_exceptions_enable=False,
