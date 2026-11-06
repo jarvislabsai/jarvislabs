@@ -1176,7 +1176,9 @@ def change_row(row: Row, width: int, out: Console) -> None:
 def _status(mark: str, style: str, msg: str | Text, hint: str | Text | None) -> None:
     if state.json_output:
         return
-    _hang(Text(mark + " ", style), msg if isinstance(msg, Text) else Text(msg, "bold"), console)
+    # State owns the whole line, not just the mark: a green check beside white text still reads
+    # as plain text at a glance.
+    _hang(Text(mark + " ", style), msg if isinstance(msg, Text) else Text(msg, style), console)
     if hint:
         _hang(Text("  "), _hint(hint), console)
 

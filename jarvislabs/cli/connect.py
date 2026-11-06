@@ -513,6 +513,7 @@ def _stop_if_up_to_date(connection: Connection | None, models: tuple[ModelInfo, 
         return
     names = [harness.name for harness in installed_tools]
     label = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    render.console.print()
     render.success(f"{label} {'is' if len(names) == 1 else 'are'} already connected")
     render.next_step("check or change them:", ["jl status", "jl disconnect <tool>"])
     raise typer.Exit()

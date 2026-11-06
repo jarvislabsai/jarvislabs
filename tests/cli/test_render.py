@@ -74,12 +74,13 @@ def test_info_and_hints_are_not_faint(coloured):
     assert "\x1b[2m" not in out
 
 
-def test_an_error_colours_its_mark_not_its_message(coloured):
+def test_an_error_colours_the_whole_line(coloured):
     render.error("Test request failed")
 
     line = coloured.getvalue()
     assert re.sub(r"\x1b\[[0-9;]*m", "", line).endswith("Test request failed\n")
     assert "\x1b[1;31m" in line.split("Test request")[0]
+    assert "\x1b[1;31mTest request failed" in line
 
 
 def test_without_colour_marks_and_words_still_carry_the_state(monkeypatch):
