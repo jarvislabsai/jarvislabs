@@ -35,7 +35,7 @@ def test_first_setup_opens_with_the_wordmark(terminal):
 @pytest.mark.parametrize(
     ("saved_key", "columns", "tty", "args"),
     [
-        pytest.param(True, "80", True, ["setup"], id="re-run"),
+        pytest.param(True, "79", True, ["setup"], id="re-run-narrow"),
         pytest.param(False, "79", True, ["setup"], id="narrow"),
         pytest.param(False, "80", False, ["setup"], id="piped"),
         pytest.param(False, "80", True, ["setup", "--yes"], id="yes"),
@@ -64,3 +64,14 @@ def test_setup_asks_for_the_jarvis_key(terminal):
     assert "? Jarvis key: " in result.output
     assert "JarvisLabs" not in result.output
     assert "API token" not in result.output
+
+
+def test_a_repeat_setup_in_a_wide_terminal_still_shows_the_wordmark(terminal):
+    config.save_config({"auth": {"token": "jarvis-key"}})
+    terminal.setenv("COLUMNS", "80")
+    terminal.setattr(render, "can_prompt", lambda: True)
+
+    result = runner.invoke(app, ["setup"], input="n\nn\n")
+
+    assert result.exit_code == 0, result.output
+    assert WORDMARK_TOP_ROW in result.output

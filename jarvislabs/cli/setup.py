@@ -288,17 +288,16 @@ def _show_next_steps() -> None:
     width = max(len(command) for command, _ in rows)
     for command, detail in rows:
         render.console.print(
-            Text.assemble("  ", (command.ljust(width), "bold accent"), "  ", (detail, "dim")), highlight=False
+            Text.assemble("  ", (command.ljust(width), render.ACCENT_BOLD), "  ", (detail, "dim")), highlight=False
         )
 
 
 def _show_header() -> None:
-    """Print the wordmark on a first-time setup, else the one-line header.
+    """Print the wordmark when there is room and someone to see it, else the one-line header.
 
     The wordmark needs an interactive terminal at least 80 columns wide, and no --yes.
     """
-    first_time = not load_config().get("auth", {}).get("token")
-    if first_time and not state.yes and render.can_prompt() and render.console.width >= 80:
+    if not state.yes and render.can_prompt() and render.console.width >= 80:
         render.console.print()
         render.console.print(WORDMARK, markup=False, highlight=False, end="")
         render.console.print()

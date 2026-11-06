@@ -1057,7 +1057,7 @@ def rule(title: str = "") -> None:
     if state.json_output:
         return
     console.print()
-    console.print(Rule(Text(title, "bold accent") if title else "", style=CHROME_STYLE, align="left"))
+    console.print(Rule(Text(title, ACCENT_BOLD) if title else "", style=CHROME_STYLE, align="left"))
 
 
 def heading(title: str, note: str = "") -> None:
