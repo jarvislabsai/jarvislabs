@@ -609,10 +609,8 @@ def _pick_harnesses(show_all: bool = False) -> list[Harness]:
     ticked = [h for h in supported if installed(h)]
     if len(ticked) == 1 and not show_all:
         render.info(f"{ticked[0].name} is the only installed tool.")
-        render.hint_line("Other tools: `jl connect --all` lists them")
         return ticked
     choices: list[questionary.Choice] = [questionary.Choice(h.name, h.id, checked=True) for h in ticked]
-    hidden = [h for h in HARNESSES if h not in ticked]
     if show_all:
         groups = (
             ("Not installed: run the command to see where to get it", [h for h in supported if h not in ticked]),
@@ -623,8 +621,6 @@ def _pick_harnesses(show_all: bool = False) -> list[Harness]:
                 choices.append(questionary.Separator(heading))
                 # questionary puts the reason in brackets.
                 choices += [questionary.Choice(h.name, h.id, disabled=f"jl connect {h.id}") for h in group]
-    elif hidden:
-        render.hint_line("Other tools: `jl connect --all` lists them")
     picked = render.answer(
         questionary.checkbox(
             "Connect which tools?",
@@ -731,10 +727,10 @@ def _continue_on_wallet(wallet: bool, dry_run: bool) -> None:
     """
     if wallet or wallet_chosen():
         render.console.print()
-        render.warning(
-            "On wallet (no subscription)",
-            "Requests are charged to your wallet. Run `jl subscribe` for a plan.",
-        )
+        hint = Text("Requests are charged to your wallet. Run ", "dim")
+        hint.append("jl subscribe", render.ACCENT_BOLD)
+        hint.append(" for a plan.", "dim")
+        render.warning("On wallet (no subscription)", hint)
         render.console.print()
         return
     if state.yes or not _can_ask():

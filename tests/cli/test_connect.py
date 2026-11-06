@@ -978,7 +978,6 @@ def test_a_single_installed_tool_skips_the_picker(subscribed, terminal):
     assert result.exit_code == 0, result.output
     assert terminal.picker is None
     assert "OpenCode is the only installed tool" in result.output
-    assert "Other tools: jl connect --all lists them" in result.output
 
 
 def test_the_picker_connects_the_ticks_without_asking_again(subscribed, monkeypatch):
