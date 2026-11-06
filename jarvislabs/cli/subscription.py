@@ -24,6 +24,7 @@ from jarvislabs.constants import SUBSCRIBE_URL
 from jarvislabs.exceptions import NotFoundError
 
 subscription_app = typer.Typer(
+    context_settings=cli_options.HELP_CONTEXT,
     name="subscription",
     help="Your Models API subscription: usage, paying from the wallet, billing.",
     invoke_without_command=True,

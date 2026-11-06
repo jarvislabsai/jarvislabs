@@ -29,7 +29,11 @@ ImageOption = Annotated[
 # With a prompt given, piped input is added only if it starts arriving within this time (see _read_stdin).
 STDIN_WAIT_S = 1.0
 
-models_app = typer.Typer(name="models", help="Pay-per-token model APIs: call a model directly, no deployment needed.")
+models_app = typer.Typer(
+    context_settings=cli_options.HELP_CONTEXT,
+    name="models",
+    help="Pay-per-token model APIs: call a model directly, no deployment needed.",
+)
 app.add_typer(models_app, rich_help_panel="Token Factory")
 
 

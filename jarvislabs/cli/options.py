@@ -9,6 +9,7 @@ from jarvislabs.cli import state
 
 JsonOption = Annotated[bool, typer.Option("--json", help="Output as JSON.")]
 YesOption = Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompts.")]
+HELP_CONTEXT = {"help_option_names": ["-h", "--help"]}
 
 
 def apply_command_options(*, json_output: bool = False, yes: bool = False) -> None:

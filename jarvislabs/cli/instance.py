@@ -145,7 +145,11 @@ def instance_get(
     render.instance_detail(inst, currency)
 
 
-@app.command("create", rich_help_panel=_MACHINE_PANEL)
+@app.command(
+    "create",
+    rich_help_panel=_MACHINE_PANEL,
+    epilog="Examples:\n\n  jl create --gpu A100\n\n  jl create --gpu H100 --vm\n\n  jl create --cpu --vcpus 8 --ram 32 --vm",
+)
 def instance_create(
     gpu: Annotated[str | None, typer.Option("--gpu", "-g", help="GPU type (e.g. H100, A100, L4).")] = None,
     vm: Annotated[bool, typer.Option("--vm", help="Create a VM instance (SSH-only, no container).")] = False,

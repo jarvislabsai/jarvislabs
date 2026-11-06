@@ -225,16 +225,20 @@ def templates(
     render.templates_table(tpls)
 
 
-ssh_key_app = typer.Typer(name="ssh-key", help="Manage SSH keys.")
+ssh_key_app = typer.Typer(context_settings=cli_options.HELP_CONTEXT, name="ssh-key", help="Manage SSH keys.")
 app.add_typer(ssh_key_app, rich_help_panel="Infrastructure")
 
-scripts_app = typer.Typer(name="scripts", help="Manage startup scripts.")
+scripts_app = typer.Typer(context_settings=cli_options.HELP_CONTEXT, name="scripts", help="Manage startup scripts.")
 app.add_typer(scripts_app, rich_help_panel="Infrastructure")
 
-filesystem_app = typer.Typer(name="filesystem", help="Manage persistent filesystems.")
+filesystem_app = typer.Typer(
+    context_settings=cli_options.HELP_CONTEXT, name="filesystem", help="Manage persistent filesystems."
+)
 app.add_typer(filesystem_app, rich_help_panel="Infrastructure")
 
-vpc_app = typer.Typer(name="vpc", help="Manage VPCs (private networks for VMs).")
+vpc_app = typer.Typer(
+    context_settings=cli_options.HELP_CONTEXT, name="vpc", help="Manage VPCs (private networks for VMs)."
+)
 app.add_typer(vpc_app, rich_help_panel="Infrastructure")
 
 

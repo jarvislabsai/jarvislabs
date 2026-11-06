@@ -31,6 +31,7 @@ SETTINGS_DOCS_NOTE = (
 )
 
 deploy_app = typer.Typer(
+    context_settings=cli_options.HELP_CONTEXT,
     name="deploy",
     epilog=SETTINGS_DOCS_NOTE,
     help=(
@@ -50,6 +51,7 @@ deploy_app = typer.Typer(
 app.add_typer(deploy_app, rich_help_panel="[bold bright_yellow]Serverless (Beta)[/bold bright_yellow]")
 
 managed_app = typer.Typer(
+    context_settings=cli_options.HELP_CONTEXT,
     name="managed-models",
     help="List and deploy Jarvislabs-managed models [bold bright_yellow](beta)[/bold bright_yellow].",
 )

@@ -253,8 +253,8 @@ def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
         resolved = _install_skill_to_path(content, path)
         installed.append((label, resolved))
 
-    extras = [label for label, _ in installed[1:]]
-    summary = f"for {len(UNIVERSAL_AGENTS)} agents" + (f" + {', '.join(extras)}" if extras else "")
+    names = [*UNIVERSAL_AGENTS, *(label for label, _ in installed[1:])]
+    summary = f"for {', '.join(names[:-1])} and {names[-1]}" if len(names) > 1 else f"for {names[0]}"
     render.success(f"Agent skills installed  {summary}")
     render.console.print(Text("  " + " · ".join(render.short_path(path) for _, path in installed), "dim"))
 

@@ -81,7 +81,7 @@ run_app = typer.Typer(
     cls=RunCommandGroup,
     help="Start and inspect managed runs.",
     rich_markup_mode="rich",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    context_settings={**cli_options.HELP_CONTEXT, "allow_extra_args": True, "ignore_unknown_options": True},
 )
 app.add_typer(run_app, rich_help_panel="Workloads")
 
