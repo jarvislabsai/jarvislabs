@@ -525,11 +525,11 @@ def test_no_tool_installed_points_to_install_pages(subscribed, terminal, tmp_pat
 
     assert result.exit_code == 0, result.output
     assert (
-        "! No supported coding tool found Install one of these, then run jl connect: "
+        "! No supported coding tool found Install one, then run jl connect: "
         f"OpenCode {OPENCODE_INSTALL} pi {PI_INSTALL} Kilo {KILO_INSTALL} "
         "Using Claude Code, Codex, Cursor, VS Code Copilot or Zed? jl doesn't set them up yet: "
-        "see https://docs.jarvislabs.ai/models-api/harnesses, or print Zed's config to paste "
-        "with jl connect --print zed."
+        "https://docs.jarvislabs.ai/models-api/harnesses. "
+        "Just installed one? Open a new terminal, then run jl connect."
     ) in said(result)
     assert terminal.picker is None
     # Told before the subscription check: there's nothing to pay for yet.

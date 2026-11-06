@@ -531,28 +531,32 @@ def _stop_without_a_tool() -> None:
     supported = [h for h in HARNESSES if h.support == "connect"]
     if any(installed(h) for h in supported):
         return
-    # Three popular ones, so that the list stays short; the picker names the rest once one is installed.
+    # Three popular ones, so the list stays short; --list has the rest.
     offered = [h for i in ("opencode", "pi", "kilo") for h in supported if h.id == i]
     width = max(len(h.name) for h in offered)
     coming = [h for h in HARNESSES if h.support == "coming_soon"]
-    lines = [
-        render._hint("Install one of these, then run `jl connect`:"),
-        *(Text.assemble((f"{h.name:<{width}}  ", "bold"), (h.install_url, "accent")) for h in offered),
-    ]
+
+    body = Text()
+    body.append("Install one, then run ", "dim")
+    body.append("jl connect", render.ACCENT_BOLD)
+    body.append(":\n", "dim")
+    for harness in offered:
+        body.append(f"{harness.name:<{width}}  ", "bold")
+        body.append(harness.install_url, "accent")
+        body.append("\n")
     if coming:
         names = ", ".join(h.name for h in coming[:-1])
         names = f"{names} or {coming[-1].name}" if names else coming[-1].name
-        printed = "".join(
-            f", or print {h.name}'s config to paste with `jl connect --print {h.id}`" for h in coming if h.writer
-        )
-        lines.append(render._hint(f"Using {names}? jl doesn't set them up yet: see {HARNESS_DOCS_URL}{printed}."))
-    lines.append(render._hint("Just installed one? Open a new terminal, then run `jl connect`."))
-    body = Text()
-    for line in lines:
-        if body:
-            body.append("\n")
-        body.append(line)
+        body.append(f"\nUsing {names}? jl doesn't set them up yet: ", "dim")
+        body.append(HARNESS_DOCS_URL, "accent")
+        body.append(".", "dim")
+    body.append("\n\nJust installed one? Open a new terminal, then run ", "dim")
+    body.append("jl connect", render.ACCENT_BOLD)
+    body.append(".", "dim")
+
+    render.console.print()
     render.warning("No supported coding tool found", body)
+    raise typer.Exit()
     raise typer.Exit()
 
 
