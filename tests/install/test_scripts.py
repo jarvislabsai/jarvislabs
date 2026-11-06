@@ -63,8 +63,8 @@ def test_install_ps1_says_what_to_run_next():
     assert (
         "function Show-JlNext {\n"
         "    Write-Host 'jl is installed. Next:'\n"
+        "    Write-Host '  jl setup     sign in and install agent skills'\n"
         "    Write-Host '  jl status    see your coding tools'\n"
-        "    Write-Host '  jl connect   connect another one'\n"
         "}\n"
     ) in ps1
     # On every path that installed jl, including the one that skips setup.
@@ -127,7 +127,7 @@ SHELLS = [shell for shell in ("/bin/dash", "/bin/bash") if Path(shell).exists()]
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="install.sh is for macOS and Linux")
 
 # What the installer ends on, so a new user knows what jl can do next.
-NEXT_STEPS = ["  jl status    see your coding tools", "  jl connect   connect another one"]
+NEXT_STEPS = ["  jl setup     sign in and install agent skills", "  jl status    see your coding tools"]
 
 
 @posix_only

@@ -12,8 +12,8 @@
 # What to run later, printed last so it's what the window ends on.
 function Show-JlNext {
     Write-Host 'jl is installed. Next:'
+    Write-Host '  jl setup     sign in and install agent skills'
     Write-Host '  jl status    see your coding tools'
-    Write-Host '  jl connect   connect another one'
 }
 
 function Install-Jl {

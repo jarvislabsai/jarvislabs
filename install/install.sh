@@ -70,8 +70,8 @@ main() {
         if [ -n "$next_step" ]; then
             echo "$next_step"
         fi
+        echo "  jl setup     sign in and install agent skills"
         echo "  jl status    see your coding tools"
-        echo "  jl connect   connect another one"
     fi
     return "$status"
 }
