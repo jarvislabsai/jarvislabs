@@ -47,7 +47,9 @@ if TYPE_CHECKING:
 TABLE_BOX = box.ROUNDED
 HEADER_STYLE = "bold"
 TITLE_STYLE = "bold"
-BORDER_STYLE = "dim"
+# Borders and rules are grey, not dim: Rich dims a panel title with its border style, which made
+# every cyan title faint. bright_black is quiet without touching the title.
+CHROME_STYLE = "bright_black"
 
 # Four hues, each with one job: green done or added, yellow needs attention or changes a setting of the
 # user's, red failed or removed, cyan (accent) where the user acts and every command to type.
@@ -133,7 +135,7 @@ def account_status(info, bal, metrics, sym: str) -> None:
     panel = Panel(
         content,
         title=f"[bold cyan]{MARKS['badge']}Account[/bold cyan]",
-        border_style=BORDER_STYLE,
+        border_style=CHROME_STYLE,
         box=box.ROUNDED,
         padding=(1, 2),
         expand=False,
@@ -170,7 +172,7 @@ def subscription_usage(usage: SubscriptionUsage | None) -> None:
     table.add_row("Use balance", "on" if usage.use_balance else "off")
     stdout_console.print(
         Panel(
-            table, title="[bold cyan]Subscription[/bold cyan]", border_style=BORDER_STYLE, padding=(1, 2), expand=False
+            table, title="[bold cyan]Subscription[/bold cyan]", border_style=CHROME_STYLE, padding=(1, 2), expand=False
         )
     )
 
@@ -212,7 +214,7 @@ def harness_status(rows: list[dict[str, Any]]) -> None:
             )
     stdout_console.print(
         Panel(
-            table, title="[bold cyan]Coding tools[/bold cyan]", border_style=BORDER_STYLE, padding=(1, 2), expand=False
+            table, title="[bold cyan]Coding tools[/bold cyan]", border_style=CHROME_STYLE, padding=(1, 2), expand=False
         )
     )
 
@@ -231,7 +233,7 @@ def _table(title: str | None = None, **kwargs) -> Table:
         box=TABLE_BOX,
         title_style=TITLE_STYLE,
         header_style=HEADER_STYLE,
-        border_style=BORDER_STYLE,
+        border_style=CHROME_STYLE,
         **kwargs,
     )
 
@@ -241,7 +243,7 @@ def _print_detail_table(rows: list[tuple[str, str]], *, spaced: bool = False) ->
 
     ``spaced`` adds a blank line after each row, for views with multi-line values.
     """
-    table = Table(show_header=False, box=None, padding=(0, 2, int(spaced), 2), border_style=BORDER_STYLE)
+    table = Table(show_header=False, box=None, padding=(0, 2, int(spaced), 2), border_style=CHROME_STYLE)
     table.add_column("Field", style="dim")
     # Avoid cutting off long values like notebook URLs with auth tokens.
     table.add_column("Value", overflow="fold")
@@ -1055,7 +1057,7 @@ def rule(title: str = "") -> None:
     if state.json_output:
         return
     console.print()
-    console.print(Rule(Text(title, "bold accent") if title else "", style="dim", align="left"))
+    console.print(Rule(Text(title, "bold accent") if title else "", style=CHROME_STYLE, align="left"))
 
 
 def heading(title: str, note: str = "") -> None:
@@ -1376,7 +1378,7 @@ def managed_settings_help() -> None:
     grid.add_column()
     for name, meaning in MANAGED_SETTINGS_HELP:
         grid.add_row(name, meaning)
-    console.print(Panel(grid, title="What these settings mean", title_align="left", border_style=BORDER_STYLE))
+    console.print(Panel(grid, title="What these settings mean", title_align="left", border_style=CHROME_STYLE))
 
 
 def _model_label(dep) -> str:
