@@ -20,25 +20,8 @@ rich_utils.STYLE_COMMANDS_PANEL_BORDER = "bright_black"
 app = typer.Typer(
     name="jl",
     help=(
-        "Create GPU instances, run jobs, and call models.\n\n"
-        "[bold]Get started[/bold]\n"
-        "[bold]GPUs[/bold]\n"
-        "  [bold cyan]jl gpus[/bold cyan]                          see GPUs and prices\n"
-        "  [bold cyan]jl create --gpu A100[/bold cyan]             start a container, or a VM with --vm\n"
-        "  [bold cyan]jl run train.py --gpu A100[/bold cyan]       run a script on a fresh GPU\n"
-        "  [bold cyan]jl pause <id>[/bold cyan]                    stop billing, keep the disk\n\n"
-        "[bold]Models[/bold]\n"
-        "  [bold cyan]jl models list[/bold cyan]                   call a model, no deployment\n"
-        '  [bold cyan]jl models chat <model> "Hello"[/bold cyan]   send a prompt\n\n'
-        "[bold]Deploy[/bold]\n"
-        "  [bold cyan]jl deploy managed-models create[/bold cyan]  serve a model\n\n"
-        "[bold]Coding plan[/bold]\n"
-        "  [bold cyan]jl connect[/bold cyan]                       set up OpenCode, Cline, pi and more\n"
-        "  [bold cyan]jl subscribe[/bold cyan]                     get a plan\n\n"
-        "[bold]Account[/bold]\n"
-        "  [bold cyan]jl status[/bold cyan]                        balance, plan and coding tools\n\n"
-        "Using a coding agent? Run jl setup to install the jl skill.\n\n"
-        "Use jl <command> --help for details."
+        "GPU cloud, model APIs, and serverless deployments from your terminal.\n\n"
+        "Using a coding agent? jl setup installs the jl skill."
     ),
     rich_markup_mode="rich",
     pretty_exceptions_enable=False,

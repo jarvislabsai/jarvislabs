@@ -173,7 +173,10 @@ def instance_create(
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Create a new GPU instance (container or VM)."""
+    """Create a new GPU instance.
+
+    A container comes with PyTorch, Jupyter and an IDE. Add --vm for a bare-metal VM with SSH only.
+    """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
 
     if cpu:
