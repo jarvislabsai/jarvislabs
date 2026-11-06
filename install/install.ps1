@@ -38,7 +38,7 @@ function Install-Jl {
     Write-Host 'Installing jl...'
     uv tool install --upgrade $spec
     if ($LASTEXITCODE) { throw 'Installing jl failed.' }
-    $bin = uv tool dir --bin
+    $bin = (Resolve-Path (uv tool dir --bin)).Path
     uv tool update-shell
     if ($LASTEXITCODE) { Write-Host "Add $bin to your PATH." }
     # irm | iex runs in the user's session, so jl also runs in this window, unlike after install.sh.

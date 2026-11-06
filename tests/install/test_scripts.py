@@ -96,17 +96,21 @@ def run_in_a_terminal(argv: list[str], env: dict[str, str], ctrl_c_after: bytes 
     return output.decode(), os.waitstatus_to_exitcode(status)
 
 
-def fake_install(tmp_path: Path, jl: str, update_shell: int = 0) -> tuple[list[str], dict[str, str]]:
+def fake_install(
+    tmp_path: Path, jl: str, update_shell: int = 0, unnormalized: bool = False
+) -> tuple[list[str], dict[str, str]]:
     """Set up install.sh's run with uv installed and ``jl`` as jl's script; return its argv and env.
 
     uv's tool folder, where jl lands, isn't on the PATH the script starts with. ``update_shell`` is
-    the exit code of `uv tool update-shell`.
+    the exit code of `uv tool update-shell`. ``unnormalized`` makes `uv tool dir --bin` report the
+    folder with ".." in it, as uv does on Linux.
     """
     fakes, jl_bin = tmp_path / "fakes", tmp_path / "jl-bin"
     fakes.mkdir()
     jl_bin.mkdir()
+    shown = f"{jl_bin}/../{jl_bin.name}" if unnormalized else jl_bin
     (fakes / "uv").write_text(
-        f'#!/bin/sh\n[ "$1 $2" = "tool dir" ] && echo {jl_bin}\n'
+        f'#!/bin/sh\n[ "$1 $2" = "tool dir" ] && echo {shown}\n'
         f'[ "$1 $2" = "tool update-shell" ] && exit {update_shell}\nexit 0\n'
     )
     (jl_bin / "jl").write_text("#!/bin/sh\n" + jl)
@@ -143,6 +147,20 @@ def test_the_installer_says_to_open_a_new_terminal(tmp_path, on_path):
 
 
 @posix_only
+def test_a_uv_bin_path_with_dots_does_not_look_like_another_jl(tmp_path):
+    # uv on Linux reports the bin folder as ~/.local/share/../bin. The user already has ~/.local/bin
+    # on PATH, so a string compare would call the jl just installed someone else's.
+    script, env = fake_install(tmp_path, 'echo "jl $1 ran"\n', unnormalized=True)
+    env["PATH"] = env["JL_BIN"] + ":" + env["PATH"]
+
+    output, code = run_in_a_terminal(["/bin/sh", *script], env)
+
+    assert code == 0
+    assert "Another jl at" not in output
+    assert output.splitlines()[-3] == "jl is installed. Next:"
+
+
+@posix_only
 def test_the_installer_warns_about_another_jl_earlier_on_the_path(tmp_path):
     script, env = fake_install(tmp_path, 'echo "jl $1 ran"\n')
     earlier = tmp_path / "earlier-bin"
@@ -163,6 +181,7 @@ def test_install_ps1_warns_about_another_jl_earlier_on_the_path():
 
     # Against the PATH the window started with, before jl's folder goes in front of it.
     assert "$startPath = $env:Path" in ps1
+    assert "(Resolve-Path (uv tool dir --bin)).Path" in ps1
     assert "$env:Path = $startPath\n    $earlier = Get-Command jl -ErrorAction SilentlyContinue" in ps1
     assert (
         'Write-Host "Another jl at $($earlier.Source) comes first on your PATH: remove it, or open a new terminal."'

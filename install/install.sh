@@ -28,6 +28,9 @@ main() {
     echo "Installing jl..."
     uv tool install --upgrade "$spec"
     bin="$(uv tool dir --bin)"
+    # uv can report the bin folder with ".." in it (e.g. ~/.local/share/../bin); resolve it, or the
+    # comparisons below miss that this is the jl the window already runs.
+    bin="$(cd "$bin" && pwd)"
     if uv tool update-shell; then
         next_step="jl is installed. Open a new terminal, then:"
     else
