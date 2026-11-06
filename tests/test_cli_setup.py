@@ -246,7 +246,7 @@ def test_the_skills_picker_ticks_installed_agents(monkeypatch, tmp_path):
 
 
 def test_the_skills_picker_says_space_ticks_and_enter_continues(monkeypatch, tmp_path):
-    """The picker's hint says Space ticks, and Enter goes on with the ticked tools."""
+    """The picker's hint says Space ticks, and Enter goes on with the ticked agents."""
     monkeypatch.setattr(setup.Path, "home", lambda: tmp_path)
     monkeypatch.setattr(setup.shutil, "which", lambda name: None)
     seen = {}
@@ -261,7 +261,7 @@ def test_the_skills_picker_says_space_ticks_and_enter_continues(monkeypatch, tmp
 
     from jarvislabs.cli import render
 
-    assert f"Space ticks{render.MARKS['sep']}Enter goes on with the ticked tools" in seen["instruction"]
+    assert f"Space ticks{render.MARKS['sep']}Enter goes on with the ticked agents" in seen["instruction"]
 
 
 # ── _skill_install_flow ──────────────────────────────────────────────────────

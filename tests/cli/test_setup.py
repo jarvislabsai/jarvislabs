@@ -151,17 +151,17 @@ def test_setup_guide_lists_connect_in_the_quick_reference(typed: list[str]) -> N
     quick_reference = guide[guide.index("quick reference") :]
     assert "$ jl connect" in quick_reference
     assert "─ coding tools ─" not in guide
-    assert result.output.splitlines()[-1] == "Next: connect your coding tools: jl connect"
+    assert result.output.splitlines()[-1] == "Next: see all commands: jl --help"
 
 
-def test_setup_ends_with_connect_and_keeps_the_guide_opt_in(typed: list[str]) -> None:
+def test_setup_ends_with_a_neutral_next_step_and_keeps_the_guide_opt_in(typed: list[str]) -> None:
     typed += ["jarvis-key"]
 
     result = runner.invoke(app, ["setup"], input="n\n")
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
-    assert lines[-1] == "Next: connect your coding tools: jl connect"
+    assert lines[-1] == "Next: see all commands: jl --help"
     assert lines[-2] == ""
     assert "Get started" in result.output
     assert "jl setup --guide" in result.output
@@ -226,7 +226,7 @@ def test_setup_without_a_terminal_logs_in_and_skips_the_skills(script: Path) -> 
 
     assert result.exit_code == 0, result.output
     assert "Logged in as Ada" in result.output
-    assert "Skipped agent skills: run jl setup --agents universal to add them." in " ".join(result.output.split())
+    assert "Skipped agent skills" not in result.output
     assert config.load_config()["auth"] == {"token": "jarvis-key"}
     assert not script.exists()
 

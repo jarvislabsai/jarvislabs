@@ -1046,6 +1046,14 @@ def hint_line(msg: str) -> None:
     _hang(Text("  "), _hint(msg), console)
 
 
+def rule(title: str = "") -> None:
+    """Print a blank line and a dim divider that opens a phase, with an optional bold title."""
+    if state.json_output:
+        return
+    console.print()
+    console.print(Rule(f"[bold]{title}[/bold]" if title else "", style="dim", align="left"))
+
+
 def heading(title: str, note: str = "") -> None:
     """Print a blank line, then a bold heading that opens a phase, with an optional note after it."""
     if state.json_output:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from importlib.metadata import version
 from unittest.mock import MagicMock
 
 import pytest
@@ -30,7 +29,6 @@ def test_first_setup_opens_with_the_wordmark(terminal):
 
     assert result.exit_code == 0, result.output
     assert WORDMARK_TOP_ROW in result.output
-    assert f"jl {version('jarvislabs')}" in result.output
     assert "CLI Setup" not in result.output
 
 

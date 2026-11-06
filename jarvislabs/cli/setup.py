@@ -85,7 +85,9 @@ def _login_flow(token: str | None) -> Client:
     # Prompt for token; a typed key that fails is asked for again, up to 3 tries.
     typed = not token
     if typed:
+        render.rule("Sign in")
         render.info("Get your Jarvis key at: https://jarvislabs.ai/settings/api-keys")
+        render.console.print()
     for attempt in range(1, 4):
         if typed:
             token = _ask_key()
@@ -179,9 +181,9 @@ def _select_additional_agents_interactive() -> list[str]:
         for key, (label, _) in ADDITIONAL_AGENTS.items()
     ]
     question = questionary.checkbox(
-        "Also install for:",
+        "Extra agent folders (optional):",
         choices=choices,
-        instruction=f"\n  Space ticks{render.MARKS['sep']}Enter goes on with the ticked tools",
+        instruction=f"\n  Space ticks{render.MARKS['sep']}Enter goes on with the ticked agents",
         style=render.PROMPT_STYLE,
     )
     return render.answer(question)
@@ -217,16 +219,13 @@ def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
     Returns:
         A pair per skill file installed: the agents it serves, and its path.
     """
-    render.heading("Agent skills")
-    render.hint_line(
-        "Skills teach your coding agents how to use jl to create and manage GPU instances, "
-        "run training scripts, and monitor experiments on your behalf."
-    )
+    render.rule("Agent skills")
+    render.info("Skills teach your coding agents how to use jl.")
+    render.console.print()
 
     # Yes in a terminal, where the installer tells users to press Enter at every question; no for a script.
     asked = "Install agent skills?"
     if not agents_flag and not render.confirm(asked, skip=state.yes, default=render.can_prompt(), optional=True):
-        render.info("Skipped agent skills: run jl setup --agents universal to add them.")
         return []
 
     # Determine additional agent-specific installs (validate before any writes)
@@ -278,7 +277,7 @@ def _show_account_status(client: Client) -> None:
 
 def _show_next_steps() -> None:
     """Print three commands to try and where the full walkthrough lives, before the next action."""
-    render.heading("Get started")
+    render.rule("Get started")
     rows = (
         ("jl gpus", "GPUs and prices"),
         ("jl run train.py --gpu A100", "run a script on a GPU"),
@@ -435,7 +434,7 @@ def _show_header() -> None:
     if first_time and not state.yes and render.can_prompt() and render.console.width >= 80:
         render.console.print()
         render.console.print(WORDMARK, markup=False, highlight=False, end="")
-        render.console.print(f"jl {update.current_version()}", style="dim", highlight=False)
+        render.console.print()
     else:
         render.heading("Jarvislabs CLI setup", f"jl {update.current_version()}")
 
@@ -474,4 +473,4 @@ def setup(
             _show_getting_started()
         else:
             _show_next_steps()
-        render.next_step("connect your coding tools:", ["jl connect"])
+        render.next_step("see all commands:", ["jl --help"])
