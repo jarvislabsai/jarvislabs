@@ -136,7 +136,7 @@ def test_setup_from_the_installer_skips_the_next_steps(typed: list[str], monkeyp
     result = runner.invoke(app, ["setup"], input="n\n")
 
     assert result.exit_code == 0, result.output
-    assert "get started" not in result.output
+    assert "GET STARTED" not in result.output
     assert "jl create --gpu A100" not in result.output
     assert "Next:" not in result.output
 
@@ -150,7 +150,7 @@ def test_setup_ends_with_a_neutral_next_step(typed: list[str]) -> None:
     lines = result.output.splitlines()
     assert lines[-1] == "Next: see all commands: jl --help"
     assert lines[-2] == ""
-    assert "Get started" in result.output
+    assert "GET STARTED" in result.output
     assert "quick reference" not in result.output
 
 
@@ -179,8 +179,10 @@ def test_the_installed_skill_path_is_a_dim_hint(monkeypatch, tmp_path):
 
     setup._skill_install_flow("universal")
 
-    line = next(line for line in buffer.getvalue().splitlines() if "Agent skill installed" in line)
-    assert "\x1b[2m~/skills/SKILL.md\x1b[0m" in line
+    out = buffer.getvalue()
+    assert "Agent skills installed" in out
+    (path_line,) = [line for line in out.splitlines() if "~/skills/SKILL.md" in line]
+    assert "\x1b[2m" in path_line
 
 
 @pytest.mark.parametrize("question", ["skills", "agents"])

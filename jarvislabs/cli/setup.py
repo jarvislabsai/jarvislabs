@@ -83,7 +83,7 @@ def _login_flow(token: str | None) -> Client:
     # Prompt for token; a typed key that fails is asked for again, up to 3 tries.
     typed = not token
     if typed:
-        render.rule("Sign in")
+        render.rule("SIGN IN")
         render.info("Get your Jarvis key at: https://jarvislabs.ai/settings/api-keys")
         render.console.print()
     for attempt in range(1, 4):
@@ -222,7 +222,7 @@ def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
     Returns:
         A pair per skill file installed: the agents it serves, and its path.
     """
-    render.rule("Agent skills")
+    render.rule("AGENT SKILLS")
     render.info("Skills teach your coding agents how to use jl.")
     render.console.print()
 
@@ -253,11 +253,10 @@ def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
         resolved = _install_skill_to_path(content, path)
         installed.append((label, resolved))
 
-    for agents_for, path in installed:
-        render.success(
-            Text.assemble("Agent skill installed  ", (render.short_path(path), "dim")),
-            f"for {agents_for}",
-        )
+    extras = [label for label, _ in installed[1:]]
+    summary = f"for {len(UNIVERSAL_AGENTS)} agents" + (f" + {', '.join(extras)}" if extras else "")
+    render.success(f"Agent skills installed  {summary}")
+    render.console.print(Text("  " + " · ".join(render.short_path(path) for _, path in installed), "dim"))
 
     return installed
 
@@ -280,7 +279,7 @@ def _show_account_status(client: Client) -> None:
 
 def _show_next_steps() -> None:
     """Print three commands to try and where the full walkthrough lives, before the next action."""
-    render.rule("Get started")
+    render.rule("GET STARTED")
     rows = (
         ("jl gpus", "GPUs and prices"),
         ("jl run train.py --gpu A100", "run a script on a GPU"),
@@ -291,7 +290,6 @@ def _show_next_steps() -> None:
         render.console.print(
             Text.assemble("  ", (command.ljust(width), "bold accent"), "  ", (detail, "dim")), highlight=False
         )
-    render.hint_line("See every command: `jl --help`")
 
 
 def _show_header() -> None:
@@ -335,6 +333,7 @@ def setup(
 
     # Show account status, then the short next steps.
     # The install scripts run jl connect next, so they would only sit between the two.
+    render.rule()
     _show_account_status(client)
     if not os.environ.get("JL_FROM_INSTALLER"):
         _show_next_steps()
