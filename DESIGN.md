@@ -120,9 +120,12 @@ Rules:
     tools”, not “Connect the tools”.
 43. Name the tools/agents. “9 agents” and “2 tools” make the user ask which.
 44. One idea per block; one action per hint. Hints are at most two lines.
-45. A view that changes state ends with what changed and what to do next. A read-only view ends with
-    the next inspect/act command.
-46. No artificial delay, typewriter effect, or press-Enter gate. A question is the only read gate.
+45. Multi-step onboarding (`setup`, `connect`) ends with what changed and one next action. An overview
+    (`status`) may suggest the next inspect/act command. A one-shot cleanup (`disconnect`, `logout`) ends
+    on its result; it does not need a Next block.
+46. A phase heading is for a multi-step flow. Do not put one on a one-shot command; its preview or
+    result is the heading.
+47. No artificial delay, typewriter effect, or press-Enter gate. A question is the only read gate.
 
 ## Automated pass
 

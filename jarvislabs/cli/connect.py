@@ -57,7 +57,6 @@ from jarvislabs.config import (
     Replaced,
     load_config,
     load_connection,
-    resolve_token,
     save_config,
     save_connection,
     wallet_chosen,
@@ -303,26 +302,9 @@ def disconnect(
     With no tool named, jl asks which of the connected ones. Disconnecting the last connected harness also revokes this machine's key. Logged out, jl keeps the key saved and says how to revoke it: a later disconnect, logged in, revokes a key that no harness holds. The backups jl saved at connect stay, and their paths are printed.
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
-    if not state.json_output:
-        render.rule("DISCONNECT TOOLS")
-        render.info("Remove the Jarvislabs provider from your coding tools.")
     chosen = [_named_harness(harness_id)] if harness_id is not None else _picked_harnesses(load_connection())
     for harness in chosen:
-        _disconnect(harness)
-    _next_after_disconnect()
-
-
-def _next_after_disconnect() -> None:
-    """End a disconnect with the one thing to do next, depending on what is left."""
-    if state.json_output:
-        return
-    connection = load_connection()
-    if connection and connection.harnesses:
-        render.next_step("see what is still connected", ["jl status"])
-    elif resolve_token():
-        render.next_step("connect a tool", ["jl connect"])
-    else:
-        render.next_step("set up again", ["jl setup"])
+        _disconnect(harness, spaced=True)
 
 
 def _named_harness(harness_id: str) -> Harness:
@@ -371,8 +353,13 @@ def _picked_harnesses(connection: Connection | None) -> list[Harness]:
     return [harness for harness in connected if harness.id in picked]
 
 
-def _disconnect(harness: Harness) -> None:
-    """Remove jl's setup from one harness, revoking this machine's key when it was the last."""
+def _disconnect(harness: Harness, *, spaced: bool = False) -> None:
+    """Remove jl's setup from one harness, revoking this machine's key when it was the last.
+
+    Args:
+        harness: The tool to clean up.
+        spaced: Put a blank line before the result. The standalone command does; logout's batch does not.
+    """
     connection = load_connection()
     if connection and not connection.harnesses:
         # Kept by a disconnect without a Jarvis key: no harness holds this key any more.
@@ -434,6 +421,8 @@ def _disconnect(harness: Harness) -> None:
             f"or revoke {connection.name} at {API_KEYS_URL}."
         )
     hints += [f"your config from before jl is still at {render.short_path(backup)}" for backup in backups]
+    if spaced:
+        render.console.print()
     render.success(f"{harness.name} disconnected", "\n".join(hints))
 
 
