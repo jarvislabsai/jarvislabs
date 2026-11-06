@@ -1730,7 +1730,7 @@ def test_connect_without_a_subscription_offers_subscribe_or_wallet(unsubscribed,
     assert result.exit_code == 0, result.output
     # The fact, then what to do.
     assert "! No subscription found\n  Just subscribed? Give it a minute, then run jl connect again.\n" in result.output
-    assert picker.offered == [["Subscribe now", "Continue on wallet", "Not now"]]
+    assert picker.offered == [["Continue on wallet", "Subscribe now", "Not now"]]
     assert unsubscribed.opened == ["https://jarvislabs.ai/products/coding-plan"]
     assert "Next: jl connect" in result.output
     assert "after paying, connect your tools" in result.output
@@ -1778,7 +1778,7 @@ def test_the_wallet_choice_outlasts_the_last_disconnect(unsubscribed, opencode_c
 
     assert result.exit_code == 0, result.output
     # Asked only on the first connect.
-    assert picker.offered == [["Subscribe now", "Continue on wallet", "Not now"]]
+    assert picker.offered == [["Continue on wallet", "Subscribe now", "Not now"]]
     assert "On wallet (no subscription)" in result.output
     assert config.load_connection().kind == "payg"
 
@@ -1803,7 +1803,7 @@ def test_the_wallet_choice_survives_an_early_stop(unsubscribed, opencode_config,
 
     assert result.exit_code == 0, result.output
     # Asked only on the first connect.
-    assert picker.offered == [["Subscribe now", "Continue on wallet", "Not now"]]
+    assert picker.offered == [["Continue on wallet", "Subscribe now", "Not now"]]
     assert config.load_connection().kind == "payg"
 
 

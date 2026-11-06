@@ -739,12 +739,16 @@ def _continue_on_wallet(wallet: bool, dry_run: bool) -> None:
         return
     if state.yes or not _can_ask():
         render.die(f"{NO_SUBSCRIPTION_FOUND} To pay from your wallet instead, run jl connect --wallet.")
-    render.warning("No subscription found", "Just subscribed? Give it a minute, then run `jl connect` again.")
+    hint = Text("Just subscribed? Give it a minute, then run ", "dim")
+    hint.append("jl connect", render.ACCENT_BOLD)
+    hint.append(" again.", "dim")
+    render.warning("No subscription found", hint)
     render.console.print()
     choice = render.answer(
         questionary.select(
             "How do you want to pay for requests?",
-            choices=["Subscribe now", "Continue on wallet", NOT_NOW],
+            # Wallet first: Enter must not open a purchase page by accident.
+            choices=["Continue on wallet", "Subscribe now", NOT_NOW],
             instruction="(arrow keys, Enter)",
             style=render.PROMPT_STYLE,
         )
