@@ -89,7 +89,6 @@ SWITCH_HINT = (
     "You have a subscription, but this machine pays from your wallet. "
     "Run jl connect in a terminal to switch it to your plan, or run jl connect again with --yes."
 )
-ON_WALLET = "On wallet (no subscription). Run jl subscribe to get a plan."
 NO_SUBSCRIPTION_FOUND = "No subscription found. If you've just subscribed, give it a minute and run jl connect again."
 NOT_NOW = "Not now"
 # Cline's extension rewrites its settings while VS Code runs, so jl waits for it to quit.
@@ -177,7 +176,7 @@ def connect(
         return
     if not (printed or only_rotate):
         render.rule("CONNECT TOOLS")
-        render.console.print(Text("Connect the tools installed on this machine to the Models API.", "dim"))
+        render.console.print(Text("Sets up the Jarvislabs provider in your coding tools.", "dim"))
     with render.spinner("Checking your subscription..."):
         usage = client.subscription.usage()
     if usage is None:
@@ -514,7 +513,7 @@ def _stop_if_up_to_date(connection: Connection | None, models: tuple[ModelInfo, 
         return
     names = [harness.name for harness in installed_tools]
     label = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
-    render.success(f"{label} {'is' if len(names) == 1 else 'are'} connected and up to date")
+    render.success(f"{label} {'is' if len(names) == 1 else 'are'} already connected")
     render.next_step("check or change them:", ["jl status", "jl disconnect <tool>"])
     raise typer.Exit()
 
@@ -662,10 +661,10 @@ def _continue_on_wallet(wallet: bool, dry_run: bool) -> None:
         dry_run: --dry-run was passed: the choice isn't saved.
     """
     if wallet or wallet_chosen():
-        line = Text("On wallet (no subscription). Run ", "dim")
-        line.append("jl subscribe", render.ACCENT_BOLD)
-        line.append(" to get a plan.", "dim")
-        render.console.print(line)
+        render.warning(
+            "On wallet (no subscription)",
+            "Requests are charged to your wallet. Run `jl subscribe` for a plan.",
+        )
         return
     if state.yes or not _can_ask():
         render.die(f"{NO_SUBSCRIPTION_FOUND} To pay from your wallet instead, run jl connect --wallet.")

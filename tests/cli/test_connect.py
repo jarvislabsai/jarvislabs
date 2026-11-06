@@ -1055,7 +1055,7 @@ def test_connect_opens_with_a_heading_for_the_phase(subscribed, opencode_config)
 
     assert result.exit_code == 0, result.output
     assert result.stderr.startswith("\nCONNECT TOOLS")
-    assert "Connect the tools installed on this machine to the Models API." in result.stderr
+    assert "Sets up the Jarvislabs provider in your coding tools." in result.stderr
 
 
 def test_connect_shows_the_test_reply_or_the_server_error(subscribed, opencode_config, monkeypatch):
@@ -1177,14 +1177,14 @@ def connect_before(terminal, *names):
     terminal.asked.clear()
 
 
-def test_a_repeat_connect_with_nothing_to_change_says_up_to_date(subscribed, opencode_config, terminal):
+def test_a_repeat_connect_with_nothing_to_change_says_already_connected(subscribed, opencode_config, terminal):
     """A second connect that would change nothing says so instead of opening the picker."""
     connect_before(terminal, "opencode")
 
     result = runner.invoke(app, ["connect"])
 
     assert result.exit_code == 0, result.output
-    assert "OpenCode is connected and up to date" in said(result)
+    assert "OpenCode is already connected" in said(result)
     assert "jl status" in said(result)
     assert "jl disconnect <tool>" in said(result)
     assert "jl disconnect opencode" not in said(result)
@@ -1760,7 +1760,7 @@ def test_the_wallet_choice_outlasts_the_last_disconnect(unsubscribed, opencode_c
     assert result.exit_code == 0, result.output
     # Asked only on the first connect.
     assert picker.offered == [["Subscribe now", "Continue on wallet", "Not now"]]
-    assert "On wallet (no subscription)." in result.output
+    assert "On wallet (no subscription)" in result.output
     assert config.load_connection().kind == "payg"
 
 
@@ -2118,7 +2118,9 @@ def test_a_wallet_user_without_a_plan_is_not_asked_again(unsubscribed, opencode_
 
     assert result.exit_code == 0, result.output
     assert picker.offered == []
-    assert "On wallet (no subscription). Run jl subscribe to get a plan." in " ".join(result.output.split())
+    assert "On wallet (no subscription) Requests are charged to your wallet. Run jl subscribe for a plan." in " ".join(
+        result.output.split()
+    )
     assert key_changes(unsubscribed) == []
     assert read_json(opencode_config)["provider"]["jarvislabs"]["options"]["apiKey"] == "jlsk-wallet-secret"
 
