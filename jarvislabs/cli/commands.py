@@ -23,12 +23,34 @@ def _maybe_eu_note(gpus) -> None:
 @app.command(rich_help_panel="Account")
 def logout(
     json_output: cli_options.JsonOption = False,
+    keep_tools: Annotated[bool, typer.Option("--keep-tools", help="Leave jl's setup in your coding tools.")] = False,
+    yes: cli_options.YesOption = False,
 ) -> None:
-    """Remove the saved Jarvis key from the config file.
+    """Log out, and remove jl from your coding tools.
 
-    This machine's Models API key stays saved, so jl disconnect can still clean up the coding tools.
+    By default this also removes jl's provider entry from every connected tool and revokes this machine's Models API key. `--keep-tools` leaves them connected; that keeps the key saved, so a later `jl disconnect` can still clean up.
     """
-    cli_options.apply_command_options(json_output=json_output)
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
+    connection = load_connection()
+    connected = [h for h in HARNESSES if connection and h.id in connection.harnesses]
+    if connected and not keep_tools:
+        if not render.confirm(
+            f"Remove jl from {len(connected)} tool{'s' if len(connected) != 1 else ''} and revoke this machine's key?",
+            skip=state.yes,
+            default=True,
+        ):
+            keep_tools = True
+        else:
+            from jarvislabs.cli import connect
+
+            # One question for the whole logout; _disconnect asks per tool otherwise.
+            old_yes = state.yes
+            state.yes = True
+            try:
+                for harness in connected:
+                    connect._disconnect(harness)
+            finally:
+                state.yes = old_yes
     config = load_config()
     logged_out = "auth" in config and "token" in config["auth"]
     if logged_out:

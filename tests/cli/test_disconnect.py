@@ -355,11 +355,11 @@ def test_disconnecting_a_harness_that_isnt_connected_stops(subscribed: MagicMock
     assert revokes(subscribed) == []
 
 
-def test_logout_keeps_the_machine_key_for_disconnect(subscribed: MagicMock, opencode_config: Path) -> None:
+def test_logout_keep_tools_keeps_the_machine_key_for_disconnect(subscribed: MagicMock, opencode_config: Path) -> None:
     runner.invoke(app, ["connect", "opencode", "--yes"])
     config.save_config({**config.load_config(), "auth": {"token": "jarvis-key"}})
 
-    result = runner.invoke(app, ["logout"])
+    result = runner.invoke(app, ["logout", "--keep-tools"])
 
     assert result.exit_code == 0, result.output
     assert "auth" not in config.load_config()
@@ -371,11 +371,25 @@ def test_logout_keeps_the_machine_key_for_disconnect(subscribed: MagicMock, open
     )
 
 
+def test_logout_removes_tools_and_revokes_the_key(subscribed: MagicMock, opencode_config: Path) -> None:
+    runner.invoke(app, ["connect", "opencode", "--yes"])
+    config.save_config({**config.load_config(), "auth": {"token": "jarvis-key"}})
+
+    result = runner.invoke(app, ["logout", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "auth" not in config.load_config()
+    assert connected() is None
+    assert config.load_connection() is None
+    assert revokes(subscribed) == [(*REVOKE, None)]
+    assert not opencode_config.exists()
+
+
 def disconnect_logged_out(monkeypatch: pytest.MonkeyPatch) -> Result:
     """Connect OpenCode, log out (with no Jarvis key in the environment), then disconnect OpenCode."""
     runner.invoke(app, ["connect", "opencode", "--yes"])
     monkeypatch.delenv("JL_API_KEY")
-    runner.invoke(app, ["logout"])
+    runner.invoke(app, ["logout", "--keep-tools"])
     return runner.invoke(app, ["disconnect", "opencode", "--yes"])
 
 
