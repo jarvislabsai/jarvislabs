@@ -13,7 +13,7 @@ from jarvislabs.exceptions import JarvislabsError
 app = typer.Typer(
     name="jl",
     help=(
-        "[bold cyan]⚡ JarvisLabs[/bold cyan] GPU Cloud CLI\n\n"
+        "[bold cyan]⚡ Jarvislabs[/bold cyan] GPU Cloud CLI\n\n"
         "[dim]Two types of instances:[/dim]\n"
         "  [green]Containers[/green]  [dim]Pre-configured with PyTorch, Jupyter, and IDE. Default.[/dim]\n"
         "  [yellow]VMs[/yellow]          [dim]Bare-metal SSH access. Use --vm.[/dim]\n\n"
@@ -75,7 +75,17 @@ def get_client() -> Client:
 def main() -> None:
     """Entry point for `jl` command (wired via pyproject.toml [project.scripts])."""
     # Command modules import `app` from this module, so they can only load after it exists.
-    from jarvislabs.cli import commands, deploy, instance, models, run, setup, update  # noqa: F401
+    from jarvislabs.cli import (  # noqa: F401
+        commands,
+        connect,
+        deploy,
+        instance,
+        models,
+        run,
+        setup,
+        subscription,
+        update,
+    )
 
     try:
         app()

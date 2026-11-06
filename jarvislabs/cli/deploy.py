@@ -51,7 +51,7 @@ app.add_typer(deploy_app, rich_help_panel="[bold bright_yellow]Serverless (Beta)
 
 managed_app = typer.Typer(
     name="managed-models",
-    help="List and deploy JarvisLabs-managed models [bold bright_yellow](beta)[/bold bright_yellow].",
+    help="List and deploy Jarvislabs-managed models [bold bright_yellow](beta)[/bold bright_yellow].",
 )
 deploy_app.add_typer(managed_app)
 

@@ -11,6 +11,7 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
+from jarvislabs import config
 from jarvislabs.cli import commands, setup, state, update
 from jarvislabs.cli.app import app
 
@@ -19,8 +20,9 @@ BUNDLED = "---\nname: jarvislabs\n---\n# New skill\n"
 
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
-    """Point the cache and the skill paths at tmp_path, and keep the version fixed."""
+    """Point the cache, the skill paths and jl's config at tmp_path, and keep the version fixed."""
     monkeypatch.delenv("JL_NO_UPDATE_CHECK", raising=False)
+    monkeypatch.setattr(config, "config_dir", lambda: tmp_path / "jl")
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.setattr(update, "_CACHE_FILE", tmp_path / "cache" / "update_check.json")
     monkeypatch.setattr(update, "current_version", lambda: "0.2.18")
@@ -465,7 +467,8 @@ def test_status_json_includes_cli_block(monkeypatch, capsys):
     client = SimpleNamespace(
         account=SimpleNamespace(
             user_info=lambda: model, balance=lambda: model, resource_metrics=lambda: model, currency=lambda: "USD"
-        )
+        ),
+        subscription=SimpleNamespace(usage=lambda: None),
     )
     monkeypatch.setattr(commands, "get_client", lambda: client)
 

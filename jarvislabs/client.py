@@ -17,6 +17,7 @@ from jarvislabs.filesystems import Filesystems
 from jarvislabs.instances import Instances
 from jarvislabs.scripts import Scripts
 from jarvislabs.ssh_keys import SSHKeys
+from jarvislabs.subscription import Subscription
 from jarvislabs.token_factory import Models
 from jarvislabs.transport import Transport
 from jarvislabs.vpcs import Vpcs
@@ -28,7 +29,7 @@ class Client:
     def __init__(self, api_key: str | None = None) -> None:
         token = resolve_token(api_key)
         if not token:
-            raise AuthError("No API key found. Set JL_API_KEY or run: jl setup")
+            raise AuthError("No Jarvis key found. Set JL_API_KEY or run: jl setup")
         self._transport = Transport(token)
         self.account = Account(self._transport)
         self.ssh_keys = SSHKeys(self._transport)
@@ -38,6 +39,7 @@ class Client:
         self.instances = Instances(self._transport, self.ssh_keys)
         self.deployments = Deployments(self._transport)
         self.models = Models(self._transport)
+        self.subscription = Subscription(self._transport)
 
     def close(self) -> None:
         self._transport.close()

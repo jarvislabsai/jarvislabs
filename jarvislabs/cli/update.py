@@ -21,7 +21,7 @@ from typing import Annotated
 import typer
 from platformdirs import user_cache_dir
 
-from jarvislabs.cli import render, setup, state
+from jarvislabs.cli import connect, render, setup, state
 from jarvislabs.cli.app import app
 
 _PKG = "jarvislabs"
@@ -225,9 +225,10 @@ def _command_text(cmd: list[str]) -> str:
 def update(
     skills_only: Annotated[bool, typer.Option("--skills-only", hidden=True)] = False,
 ) -> None:
-    """Update jl to the latest version and refresh the installed agent skills."""
+    """Update jl to the latest version, and refresh the agent skills and the coding tools' models."""
     if skills_only:
         setup.refresh_skills()
+        connect.refresh_connected()
         return
 
     if _is_editable():
@@ -242,6 +243,7 @@ def update(
     if not is_newer(latest, current):
         render.success(f"jl {current} is up to date.")
         setup.refresh_skills()
+        connect.refresh_connected()
         return
 
     cmd = install_command()

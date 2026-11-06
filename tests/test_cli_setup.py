@@ -29,7 +29,7 @@ SKILL_CONTENT = "---\nname: jarvislabs\n---\n# Test skill content\n"
 def test_login_flow_skips_when_existing_token_valid(monkeypatch):
     monkeypatch.setattr(setup, "load_config", lambda: {"auth": {"token": "existing"}})
     # User declines re-auth
-    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: False)
+    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False, **kwargs: False)
 
     client = _fake_client()
     import jarvislabs.client
@@ -59,7 +59,7 @@ def test_login_flow_saves_new_token(monkeypatch):
 
 def test_login_flow_returns_client(monkeypatch):
     monkeypatch.setattr(setup, "load_config", lambda: {"auth": {"token": "valid"}})
-    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: False)
+    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False, **kwargs: False)
 
     client = _fake_client()
     import jarvislabs.client
@@ -76,7 +76,7 @@ def test_login_flow_reauths_when_user_confirms(monkeypatch):
     monkeypatch.setattr(setup, "save_config", lambda config: saved.update(config))
     monkeypatch.setattr(setup.render, "spinner", lambda msg: MagicMock(__enter__=MagicMock(), __exit__=MagicMock()))
     # User accepts re-auth
-    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: True)
+    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False, **kwargs: True)
     monkeypatch.setattr(setup.render.console, "input", lambda prompt, password=False: "new-token")
 
     client = _fake_client()
@@ -226,12 +226,50 @@ def test_select_additional_agents_interactive_exits_on_ctrl_c(monkeypatch):
         setup._select_additional_agents_interactive()
 
 
+def test_the_skills_picker_ticks_installed_agents(monkeypatch, tmp_path):
+    """A pre-ticked Claude Code row, because ~/.claude is on the machine."""
+    (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(setup.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", lambda name: None)
+    seen = {}
+
+    def checkbox(message, choices, **kwargs):
+        seen["choices"] = choices
+        return MagicMock(ask=lambda: [])
+
+    monkeypatch.setattr(setup.questionary, "checkbox", checkbox)
+
+    setup._select_additional_agents_interactive()
+
+    (claude,) = [choice for choice in seen["choices"] if choice.value == "claude-code"]
+    assert claude.checked is True
+
+
+def test_the_skills_picker_says_space_ticks_and_enter_continues(monkeypatch, tmp_path):
+    """The picker's hint says Space ticks, and Enter goes on with the ticked tools."""
+    monkeypatch.setattr(setup.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", lambda name: None)
+    seen = {}
+
+    def checkbox(message, choices, **kwargs):
+        seen.update(kwargs)
+        return MagicMock(ask=lambda: [])
+
+    monkeypatch.setattr(setup.questionary, "checkbox", checkbox)
+
+    setup._select_additional_agents_interactive()
+
+    from jarvislabs.cli import render
+
+    assert f"Space ticks{render.MARKS['sep']}Enter goes on with the ticked tools" in seen["instruction"]
+
+
 # ── _skill_install_flow ──────────────────────────────────────────────────────
 
 
 def test_skill_install_flow_skips_when_declined(monkeypatch):
     monkeypatch.setattr(state, "yes", False)
-    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: False)
+    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False, **kwargs: False)
 
     result = setup._skill_install_flow(agents_flag=None)
     assert result == []
@@ -243,7 +281,7 @@ def test_skill_install_flow_always_installs_universal(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "yes", True)
 
     confirm_calls = iter([True])
-    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: next(confirm_calls))
+    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False, **kwargs: next(confirm_calls))
 
     result = setup._skill_install_flow(agents_flag=None)
     # Universal is always installed
@@ -277,7 +315,7 @@ def test_skill_install_flow_with_yes_installs_universal_and_all_additional(tmp_p
     monkeypatch.setattr(state, "yes", True)
 
     confirm_calls = iter([True])
-    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: next(confirm_calls))
+    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False, **kwargs: next(confirm_calls))
 
     result = setup._skill_install_flow(agents_flag=None)
     # Universal + claude-code

@@ -9,7 +9,7 @@ from __future__ import annotations
 import builtins
 import re
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, PlainSerializer, field_validator, model_validator
 
@@ -49,6 +49,85 @@ class ResourceMetrics(BaseModel):
     paused_vms: int
     deployments: int
     filesystems: int
+
+
+class ApiKey(BaseModel):
+    """A named API key on the account, without its secret.
+
+    Attributes:
+        kind: Who pays for the key's Models API requests: "subscription" (the plan) or
+            "payg" (the wallet). "payg" when the response has no kind.
+    """
+
+    id: str
+    name: str
+    kind: Literal["payg", "subscription"] = "payg"
+    created_at: datetime | None = None
+
+
+class CreatedApiKey(ApiKey):
+    """A key just created, with its secret, which the backend returns only this once."""
+
+    token: str
+
+
+# ── Subscription ─────────────────────────────────────────────────────────────
+
+
+class SubscriptionPlan(BaseModel):
+    """The plan the account is subscribed to."""
+
+    id: int
+    name: str
+
+
+class SubscriptionPeriod(BaseModel):
+    """The paid period: its start, and when it renews, or ends when ``cancel_at_period_end``."""
+
+    start: datetime
+    renews_at: datetime
+    cancel_at_period_end: bool
+
+
+class UsageWindow(BaseModel):
+    """One usage window's share used, in percent, and its reset time.
+
+    ``resets_at`` is None for the 5-hour window while none is running, and for the monthly
+    window while the renewal payment is awaited.
+    """
+
+    percent_used: float
+    resets_at: datetime | None
+
+
+class UsageWindows(BaseModel):
+    """The plan's three usage windows."""
+
+    five_hour: UsageWindow
+    weekly: UsageWindow
+    monthly: UsageWindow
+
+
+class UsageSlots(BaseModel):
+    """Plan-paid requests running now, and how many the plan allows at once."""
+
+    in_use: int
+    limit: int
+
+
+class SubscriptionUsage(BaseModel):
+    """The account's subscription and its usage, for the whole account whatever key asks.
+
+    ``use_balance`` is true when requests the plan doesn't cover are paid from the wallet.
+    ``renewal_pending`` is true once ``renews_at`` has passed and the renewal payment hasn't arrived.
+    """
+
+    plan: SubscriptionPlan
+    period: SubscriptionPeriod
+    use_balance: bool
+    renewal_pending: bool
+    windows: UsageWindows
+    slots: UsageSlots
 
 
 # ── SSH Keys ─────────────────────────────────────────────────────────────────
@@ -413,15 +492,23 @@ class ModelThinking(BaseModel):
     template_parameters: dict[str, str] = Field(default_factory=dict)
 
 
+class ModelCapabilities(BaseModel):
+    """What a model supports beyond plain chat; None means the catalog doesn't say."""
+
+    tool_calling: bool | None = None
+
+
 class ModelInfo(BaseModel):
     id: str
     name: str | None = None
     description: str | None = None
     context_length: int | None = None
+    max_output_tokens: int | None = None
     model_card_url: str | None = None
     input_modalities: list[str] = Field(default_factory=list)
     output_modalities: list[str] = Field(default_factory=list)
     thinking: ModelThinking = Field(default_factory=ModelThinking)
+    capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     pricing: ModelPricing | None = None
 
     @model_validator(mode="before")

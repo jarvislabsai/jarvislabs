@@ -7,8 +7,10 @@ import typer
 
 from jarvislabs.cli import options as cli_options, render, state, update
 from jarvislabs.cli.app import app, get_client
-from jarvislabs.config import load_config, save_config
+from jarvislabs.config import load_config, load_connection, save_config
 from jarvislabs.constants import EUROPE_GPU_TYPES, EUROPE_REGION, INDIA_NOIDA_REGION
+from jarvislabs.exceptions import JarvislabsError
+from jarvislabs.harnesses import HARNESSES, default_model, installed
 
 EUROPE_AVAILABILITY_NOTE = "EU1 H100/H200 launches are currently limited to 1 GPU."
 
@@ -22,7 +24,10 @@ def _maybe_eu_note(gpus) -> None:
 def logout(
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Remove saved API token from config file."""
+    """Remove the saved Jarvis key from the config file.
+
+    This machine's Models API key stays saved, so jl disconnect can still clean up the coding tools.
+    """
     cli_options.apply_command_options(json_output=json_output)
     config = load_config()
     logged_out = "auth" in config and "token" in config["auth"]
@@ -31,6 +36,7 @@ def logout(
         if not config["auth"]:
             del config["auth"]
         save_config(config)
+    had_machine_key = "connect" in config
 
     if state.json_output:
         render.print_json({"success": True, "logged_out": logged_out})
@@ -39,13 +45,15 @@ def logout(
         render.success("Logged out — token removed from config.")
     else:
         render.info("No saved token found.")
+    if had_machine_key:
+        render.info("Your coding tools stay connected; run jl disconnect <tool> to remove them.")
 
 
 @app.command(rich_help_panel="Account")
 def status(
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Show account info, balance, and resource summary."""
+    """See every coding tool: connected, installed, or where to get it."""
     cli_options.apply_command_options(json_output=json_output)
     client = get_client()
     with render.spinner("Fetching account info..."):
@@ -54,7 +62,29 @@ def status(
         metrics = client.account.resource_metrics()
         currency = client.account.currency()
         sym = render.currency_symbol(currency)
+        usage, usage_error = None, None
+        try:
+            usage = client.subscription.usage()
+        except JarvislabsError as e:
+            usage_error = str(e)
         cli = update.cli_status()
+    connection = load_connection()
+    recorded = set(connection.harnesses) if connection else set()
+    # jl connect swaps a wallet key for a subscription key only when the user agrees.
+    switch_available = bool(usage and connection and connection.kind == "payg")
+    harnesses = [
+        {
+            "id": h.id,
+            "name": h.name,
+            "installed": installed(h),
+            "connected": h.support == "connect" and h.id in recorded,
+            # A coming-soon harness is recorded only when jl connect --print showed its config.
+            "printed": h.support != "connect" and h.id in recorded,
+            "default_model": default_model(h) if h.support == "connect" and h.id in recorded else None,
+        }
+        for h in HARNESSES
+        if h.support == "connect" or h.id in recorded
+    ]
 
     if state.json_output:
         render.print_json(
@@ -63,14 +93,28 @@ def status(
                 "balance": bal.model_dump(),
                 "resources": metrics.model_dump(),
                 "currency": currency,
+                "subscription": {"error": usage_error} if usage_error else usage,
                 "cli": cli,
+                "harnesses": harnesses,
+                "switch_available": switch_available,
             }
         )
         return
 
     render.account_status(info, bal, metrics, sym)
+    if usage_error:
+        render.warning(f"Subscription: unavailable right now ({usage_error})")
+    else:
+        render.subscription_usage(usage)
+    render.harness_status(harnesses)
+    if switch_available:
+        render.warning(
+            "These tools pay from your wallet",
+            "You have a subscription now. Run `jl connect` to switch them to your plan.",
+        )
     if hint := update.status_hint(cli):
         render.warning(hint)
+    render.next_step("connect the tools you have, or just one:", ["jl connect", "jl connect <tool>"])
 
 
 @app.command(rich_help_panel="Resources")

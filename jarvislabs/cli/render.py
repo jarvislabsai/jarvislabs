@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import codecs
 import json
+import os
 import sys
 from contextlib import nullcontext
-from typing import Any, NoReturn
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 import questionary
+import questionary.prompts.common
 import typer
 from pydantic import BaseModel
 from rich import box
@@ -23,15 +29,28 @@ from rich.text import Text
 from rich.theme import Theme
 
 from jarvislabs.cli import options as cli_options, state
-from jarvislabs.constants import EUROPE_REGION, MODELS_DEFAULT_MAX_TOKENS, REGION_CODE_TO_REGION, REGION_DISPLAY_CODES
+from jarvislabs.constants import (
+    EUROPE_REGION,
+    MODELS_DEFAULT_MAX_TOKENS,
+    REGION_CODE_TO_REGION,
+    REGION_DISPLAY_CODES,
+    SUBSCRIBE_URL,
+)
 from jarvislabs.instances import is_cpu_vm
 from jarvislabs.regions import region_code
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from jarvislabs.models import SubscriptionUsage
 
 TABLE_BOX = box.ROUNDED
 HEADER_STYLE = "bold"
 TITLE_STYLE = "bold"
 BORDER_STYLE = "dim"
 
+# Four hues, each with one job: green done or added, yellow needs attention or changes a setting of the
+# user's, red failed or removed, cyan (accent) where the user acts and every command to type.
 theme = Theme(
     {
         "info": "dim",
@@ -39,11 +58,36 @@ theme = Theme(
         "warning": "yellow",
         "error": "bold red",
         "title": "bold",
+        "accent": "cyan",
+        "hint": "dim",
     }
 )
 
 console = Console(stderr=True, theme=theme)
 stdout_console = Console(theme=theme)
+
+UNICODE_MARKS = {"ok": "✓", "bad": "✗", "ticked": "●", "unticked": "○", "badge": "⚡ ", "sep": " · "}
+ASCII_MARKS = {"ok": "+", "bad": "x", "ticked": "[*]", "unticked": "[ ]", "badge": "", "sep": " | "}
+# The theme's accent, bold, for the "?" that opens a prompt.
+ACCENT_BOLD = theme.styles["accent"] + Style(bold=True)
+
+
+def choose_marks() -> dict[str, str]:
+    """Return the marks this console can draw: ASCII ones on a legacy Windows console or a non-UTF-8 stream.
+
+    On Windows, only Windows Terminal (WT_SESSION) and VS Code (TERM_PROGRAM) count as drawing Unicode:
+    PowerShell's own console window has no font fallback.
+    """
+    legacy = sys.platform == "win32" and not (os.environ.get("WT_SESSION") or os.environ.get("TERM_PROGRAM"))
+    encodings = [getattr(stream, "encoding", None) or "utf-8" for stream in (sys.stdout, sys.stderr)]
+    utf8 = all(codecs.lookup(encoding).name == "utf-8" for encoding in encodings)
+    return ASCII_MARKS if legacy or not utf8 else UNICODE_MARKS
+
+
+MARKS = choose_marks()
+# questionary's checkbox reads these when it draws each row.
+questionary.prompts.common.INDICATOR_SELECTED = MARKS["ticked"]
+questionary.prompts.common.INDICATOR_UNSELECTED = MARKS["unticked"]
 
 
 # ── JSON output ──────────────────────────────────────────────────────────────
@@ -88,13 +132,85 @@ def account_status(info, bal, metrics, sym: str) -> None:
 
     panel = Panel(
         content,
-        title="[bold cyan]⚡ Account[/bold cyan]",
+        title=f"[bold cyan]{MARKS['badge']}Account[/bold cyan]",
         border_style="cyan",
         box=box.ROUNDED,
         padding=(1, 2),
         expand=False,
     )
     stdout_console.print(panel)
+
+
+NO_SUBSCRIPTION = f"No subscription. Subscribe at {SUBSCRIBE_URL}"
+
+
+def subscription_usage(usage: SubscriptionUsage | None) -> None:
+    """Print the plan, its renewal, each window's share used, and the plan-paid requests running now.
+
+    Args:
+        usage: The account's usage, or None to print "No subscription" with the subscribe link.
+    """
+    if usage is None:
+        stdout_console.print(NO_SUBSCRIPTION, highlight=False)
+        return
+    period = usage.period
+    if usage.renewal_pending:
+        renewal = "renewal payment pending"
+    else:
+        renewal = f"{'ends' if period.cancel_at_period_end else 'renews'} {_utc(period.renews_at)}"
+    windows = usage.windows
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="dim")
+    table.add_column()
+    table.add_row("Plan", f"[bold]{escape(usage.plan.name)}[/bold], {renewal}")
+    for label, window in (("5-hour", windows.five_hour), ("Weekly", windows.weekly), ("Monthly", windows.monthly)):
+        resets = f", resets {_utc(window.resets_at)}" if window.resets_at else ""
+        table.add_row(label, f"{window.percent_used:.1f}% used{resets}")
+    table.add_row("Running now", f"{usage.slots.in_use} of {usage.slots.limit} requests")
+    table.add_row("Use balance", "on" if usage.use_balance else "off")
+    stdout_console.print(
+        Panel(table, title="[bold cyan]Subscription[/bold cyan]", border_style="cyan", padding=(1, 2), expand=False)
+    )
+
+
+def harness_status(rows: list[dict[str, Any]]) -> None:
+    """Print each harness's state: connected with its default model, config printed, installed, or not installed.
+
+    Connected harnesses come first, with a mark (a warning and the command that disconnects it when
+    it has been uninstalled since); an installed one gets the command that connects it, and one not
+    installed is dim, with the command that names where to get it.
+
+    Args:
+        rows: One dict per harness, with the keys id, name, installed, connected, printed and default_model.
+    """
+    table = Table.grid(padding=(0, 2))
+    for row in sorted(rows, key=lambda r: (not r["connected"], not r["printed"], not r["installed"])):
+        name = row["name"]
+        if row["connected"] and not row["installed"]:
+            # Uninstalled since it was connected: its config is left, so say how to clean it up.
+            table.add_row(
+                Text.assemble(("! ", "warning"), (name, "bold")),
+                Text("not installed", "warning"),
+                Text(f"jl disconnect {row['id']}", "accent"),
+            )
+        elif row["connected"]:
+            default = Text.assemble(("default ", "hint"), row["default_model"]) if row["default_model"] else ""
+            table.add_row(Text.assemble((MARKS["ok"] + " ", "success"), (name, "bold")), "connected", default)
+        elif row["printed"]:
+            table.add_row(Text("  " + name), "config printed", "")
+        elif row["installed"]:
+            table.add_row(Text("  " + name), "installed", Text(f"jl connect {row['id']}", "accent"))
+        else:
+            table.add_row(
+                Text("  " + name, "hint"), Text("not installed", "hint"), Text(f"jl connect {row['id']}", "accent")
+            )
+    stdout_console.print(
+        Panel(table, title="[bold cyan]Coding tools[/bold cyan]", border_style="cyan", padding=(1, 2), expand=False)
+    )
+
+
+def _utc(moment: datetime) -> str:
+    return f"{moment.astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC"
 
 
 # ── Tables ───────────────────────────────────────────────────────────────────
@@ -898,16 +1014,14 @@ def jsonable_cpu_meta(cpu_meta: dict) -> dict:
 # ── Messages ─────────────────────────────────────────────────────────────────
 
 
-def success(msg: str) -> None:
-    if state.json_output:
-        return
-    console.print(f"[green]✓[/green] {escape(msg)}", highlight=False)
+def success(msg: str | Text, hint: str | None = None) -> None:
+    """Print a line that something is done, with an optional hint under it."""
+    _status(MARKS["ok"], "success", msg, hint)
 
 
-def error(msg: str) -> None:
-    if state.json_output:
-        return
-    console.print(f"[red]✗[/red] {escape(msg)}", style="red", highlight=False)
+def error(msg: str | Text, hint: str | None = None) -> None:
+    """Print a line that something failed, with an optional hint under it saying what to do."""
+    _status(MARKS["bad"], "error", msg, hint)
 
 
 def info(msg: str) -> None:
@@ -916,32 +1030,188 @@ def info(msg: str) -> None:
     console.print(f"[dim]{escape(msg)}[/dim]", highlight=False)
 
 
-def warning(msg: str) -> None:
+def warning(msg: str | Text, hint: str | Text | None = None) -> None:
+    """Print a line that needs the user's attention, with an optional hint under it saying what to do."""
+    _status("!", "warning", msg, hint)
+
+
+def hint_line(msg: str) -> None:
+    """Print a dim hint, indented two spaces, each `command` in it in the accent."""
     if state.json_output:
         return
-    console.print(f"[yellow]![/yellow] {escape(msg)}", highlight=False)
+    _hang(Text("  "), _hint(msg), console)
+
+
+def heading(title: str, note: str = "") -> None:
+    """Print a blank line, then a bold heading that opens a phase, with an optional dim note after it."""
+    if state.json_output:
+        return
+    console.print()
+    _headline(title, note, console)
+
+
+def _headline(title: str, note: str, out: Console) -> None:
+    # A note wraps under the title, not at the left edge.
+    if note:
+        _hang(Text.assemble((title, "bold"), "  "), Text(note, "hint"), out)
+    else:
+        out.print(Text(title, "bold"))
+
+
+def next_step(text: str, commands: Sequence[str]) -> None:
+    """Print the line that ends a run: "Next:", what to do, then each command to type in the accent.
+
+    Args:
+        text: What to do, e.g. "start a tool in this folder:".
+        commands: The commands, shown separated by the mark table's separator.
+    """
+    if state.json_output:
+        return
+    body = Text(text)
+    for i, command in enumerate(commands):
+        body.append(MARKS["sep"] if i else " ", "hint")
+        body.append(command, "accent")
+    _hang(Text("Next: ", "bold"), body, console)
+
+
+def short_path(path: Path) -> str:
+    """Return a path with the home folder shown as ~, with POSIX separators."""
+    try:
+        return "~/" + path.relative_to(Path.home()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def paths_label(paths: Sequence[Path]) -> str:
+    """Return paths for a row: the first in full, and each next one by its name alone when in the same folder."""
+    parts = [
+        path.name if i and path.parent == paths[i - 1].parent else short_path(path) for i, path in enumerate(paths)
+    ]
+    return ", ".join(parts)
+
+
+Change = Literal["add", "update", "change", "remove", "ok"]
+# The mark and style of each kind of row; "ok" (done) takes its mark from MARKS.
+_CHANGES: dict[str, tuple[str, str]] = {
+    "add": ("+", "green"),
+    "update": ("~", "yellow"),
+    "change": ("~", "yellow"),
+    "remove": ("-", "red"),
+}
+_LEGEND = {"add": "+ add", "update": "~ update", "change": "~ change what is already there", "remove": "- remove"}
+
+
+@dataclass(frozen=True)
+class Row:
+    """One tool's row in a list of changes: a mark, the tool, and what happens.
+
+    Attributes:
+        change: "add", "update" (of jl's own entries), "change" (of the user's settings), "remove", or
+            "ok" for a change done.
+        name: The tool.
+        detail: What the row says after the tool, such as the files it changes.
+        warning: A yellow line under the detail: what the change replaces of the user's.
+        note: A dim line under the detail.
+    """
+
+    change: Change
+    name: str
+    detail: str = ""
+    warning: str = ""
+    note: str = ""
+
+
+def change_rows(rows: Sequence[Row], title: str = "", note: str = "") -> None:
+    """Print rows of changes to stdout, aligned, after an optional heading and a legend of their marks.
+
+    Args:
+        rows: The rows.
+        title: A bold heading; with none, neither heading nor legend is printed.
+        note: A dim note after the heading, such as the facts every row shares.
+    """
+    if title:
+        _headline(title, note, stdout_console)
+        kinds = {row.change for row in rows}
+        stdout_console.print(Text("  ".join(text for c, text in _LEGEND.items() if c in kinds), "hint"))
+        stdout_console.print()
+    width = max(len(row.name) for row in rows)
+    for row in rows:
+        change_row(row, width, stdout_console)
+
+
+def change_row(row: Row, width: int, out: Console) -> None:
+    """Print one row of changes, its tool in a column ``width`` wide, and its lines under the detail.
+
+    Args:
+        row: The row.
+        width: The width of the tool column, the longest tool name of the list.
+        out: The console to print to.
+    """
+    mark, style = (MARKS["ok"], "green") if row.change == "ok" else _CHANGES[row.change]
+    prefix = Text.assemble((mark, style), " ", (row.name.ljust(width), "bold"), "  ")
+    _hang(prefix, Text(row.detail, "hint" if row.change != "ok" else ""), out)
+    indent = Text(" " * prefix.cell_len)
+    for line, line_style in ((row.warning, "warning"), (row.note, "hint")):
+        if line:
+            _hang(indent, Text(line, line_style), out)
+
+
+def _status(mark: str, style: str, msg: str | Text, hint: str | Text | None) -> None:
+    if state.json_output:
+        return
+    _hang(Text(mark + " ", style), msg if isinstance(msg, Text) else Text(msg), console)
+    if hint:
+        _hang(Text("  "), _hint(hint), console)
+
+
+def _hint(text: str | Text) -> Text:
+    if isinstance(text, Text):
+        return text
+    # Backticks mark a command to type: shown in the accent, without them.
+    hint = Text(style="hint")
+    for i, part in enumerate(text.split("`")):
+        hint.append(part, "accent" if i % 2 else None)
+    return hint
+
+
+def _hang(prefix: Text, body: Text, out: Console) -> None:
+    # Wrapped lines of body hang under its first character, never under the prefix.
+    indent = prefix.cell_len
+    for i, line in enumerate(body.wrap(out, max(out.width - indent, 20))):
+        text = Text.assemble(prefix if i == 0 else " " * indent, line)
+        text.rstrip()
+        out.print(text, soft_wrap=True)
 
 
 # ── Confirmation ─────────────────────────────────────────────────────────────
 
 
-def confirm(msg: str, *, skip: bool = False) -> bool:
+def confirm(msg: str, *, skip: bool = False, default: bool = False, optional: bool = False) -> bool:
     """Ask for confirmation. Returns True if confirmed or skip=True (--yes flag).
 
-    In --json mode confirmation cannot be prompted, so a missing --yes is a
-    hard error — never a silent decline a script would read as success.
+    An empty answer gives ``default``. Ctrl-C exits with 130. In --json mode, or with no answer to
+    read (no terminal, and nothing left on stdin), a missing --yes is a hard error — never a silent
+    decline a script would read as success — except that an ``optional`` question, one whose
+    default leaves the command's own work done, then gives ``default``.
     """
     if skip:
         return True
     if state.json_output:
         die("--json requires --yes")
     try:
+        choices = "Y/n" if default else "y/N"
         # A Text prompt skips Rich's auto-highlighting, which would color the numbers in msg.
-        response = console.input(Text.from_markup(f"[yellow]?[/yellow] {escape(msg)} [dim]\\[y/N][/dim] "))
-        return response.strip().lower() in ("y", "yes")
-    except (KeyboardInterrupt, EOFError):
+        response = console.input(Text.assemble(("? ", ACCENT_BOLD), (msg, "bold"), (f" ({choices}) ", "hint")))
+        answer = response.strip().lower()
+        return answer in ("y", "yes") if answer else default
+    except KeyboardInterrupt:
         console.print()
-        return False
+        raise typer.Exit(130) from None
+    except EOFError:
+        console.print()
+        if optional:
+            return default
+        die(f'"{msg}" needs an answer: run this in a terminal, or pass --yes.')
 
 
 # ── Spinner ──────────────────────────────────────────────────────────────────
@@ -1108,10 +1378,16 @@ def warn_region_errors(region_errors: list) -> None:
 
 # ── Interactive prompts ──────────────────────────────────────────────────────
 
+# The basic ANSI colours, so the terminal's theme sets the shade: cyan where the user acts, grey for help.
 PROMPT_STYLE = questionary.Style(
     [
-        ("pointer", "fg:#73daca bold"),
-        ("highlighted", "fg:#73daca bold"),  # the row under the cursor
+        ("qmark", "fg:ansicyan bold"),
+        ("question", "bold"),
+        ("pointer", "fg:ansicyan bold"),
+        ("highlighted", "fg:ansicyan bold"),  # the row under the cursor
+        ("answer", "fg:ansicyan bold"),
+        ("instruction", "fg:ansibrightblack"),
+        ("disabled", "fg:ansibrightblack"),
         ("separator", "fg:ansibrightblack bold"),
     ]
 )
@@ -1121,8 +1397,26 @@ def can_prompt() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
+def answer(question: questionary.Question) -> Any:
+    """Ask a questionary question and return its answer; Ctrl-C exits with 130.
+
+    Args:
+        question: The question, not yet asked.
+
+    Returns:
+        The answer, which questionary gives as None only for Ctrl-C.
+
+    Raises:
+        typer.Exit: With 130, on Ctrl-C.
+    """
+    result = question.ask()
+    if result is None:
+        raise typer.Exit(130)
+    return result
+
+
 def select_row(message: str, headings: tuple[str, ...], rows: list, values: list) -> Any:
-    """Arrow-key picker shown as an aligned table; returns the chosen row's value. Ctrl+C exits.
+    """Arrow-key picker shown as an aligned table; returns the chosen row's value. Ctrl+C exits with 130.
 
     Rows are plain text: questionary highlights the row under the cursor only for plain-text titles.
     """
@@ -1138,13 +1432,16 @@ def select_row(message: str, headings: tuple[str, ...], rows: list, values: list
         questionary.Choice(title="".join(pad(row)), value=value) for row, value in zip(rows, values, strict=True)
     ]
     question = questionary.select(message, choices=choices, style=PROMPT_STYLE)
-    question.application.erase_when_done = True  # replaced below by the chosen row, one field per line
-    choice = question.ask()
-    if choice is None:
-        raise typer.Exit()
+    question.application.erase_when_done = True  # replaced below by the chosen row
+    choice = answer(question)
+    row = rows[values.index(choice)]
+    if not any(row[1:]):
+        # A row that names a choice, not a record, such as a way out.
+        console.print(f"[bold]?[/bold] {escape(message)} {escape(row[0])}", highlight=False)
+        return choice
     label_width = max(len(heading) for heading in headings)
     console.print(f"[bold]?[/bold] {message}")
-    for heading, cell in zip(headings, rows[values.index(choice)], strict=True):
+    for heading, cell in zip(headings, row, strict=True):
         console.print(f"  [dim]{heading:<{label_width}}[/dim]   {escape(cell)}", highlight=False)
     return choice
 
