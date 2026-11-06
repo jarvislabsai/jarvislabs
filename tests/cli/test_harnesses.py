@@ -27,6 +27,7 @@ from tests.cli.test_connect import CREATED_KEY, DEEPSEEK, GEMMA, GLM, read_json
 runner = CliRunner()
 # A subscriber with no key yet, and the DeepSeek, GLM and Gemma catalog.
 subscribed = test_connect.subscribed
+opencode_config = test_connect.opencode_config
 # jl is already the latest version, for jl update.
 up_to_date = test_connect.up_to_date
 
@@ -268,6 +269,64 @@ def test_kimi_keeps_the_users_config_and_follows_kimi_code_home(subscribed, tmp_
     assert "telemetry = false" in written
     assert 'default_model = "jarvislabs/deepseek-v4.1-flash-1017"' in written
     assert not (tmp_path / ".kimi-code").exists()
+
+
+def test_a_symlinked_config_is_written_through(subscribed, tmp_path):
+    # A dotfiles user's link stays the live config; replacing it with a regular file would
+    # silently stop their dotfiles from managing the file.
+    real = tmp_path / "dotfiles" / "opencode.json"
+    real.parent.mkdir()
+    real.write_text('{\n  "theme": "dark"\n}\n')
+    link = tmp_path / "opencode" / "opencode.json"
+    link.parent.mkdir()
+    link.symlink_to(real)
+
+    result = runner.invoke(app, ["connect", "opencode", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert link.is_symlink()
+    assert "jarvislabs" in real.read_text()
+
+
+def test_kimi_refuses_a_config_with_dotted_keys(subscribed, tmp_path):
+    path = tmp_path / ".kimi-code" / "config.toml"
+    path.parent.mkdir(parents=True)
+    original = 'providers.jarvislabs.type = "openai"\n'
+    path.write_text(original)
+
+    result = runner.invoke(app, ["connect", "kimi", "--yes"])
+
+    assert result.exit_code == 1, result.output
+    assert "dotted keys" in " ".join(result.output.split())
+    assert path.read_text() == original
+
+
+def test_a_model_the_catalog_dropped_leaves_kimi_config(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = CATALOG
+    runner.invoke(app, ["connect", "kimi", "--yes"])
+    subscribed.routes[("GET", "models")] = {"object": "list", "data": [DEEPSEEK]}
+
+    result = runner.invoke(app, ["connect", "kimi", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    models = tomllib.loads((tmp_path / ".kimi-code" / "config.toml").read_text())["models"]
+    # jl's aliases only; a model the catalog no longer serves is gone rather than left to fail later.
+    assert list(models) == ["jarvislabs/deepseek-v4.1-flash-1017"]
+
+
+def test_a_config_jl_cannot_read_is_reported_not_a_traceback(subscribed, opencode_config):
+    # A string where jl needs an object: a real file, just not one jl can write into.
+    opencode_config.write_text('{\n  "provider": "openai"\n}\n')
+
+    result = runner.invoke(app, ["connect", "opencode", "--yes"])
+
+    assert result.exit_code == 1, result.output
+    said = " ".join(result.output.split())
+    assert "Can't read" in said
+    assert "different shape" in said
+    assert "then run jl connect again" in said
+    # Nothing was written over it.
+    assert opencode_config.read_text() == '{\n  "provider": "openai"\n}\n'
 
 
 def test_pi_thinking_levels_map_to_supported_efforts(subscribed, tmp_path):

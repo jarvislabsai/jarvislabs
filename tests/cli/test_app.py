@@ -49,9 +49,9 @@ def test_new_commands_help_wraps_cleanly(command):
 
 def test_help_says_what_each_command_is_for():
     for command, purpose in (
-        ("status", "See every coding tool: connected, installed, or where to get it."),
-        ("connect", "Connect the coding tools installed on this machine."),
-        ("disconnect", "Remove jl's setup from a tool."),
+        ("status", "See your account, plan, and coding tools."),
+        ("connect", "Write the Jarvislabs provider into your coding tools."),
+        ("disconnect", "Remove jl's provider and key from your coding tools."),
     ):
         result = runner.invoke(app, [command, "--help"], env={"COLUMNS": "1000"})
         assert result.exit_code == 0, result.output

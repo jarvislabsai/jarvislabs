@@ -48,10 +48,13 @@ from jarvislabs.exceptions import JarvislabsError
 from jarvislabs.models import ModelInfo
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Callable, Collection, Mapping, Sequence
 
 # The provider ID jl writes into each harness; models are picked as "jarvislabs/<model>".
 PROVIDER_ID = "jarvislabs"
+# Reading a harness's config fails on bad syntax (ValueError, YAMLError) and on a shape the writer
+# doesn't expect, such as a string where an object belongs (TypeError, AttributeError, KeyError).
+CONFIG_ERRORS = (ValueError, TypeError, AttributeError, KeyError, YAMLError)
 # Cline has a single OpenAI-compatible provider, which jl takes over.
 _CLINE_SLOT = ("providers", "openai-compatible")
 
@@ -87,6 +90,8 @@ class ConfigEdit:
             once it shares the file, such as Cline's schema version.
         items: jl's own entries in each list in values that also holds the user's entries, such
             as Qwen Code's modelProviders.openai. Disconnect takes out only these.
+        delete: Key paths to remove, for entries jl wrote before that this setup no longer has,
+            such as a model the catalog dropped.
     """
 
     path: Path
@@ -94,6 +99,7 @@ class ConfigEdit:
     values: Mapping[KeyPath, object]
     keep: tuple[KeyPath, ...] = ()
     items: Mapping[KeyPath, Sequence[object]] = dataclasses.field(default_factory=dict)
+    delete: tuple[KeyPath, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -267,6 +273,16 @@ def vscode_running() -> bool:
     return b"Code.exe" in found.stdout if sys.platform == "win32" else found.returncode == 0
 
 
+def _unreadable(path: Path, error: Exception, command: str) -> JarvislabsError:
+    """Return the error for a config file jl can't read, naming the file and what to do.
+
+    A parse error's own message is useful; the internals of a wrong shape are not, so those keep
+    only the fact that the file doesn't look the way jl expects.
+    """
+    detail = str(error) if isinstance(error, (ValueError, YAMLError)) else "jl expected a different shape there"
+    return JarvislabsError(f"Can't read {path}: {detail}. Fix the file, then run jl {command} again.")
+
+
 def plan_connect(harness: Harness, setup: Setup) -> Plan:
     """Return the changes that point a harness at the Models API, without writing them.
 
@@ -298,8 +314,8 @@ def plan_connect(harness: Harness, setup: Setup) -> Plan:
         try:
             current = _parse(text, edit.fmt)
             new_text = _edited(text, edit)
-        except (ValueError, YAMLError) as e:
-            raise JarvislabsError(f"Can't read {edit.path}: {e}. Fix the file, then run jl connect again.") from e
+        except CONFIG_ERRORS as e:
+            raise _unreadable(edit.path, e, "connect") from e
         writes.append(FileWrite(edit.path, new_text))
         old = {path: value for path in edit.values if (value := _lookup(current, path)) is not _MISSING}
         hashes = {path: _hash(value) for path, value in edit.values.items() if path not in (*edit.keep, *edit.items)}
@@ -312,7 +328,7 @@ def plan_connect(harness: Harness, setup: Setup) -> Plan:
     return Plan(harness, tuple(writes), Replaced(replaced, written=written), preview)
 
 
-def plan_disconnect(harness: Harness, replaced: Replaced) -> Plan:
+def plan_disconnect(harness: Harness, replaced: Replaced, keep: Collection[Path] = ()) -> Plan:
     """Return the changes that take jl's entries out of a harness's config files, without writing them.
 
     Each value jl wrote is removed, or replaced by the value it overwrote, but only while it
@@ -327,6 +343,7 @@ def plan_disconnect(harness: Harness, replaced: Replaced) -> Plan:
     Args:
         harness: The connected harness.
         replaced: The harness's record from apply.
+        keep: Files another connected tool also writes, which are emptied rather than deleted.
 
     Returns:
         The new text of each file that changes, or None for a file to remove, and the preview.
@@ -350,9 +367,9 @@ def plan_disconnect(harness: Harness, replaced: Replaced) -> Plan:
                 # What jl keeps for the harness doesn't count: alone, it's still only jl's.
                 fmt = cast("Literal['jsonc', 'toml', 'yaml']", written.fmt)
                 empty = not _parse(edit_config(new_text, fmt, {}, written.kept), fmt)
-            except (ValueError, YAMLError) as e:
-                raise JarvislabsError(f"Can't read {path}: {e}. Fix the file, then run jl disconnect again.") from e
-        if path in replaced.created and empty:
+            except CONFIG_ERRORS as e:
+                raise _unreadable(path, e, "disconnect") from e
+        if path in replaced.created and empty and path not in keep:
             writes.append(FileWrite(path, None))
         elif new_text != text:
             writes.append(FileWrite(path, new_text))
@@ -395,12 +412,13 @@ def apply(plan: Plan, previous: Replaced | None = None) -> Replaced:
         if write.text is None:
             write.path.unlink(missing_ok=True)
             continue
+        text = write.text
         if not write.path.exists():
             created.append(write.path)
         elif not backup.exists() and not (previous and write.path in previous.created):
             write_private(backup, write.path.read_bytes())
             backups.append(backup)
-        write_private(write.path, write.text.encode("utf-8"))
+        write_private(write.path, text.encode("utf-8"))
     now = dataclasses.replace(plan.replaced, backups=tuple(backups), created=tuple(created))
     return _merged(previous, now) if previous else now
 
@@ -736,7 +754,7 @@ def _leaves(values: Mapping[KeyPath, object]) -> dict[KeyPath, object]:
 def _edited(text: str, edit: ConfigEdit) -> str:
     if edit.fmt == "block":
         return replace_block(text, str(edit.values[()]))
-    return edit_config(text, edit.fmt, edit.values)
+    return edit_config(text, edit.fmt, edit.values, edit.delete)
 
 
 def _block_word(block: str, text: str, marker: str) -> tuple[str, str | None]:
@@ -874,7 +892,12 @@ def _cline_data_dir() -> Path:
 
 def _kimi(setup: Setup) -> tuple[ConfigEdit, ...]:
     # Kimi Code reads ~/.kimi-code/config.toml, or the same file under KIMI_CODE_HOME.
-    folder = Path(os.environ.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code")
+    folder = Path(os.environ.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code").expanduser()
+    path = folder / "config.toml"
+    aliases = {f"{PROVIDER_ID}/{model.id}" for model in setup.models}
+    # Each model is its own table, so an alias jl wrote for a model the catalog dropped has to be
+    # named for deletion; the next connect would otherwise leave it in the picker for ever.
+    stale = tuple(("models", alias) for alias in _kimi_aliases(path) if alias not in aliases)
     values: dict[KeyPath, object] = {
         ("providers", PROVIDER_ID): {
             "type": "openai",
@@ -899,7 +922,21 @@ def _kimi(setup: Setup) -> tuple[ConfigEdit, ...]:
     if setup.default_model:
         # An alias from models above, so Kimi Code finds it at startup.
         values[("default_model",)] = f"{PROVIDER_ID}/{setup.default_model}"
-    return (ConfigEdit(folder / "config.toml", "toml", values),)
+    return (ConfigEdit(path, "toml", values, delete=stale),)
+
+
+def _kimi_aliases(path: Path) -> list[str]:
+    """Return the model aliases jl's provider holds now; empty for a missing or unreadable file."""
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    models = data.get("models")
+    if not isinstance(models, dict):
+        return []
+    return [
+        alias for alias, entry in models.items() if isinstance(entry, dict) and entry.get("provider") == PROVIDER_ID
+    ]
 
 
 def _kimi_capabilities(model: ModelInfo) -> list[str]:
@@ -953,7 +990,7 @@ def _cline(setup: Setup) -> tuple[ConfigEdit, ...]:
         "tokenSource": "manual",
     }
     values: dict[KeyPath, object] = {_CLINE_SLOT: entry, ("lastUsedProvider",): _CLINE_SLOT[1]}
-    if not path.exists():
+    if _current(path, ("version",)) is None:
         # Cline treats a file without its schema's version as empty, and its next save drops every provider.
         values["version",] = 1
     return (ConfigEdit(path, "jsonc", values, keep=(("version",),)),)

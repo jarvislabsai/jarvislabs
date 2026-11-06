@@ -41,7 +41,12 @@ main() {
     bin="$(uv tool dir --bin)"
     # uv can report the bin folder with ".." in it (e.g. ~/.local/share/../bin); resolve it, or the
     # comparisons below miss that this is the jl the window already runs.
-    bin="$(cd "$bin" && pwd)"
+    if ! resolved="$(cd "$bin" 2>/dev/null && pwd)"; then
+        echo "uv reported a bin folder that doesn't exist: $bin" >&2
+        echo "Installing jl failed." >&2
+        return 1
+    fi
+    bin="$resolved"
     if uv tool update-shell >/dev/null 2>&1; then
         next_step="jl is installed. Open a new terminal, then:"
     else
@@ -60,6 +65,10 @@ main() {
     status=0
     setup_done=0
     setup_and_connect || status=$?
+    # Ctrl-C is the user's own stop, not a failure: end on jl's words, with no next steps after them.
+    if [ "$status" -eq 130 ]; then
+        return "$status"
+    fi
     # When setup and connect ran, the product's own Next: is the ending. The closing lines are for a
     # skipped or failed setup, so the user still knows how to come back.
     if [ "$setup_done" -eq 0 ]; then

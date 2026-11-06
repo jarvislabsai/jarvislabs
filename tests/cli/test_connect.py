@@ -1178,7 +1178,9 @@ def test_connect_yes_help_names_what_it_does(server):
 
     assert result.exit_code == 0, result.output
     shown = " ".join(result.output.replace("│", " ").split())
-    assert ("Answer yes to every yes/no question: write the changes and switch this machine to your plan.") in shown
+    assert (
+        "Answer yes to every question: write the changes, and move this machine from the wallet to your plan."
+    ) in shown
     assert "jl connect opencode --model glm-5.3" in shown
 
 
@@ -1312,6 +1314,19 @@ def test_status_lists_connected_tools_first_then_installed_then_the_rest(subscri
     rows = [re.split(r"\s{2,}", line.strip("│ ")) for line in panel.splitlines() if line.strip("│ ") and line[0] == "│"]
     states = [row[1] for row in rows]
     assert states == ["connected", *["installed"] * 10, *["not installed"] * 2]
+
+
+def test_a_partial_connect_table_is_a_clean_error(subscribed):
+    path = config.config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('[connect]\nid = "key_1"\ntoken = "t"\n')
+
+    result = runner.invoke(app, ["status"])
+
+    # main() turns this into one line; the point is that it is jl's error, not a KeyError traceback.
+    assert isinstance(result.exception, JarvislabsError)
+    assert "Can't read this machine's saved connection" in str(result.exception)
+    assert "[connect]" in str(result.exception)
 
 
 def test_status_says_a_connected_tool_was_uninstalled(subscribed, opencode_config, monkeypatch):
@@ -2164,6 +2179,36 @@ def test_the_wallet_flag_creates_a_wallet_key_without_asking(unsubscribed, openc
     assert result.exit_code == 0, result.output
     assert ("POST", "users/api_keys", {"name": "jl-devbox-f7a7", "kind": "payg"}) in unsubscribed.calls
     assert read_json(opencode_config)["provider"]["jarvislabs"]["options"]["apiKey"] == "jlsk-wallet-secret"
+
+
+def test_a_failed_write_revokes_the_key_it_just_made(subscribed, opencode_config, monkeypatch):
+    subscribed.routes[("DELETE", "users/api_keys/key_1")] = {"success": True}
+    failure = PermissionError(13, "Permission denied", str(opencode_config))
+    monkeypatch.setattr(connect, "apply", MagicMock(side_effect=failure))
+
+    result = runner.invoke(app, ["connect", "opencode", "--yes"])
+
+    assert result.exit_code == 1, result.output
+    assert "Could not write" in " ".join(result.output.split())
+    # The key this run made is revoked, so the account doesn't hold one no tool can use.
+    assert any(call[:2] == ("DELETE", "users/api_keys/key_1") for call in subscribed.calls)
+    assert config.load_connection() is None
+
+
+def test_a_failed_rotation_says_the_tools_hold_a_dead_key(subscribed, opencode_config):
+    # A tool is connected, so the rotation replaces the key it holds.
+    runner.invoke(app, ["connect", "opencode", "--yes"])
+    subscribed.routes[("DELETE", "users/api_keys/key_1")] = {"success": True}
+    subscribed.routes[("POST", "users/api_keys")] = APIError(500, "server exploded")
+
+    result = runner.invoke(app, ["connect", "--rotate-key"])
+
+    # main() prints this one line; the point is the message, not a traceback.
+    assert isinstance(result.exception, JarvislabsError)
+    said = str(result.exception)
+    assert "server exploded" in said
+    assert "already revoked jl-devbox-f7a7" in said
+    assert "dead key" in said
 
 
 def test_at_the_key_cap_with_no_one_to_ask_connect_lists_the_keys_and_stops(subscribed, opencode_config, monkeypatch):

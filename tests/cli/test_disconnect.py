@@ -161,6 +161,21 @@ def test_disconnect_restores_replaced_values_and_keeps_later_edits(
     assert opencode_config.read_text() == original.replace("tokyonight", "gruvbox")
 
 
+def test_disconnecting_kilo_keeps_the_file_its_extension_uses(subscribed: MagicMock, tmp_path: Path) -> None:
+    (tmp_path / ".vscode" / "extensions" / "kilocode.kilo-code-1.0.0").mkdir(parents=True)
+    runner.invoke(app, ["connect", "kilo", "kilo-vscode", "--yes"])
+    path = tmp_path / "kilo" / "kilo.jsonc"
+    assert path.exists()
+
+    result = runner.invoke(app, ["disconnect", "kilo", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # The extension still uses the file: jl empties its own entries instead of deleting it.
+    assert path.exists()
+    assert "Kilo (VS Code) shares" in " ".join(result.output.split())
+    assert "jl connect kilo-vscode" in " ".join(result.output.split())
+
+
 def test_disconnect_gives_back_kimi_codes_config(subscribed: MagicMock, tmp_path: Path) -> None:
     path = tmp_path / ".kimi-code" / "config.toml"
     path.parent.mkdir(parents=True)

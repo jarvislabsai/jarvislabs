@@ -99,7 +99,7 @@ def run_in_a_terminal(argv: list[str], env: dict[str, str], ctrl_c_after: bytes 
 
 
 def fake_install(
-    tmp_path: Path, jl: str, update_shell: int = 0, unnormalized: bool = False
+    tmp_path: Path, jl: str, update_shell: int = 0, unnormalized: bool = False, bin_missing: bool = False
 ) -> tuple[list[str], dict[str, str]]:
     """Set up install.sh's run with uv installed and ``jl`` as jl's script; return its argv and env.
 
@@ -111,6 +111,8 @@ def fake_install(
     fakes.mkdir()
     jl_bin.mkdir()
     shown = f"{jl_bin}/../{jl_bin.name}" if unnormalized else jl_bin
+    if bin_missing:
+        shown = tmp_path / "not-a-folder"
     (fakes / "uv").write_text(
         f'#!/bin/sh\n[ "$1 $2" = "tool dir" ] && echo {shown}\n'
         f'[ "$1 $2" = "tool update-shell" ] && exit {update_shell}\nexit 0\n'
@@ -200,6 +202,17 @@ def test_the_installer_says_what_to_run_next_when_setup_is_skipped(tmp_path):
 
 
 @posix_only
+def test_the_installer_says_when_uvs_bin_folder_is_missing(tmp_path):
+    script, env = fake_install(tmp_path, 'echo "jl $1 ran"\n', bin_missing=True)
+
+    output, code = run_in_a_terminal(["/bin/sh", *script], env)
+
+    assert code == 1
+    assert "uv reported a bin folder that doesn't exist" in output
+    assert "Installing jl failed." in output
+
+
+@posix_only
 def test_the_installer_says_to_add_jls_folder_when_uv_cant(tmp_path):
     script, env = fake_install(tmp_path, 'echo "jl $1 ran"\n', update_shell=1)
 
@@ -250,3 +263,6 @@ def test_ctrl_c_at_a_jl_question_stops_the_installer(tmp_path, shell):
     assert "jl setup ran" in output
     assert "jl connect ran" not in output
     assert code == 130
+    # Like install.ps1: no next steps after the user stopped it.
+    assert "jl is installed. Open a new terminal" not in output
+    assert "  jl setup     sign in" not in output

@@ -243,6 +243,10 @@ def _jsonc_delete(root: JSONObject, path: KeyPath) -> None:
 
 def _edit_toml(text: str, set_values: Mapping[KeyPath, object], delete: Iterable[KeyPath]) -> str:
     doc = tomlkit.parse(text)
+    # A dotted key (providers.jl.type = "x") makes tomlkit render later keys under the wrong
+    # table once jl adds one. Refuse instead of corrupting the user's file.
+    if _toml_has_dotted_keys(text):
+        raise ValueError("jl can't edit dotted keys; write them as [tables] first")
     for path, value in set_values.items():
         _toml_assign(*_set_target(doc, path, value))
     for path in delete:
@@ -250,6 +254,28 @@ def _edit_toml(text: str, set_values: Mapping[KeyPath, object], delete: Iterable
         if target:
             _toml_delete(*target)
     return tomlkit.dumps(doc)
+
+
+def _toml_has_dotted_keys(text: str) -> bool:
+    """Return whether the text sets a key with a dot in it, such as providers.jl.type = "x".
+
+    Read from the text, not the parsed document: tomlkit turns dotted keys into ordinary tables.
+    A quoted key may hold a dot without being dotted, and a table header is not a key.
+    """
+    in_multiline = False
+    for line in text.splitlines():
+        if (line.count(chr(34) * 3) + line.count(chr(39) * 3)) % 2:
+            in_multiline = not in_multiline
+            continue
+        if in_multiline:
+            continue
+        stripped = line.strip()
+        if not stripped or stripped.startswith(("#", "[")) or "=" not in stripped:
+            continue
+        key = re.sub(r'"[^"]*"|' + chr(39) + r"[^" + chr(39) + r"]*" + chr(39), "", stripped.split("=", 1)[0])
+        if "." in key:
+            return True
+    return False
 
 
 def _toml_body(item: Container | Table) -> list[tuple[Any, Any]]:

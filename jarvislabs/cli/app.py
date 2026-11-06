@@ -25,11 +25,12 @@ app = typer.Typer(
     help=(
         "GPU cloud, model APIs, and serverless deployments from your terminal.\n\n"
         "[bold]Common workflows[/bold]\n"
-        "  GPU     [bold cyan]jl gpus[/bold cyan] → [bold cyan]jl create --gpu A100[/bold cyan] → [bold cyan]jl run train.py --gpu A100[/bold cyan]\n"
-        "  Stop    [bold cyan]jl pause <id>[/bold cyan]  stop billing, keep the disk\n"
+        "  GPU     [bold cyan]jl gpus[/bold cyan] → [bold cyan]jl create --gpu A100[/bold cyan] → [bold cyan]jl run train.py --on <id>[/bold cyan]\n"
+        "  Stop    [bold cyan]jl pause <id>[/bold cyan]  stop GPU billing, keep the disk\n"
         '  Models  [bold cyan]jl models list[/bold cyan] → [bold cyan]jl models chat <model> "Hello"[/bold cyan]\n'
+        "  Tools   [bold cyan]jl connect[/bold cyan]  add Jarvislabs models to your coding tool\n"
         "  Serve   [bold cyan]jl deploy managed-models create[/bold cyan]\n\n"
-        "Using a coding agent? jl setup installs the jl skill.\n\n"
+        "Using a coding agent? jl setup signs you in and installs the jl skill; jl connect adds your models.\n\n"
         "Use jl help <command> for details."
     ),
     rich_markup_mode="rich",
@@ -73,7 +74,15 @@ def help_command(
             from jarvislabs.cli.render import die
 
             die(f"Unknown command {name}.")
-    click.echo(target.get_help(click.Context(target, info_name="jl" + (" " + " ".join(command) if command else ""))))
+    click.echo(
+        target.get_help(
+            click.Context(
+                target,
+                info_name="jl" + (" " + " ".join(command) if command else ""),
+                help_option_names=app.info.context_settings.get("help_option_names", ["--help"]),
+            )
+        )
+    )
 
 
 def get_client() -> Client:

@@ -26,6 +26,8 @@ except ModuleNotFoundError:  # Python < 3.11
 import tomli_w
 from platformdirs import user_config_dir
 
+from jarvislabs.exceptions import JarvislabsError
+
 CONFIG_DIR_NAME = "jl"
 CONFIG_FILE = "config.toml"
 ENV_VAR = "JL_API_KEY"
@@ -58,22 +60,25 @@ def write_private(path: Path, data: bytes) -> None:
     folder, which is fsynced, set to mode 0o600 and renamed over ``path``, so a
     reader sees the old file or the new one, never a partial write. On Windows
     the mode only controls the read-only flag. The temp file is removed if any
-    step fails.
+    step fails. A symlinked file is written through: its target is replaced, not
+    the link, so a dotfiles-managed config stays live.
 
     Args:
         path: The file to write.
         data: The file's new contents.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # Follow a link so the user's dotfiles stay the real config instead of being replaced by a copy.
+    target = path.resolve() if path.is_symlink() else path
+    target.parent.mkdir(parents=True, exist_ok=True)
 
-    fd, tmp = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    fd, tmp = tempfile.mkstemp(dir=target.parent, suffix=".tmp")
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
         os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
+        os.replace(tmp, target)
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
@@ -160,6 +165,17 @@ def load_connection() -> Connection | None:
     table = load_config().get("connect")
     if not table:
         return None
+    try:
+        return _connection_from(table)
+    except (KeyError, TypeError, ValueError) as e:
+        raise JarvislabsError(
+            f"Can't read this machine's saved connection in {config_path()}: {e}. "
+            "Edit the file, or remove its [connect] table to start over."
+        ) from e
+
+
+def _connection_from(table: dict) -> Connection:
+    """Build the connection from config.toml's [connect] table, or raise when the table is incomplete."""
     harnesses = {}
     for harness_id, record in table.get("harnesses", {}).items():
         values: dict[Path, dict[tuple[str, ...], object]] = {}

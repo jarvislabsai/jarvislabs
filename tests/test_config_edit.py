@@ -166,6 +166,12 @@ model = "o4-mini"
 """
 
 
+def test_dotted_keys_are_refused_rather_than_rewritten():
+    # Adding a table would make tomlkit render the dotted keys under it; refusing keeps the file.
+    with pytest.raises(ValueError, match="dotted keys"):
+        edit_config('providers.jarvislabs.type = "x"\n', "toml", {("c",): 1})
+
+
 def test_setting_the_same_toml_tables_again_leaves_the_text_unchanged():
     # jl re-runs the plan after connect (to refresh the catalog) and on every later connect; each
     # run must not add another blank line between the tables it rewrites.

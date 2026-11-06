@@ -66,12 +66,9 @@ class RunCommandGroup(TyperGroup):
             "  For directory targets, pyproject.toml and requirements.txt are\n"
             "  auto-detected and installed. Use --requirements to override.\n"
             "\n"
-            "Lifecycle note:\n"
-            "  Human workflow: use the default mode where the CLI stays attached to the\n"
-            "  run and streams logs if you want it to pause or destroy the instance after\n"
-            "  the run finishes.\n"
-            "  Agent workflow: --json is for detached runs, so use --keep and have the\n"
-            "  agent clean up the instance after the run.\n"
+            "Lifecycle:\n"
+            "  A fresh instance is paused when the run finishes, unless you pass --destroy\n"
+            "  or --keep. With --json, pass --keep and pause or destroy it yourself.\n"
         )
         return help_text + start_help
 
@@ -960,7 +957,9 @@ def run_start(
     requirements: Annotated[
         str | None,
         typer.Option(
-            "--requirements", help="Override auto-detection: upload and install this requirements file instead."
+            "--requirements",
+            metavar="PATH",
+            help="Override auto-detection: upload and install this requirements file instead.",
         ),
     ] = None,
     pause: Annotated[bool, typer.Option("--pause", help="Pause a fresh instance after the run completes.")] = False,
@@ -974,7 +973,13 @@ def run_start(
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Start a managed run."""
+    """Start a managed run.
+
+    Give a target, then choose an existing instance or a fresh GPU:
+      jl run start train.py --on <instance_id>
+      jl run start train.py --gpu L4 -- --epochs 5
+      jl run start . --script train.py --gpu L4 --pause
+    """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     target, extra_args = _parse_run_inputs(list(ctx.args))
     requirements_path = _resolve_local_input(requirements, label="Requirements file")
@@ -1098,7 +1103,7 @@ def run_list(
     limit: Annotated[int | None, typer.Option("--limit", "-l", help="Show only the N most recent runs.")] = None,
     status_filter: Annotated[
         str | None,
-        typer.Option("--status", "-s", help="Filter by state (running, succeeded, failed). Implies --refresh."),
+        typer.Option("--status", "-s", help="Filter by a state from jl run status (implies --refresh)."),
     ] = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:

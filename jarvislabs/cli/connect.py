@@ -81,6 +81,8 @@ from jarvislabs.harnesses import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
     from jarvislabs.models import CreatedApiKey, ModelInfo
 
 MACHINE_ID_FILE = Path("/etc/machine-id")
@@ -109,19 +111,23 @@ def connect(
     ] = None,
     model: Annotated[
         str | None,
-        typer.Option("--model", help="Default model for the harnesses.", show_default=RECOMMENDED_MODEL),
+        typer.Option(
+            "--model",
+            metavar="MODEL",
+            help=f"Default model for the harnesses (default: {RECOMMENDED_MODEL}). IDs: jl models list.",
+        ),
     ] = None,
     dry_run: Annotated[
         bool, typer.Option("--dry-run", help="Print the changes and make none: no file or key.")
     ] = False,
-    show_all: Annotated[bool, typer.Option("--all", help="List tools that aren't installed too.")] = False,
+    show_all: Annotated[bool, typer.Option("--all", help="Include tools that aren't installed in the picker.")] = False,
     list_tools: Annotated[bool, typer.Option("--list", help="List every tool ID and name, then exit.")] = False,
     yes: Annotated[
         bool,
         typer.Option(
             "--yes",
             "-y",
-            help="Answer yes to every yes/no question: write the changes and switch this machine to your plan.",
+            help="Answer yes to every question: write the changes, and move this machine from the wallet to your plan.",
         ),
     ] = False,
     print_harness: Annotated[
@@ -142,24 +148,26 @@ def connect(
         bool, typer.Option("--wallet", help="Pay from the wallet when the account has no subscription, without asking.")
     ] = False,
 ) -> None:
-    """Connect the coding tools installed on this machine.
+    """Write the Jarvislabs provider into your coding tools.
+
+    Each tool gets the Models API URL, this machine's key, and the model catalog, so it can use your plan's models. With no tool named, jl asks which of the installed ones. Undo one tool with jl disconnect <tool>.
 
     [bold]Examples:[/bold]
 
-      [dim]# Pick the tools to connect from a list[/dim]
-      [cyan]jl connect[/cyan]
+      # Pick the tools to connect from a list
+      [bold cyan]jl connect[/bold cyan]
 
-      [dim]# List every tool ID and name[/dim]
-      [cyan]jl connect --list[/cyan]
+      # List every tool ID and name
+      [bold cyan]jl connect --list[/bold cyan]
 
-      [dim]# Connect one tool, or see how to install it[/dim]
-      [cyan]jl connect qwen[/cyan]
+      # Connect one tool, or see how to install it
+      [bold cyan]jl connect qwen[/bold cyan]
 
-      [dim]# Connect OpenCode, with GLM-5.3 as its default model[/dim]
-      [cyan]jl connect opencode --model glm-5.3[/cyan]
+      # Connect OpenCode, with GLM-5.3 as its default model
+      [bold cyan]jl connect opencode --model glm-5.3[/bold cyan]
 
-      [dim]# Print Zed's config, to paste by hand[/dim]
-      [cyan]jl connect --print zed[/cyan]
+      # Print Zed's config, to paste by hand
+      [bold cyan]jl connect --print zed[/bold cyan]
     """
     cli_options.apply_command_options(yes=yes)
     if list_tools:
@@ -262,7 +270,15 @@ def connect(
     for plan in plans:
         harness = plan.harness
         previous = connection.harnesses.get(harness.id)
-        replaced = connection.harnesses[harness.id] = apply(plan, previous)
+        try:
+            replaced = apply(plan, previous)
+        except OSError as e:
+            path = e.filename or plan.writes[0].path
+            if new_key and not connection.harnesses:
+                # Made for this run and no tool holds it: don't leave it live on the account.
+                _revoke_unused_key(client, connection)
+            render.die(f"Could not write {path}: {e.strerror or e}. Fix it, then run jl connect again.")
+        connection.harnesses[harness.id] = replaced
         save_connection(connection)
         connected.append(harness)
         label = "added" if previous is None else "updated"
@@ -300,9 +316,9 @@ def disconnect(
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Remove jl's setup from a tool.
+    """Remove jl's provider and key from your coding tools.
 
-    With no tool named, jl asks which of the connected ones. Disconnecting the last connected harness also revokes this machine's key. Logged out, jl keeps the key saved and says how to revoke it: a later disconnect, logged in, revokes a key that no harness holds. The backups jl saved at connect stay, and their paths are printed.
+    Your account stays signed in; jl logout also signs you out. With no tool named, jl asks which of the connected ones. Disconnecting the last tool also revokes this machine's key. The backups jl made at connect stay, and their paths are printed.
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     chosen = [_named_harness(harness_id)] if harness_id is not None else _picked_harnesses(load_connection())
@@ -355,8 +371,9 @@ def _picked_harnesses(connection: Connection | None) -> list[Harness]:
 def _disconnect_many(chosen: list[Harness], *, yes: bool) -> None:
     """Show one removal preview for every chosen tool, confirm once, then remove them."""
     if state.json_output:
+        keep = _files_another_tool_uses(chosen, load_connection())[0]
         for harness in chosen:
-            _disconnect(harness, preview=False)
+            _disconnect(harness, preview=False, keep=keep)
         return
     connection = load_connection()
     if connection is not None and not connection.harnesses:
@@ -364,13 +381,14 @@ def _disconnect_many(chosen: list[Harness], *, yes: bool) -> None:
         for harness in chosen:
             _disconnect(harness, preview=False)
         return
+    keep = _files_another_tool_uses(chosen, connection)
     plans = []
     for harness in chosen:
         if connection is None or harness.id not in connection.harnesses:
             render.info(f"{harness.name} isn't connected.")
             continue
         record = connection.harnesses[harness.id]
-        plans.append((harness, plan_disconnect(harness, record), record))
+        plans.append((harness, plan_disconnect(harness, record, keep[0]), record))
     if not plans:
         return
     render.change_rows(
@@ -382,21 +400,59 @@ def _disconnect_many(chosen: list[Harness], *, yes: bool) -> None:
                 f"{harness.name} was connected by an older jl, which didn't record the settings it replaced, "
                 "so jl takes out only its own and puts none back."
             )
+    warned = set()
+    for _, plan, _ in plans:
+        touched = {write.path for write in plan.writes}
+        for other, path in keep[1]:
+            if path in touched and (other.id, path) not in warned:
+                warned.add((other.id, path))
+                render.warning(
+                    f"{other.name} shares {render.short_path(path)} and loses the Jarvislabs provider too. "
+                    f"Run jl connect {other.id} afterwards."
+                )
     names = [harness.name for harness, _, _ in plans]
     label = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
     if not render.confirm(f"Disconnect {label}?", skip=yes):
         return
     for index, (harness, _, _) in enumerate(plans):
-        _disconnect(harness, preview=False, spaced=index == 0)
+        _disconnect(harness, preview=False, spaced=index == 0, keep=keep[0])
 
 
-def _disconnect(harness: Harness, *, spaced: bool = False, preview: bool = True) -> None:
+def _config_paths(harness: Harness) -> set[Path]:
+    """Return the files a harness's writer edits, without a key or catalog; empty when it has no writer."""
+    if harness.writer is None:
+        return set()
+    setup = Setup(base_url=MODELS_API_URL, api_key="", models=(), default_model=None)
+    return {edit.path for edit in harness.writer(setup)}
+
+
+def _files_another_tool_uses(
+    chosen: list[Harness], connection: Connection | None
+) -> tuple[set[Path], list[tuple[Harness, Path]]]:
+    """Return the files a connected tool that isn't being disconnected still writes, and each owner.
+
+    Kilo's CLI and VS Code extension share one config: disconnecting one must empty the file, not
+    delete it or the other's settings with it. The pairs are for the warning naming the tool.
+    """
+    if connection is None:
+        return set(), []
+    chosen_ids = {harness.id for harness in chosen}
+    shared: list[tuple[Harness, Path]] = []
+    for other in HARNESSES:
+        if other.support != "connect" or other.id in chosen_ids or other.id not in connection.harnesses:
+            continue
+        shared += [(other, path) for path in _config_paths(other)]
+    return {path for _, path in shared}, shared
+
+
+def _disconnect(harness: Harness, *, spaced: bool = False, preview: bool = True, keep: Collection[Path] = ()) -> None:
     """Remove jl's setup from one harness, revoking this machine's key when it was the last.
 
     Args:
         harness: The tool to clean up.
         spaced: Put a blank line before the result. The standalone command does; logout's batch does not.
         preview: Show the removal row and ask before writing. False when a combined preview already asked.
+        keep: Files another connected tool still writes, which are emptied rather than deleted.
     """
     connection = load_connection()
     if connection and not connection.harnesses:
@@ -421,7 +477,7 @@ def _disconnect(harness: Harness, *, spaced: bool = False, preview: bool = True)
         with contextlib.suppress(JarvislabsError):
             client = Client()
     record = connection.harnesses[harness.id]
-    plan = plan_disconnect(harness, record)
+    plan = plan_disconnect(harness, record, keep)
     if not state.json_output and preview:
         render.change_rows([_row(plan)])
         if record.untracked:
@@ -496,6 +552,7 @@ def _print_harnesses() -> None:
     for row in rows:
         label = "connect" if row["support"] == "connect" else "print only"
         render.stdout_console.print(f"  {row['id']:<16} {row['name']:<22} {label}")
+    render.hint_line("connect: jl writes the config · print only: jl prints it to paste by hand")
 
 
 def _start_command(harness: Harness) -> str:
@@ -792,6 +849,7 @@ def _machine_key(client: Client, kind: Literal["payg", "subscription"], rotate: 
         rotate: Replace the saved key even when its kind is right.
     """
     connection = load_connection()
+    replaced_key = None
     if connection and connection.key_id not in {key.id for key in client.account.list_api_keys()}:
         render.info(f"This machine's key {connection.name} was revoked, so jl creates a new one.")
     elif connection:
@@ -800,7 +858,16 @@ def _machine_key(client: Client, kind: Literal["payg", "subscription"], rotate: 
             return connection, False
         kind = kind if switch else connection.kind
         _revoke(client, connection.key_id)
-    key = _create_key(client, kind)
+        replaced_key = connection.name
+    try:
+        key = _create_key(client, kind)
+    except JarvislabsError as e:
+        if replaced_key:
+            raise JarvislabsError(
+                f"{e} jl had already revoked {replaced_key}, so your connected tools hold a dead key: "
+                "run jl connect to write a new one."
+            ) from e
+        raise
     harnesses = connection.harnesses if connection else {}
     connection = Connection(key_id=key.id, name=key.name, kind=key.kind, token=key.token, harnesses=harnesses)
     # Saved at once: the backend never shows the secret again.

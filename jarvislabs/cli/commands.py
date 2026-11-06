@@ -76,7 +76,7 @@ def status(
     json_output: cli_options.JsonOption = False,
     all_tools: Annotated[bool, typer.Option("--all", help="Also list tools that aren't installed.")] = False,
 ) -> None:
-    """See every coding tool: connected, installed, or where to get it."""
+    """See your account, plan, and coding tools."""
     from jarvislabs.cli import update
 
     cli_options.apply_command_options(json_output=json_output)
@@ -412,7 +412,7 @@ def filesystem_list(
 def filesystem_create(
     name: Annotated[str, typer.Option("--name", "-n", help="Filesystem name.")],
     storage: Annotated[int, typer.Option("--storage", "-s", help="Storage in GB (50-2048).")],
-    region: Annotated[str | None, typer.Option("--region", help="Region (IN1 or IN2). Defaults to IN2.")] = None,
+    region: Annotated[str | None, typer.Option("--region", help="Region (IN1, IN2, EU1). Defaults to IN2.")] = None,
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -538,7 +538,7 @@ def vpc_ips(
 def vpc_create(
     name: Annotated[str, typer.Argument(help="VPC name.")],
     cidr: Annotated[str, typer.Option("--cidr", help="IPv4 CIDR block (e.g. 10.50.0.0/24).")],
-    region: Annotated[str, typer.Option("--region", help="Region (IN1 or IN2).")],
+    region: Annotated[str, typer.Option("--region", help="Region (IN1, IN2, EU1).")],
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
