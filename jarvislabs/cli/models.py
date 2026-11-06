@@ -61,6 +61,7 @@ def models_get(model_id: ModelIdArgument = None, json_output: cli_options.JsonOp
         return
     render.model_detail(model, MODELS_API_URL)
     render.model_snippets(model.id, MODELS_API_URL)
+    render.next_step("try it", [f'jl models chat {model.id} "Hello"'])
 
 
 @models_app.command("chat")

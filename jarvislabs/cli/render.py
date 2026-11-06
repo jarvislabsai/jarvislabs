@@ -726,7 +726,7 @@ def models_table(models: list) -> None:
             *_prices(model.pricing).values(),
         )
     stdout_console.print(table)
-    info("Tip: run 'jl models get <ID>' for details and ready-to-use code")
+    next_step("for details and ready-to-use code", ["jl models get <ID>"])
 
 
 def select_model(models: list):
@@ -796,7 +796,7 @@ def model_snippets(model_id: str, base_url: str) -> None:
     python = _openai_snippet(base_url, model_id, MODELS_DEFAULT_MAX_TOKENS)
     for title, code, lexer in (("curl", curl, "bash"), ("Python", python, "python")):
         stdout_console.print()
-        stdout_console.print(Rule(f"[bold]{title}[/bold]", align="left", style="dim"))
+        stdout_console.print(Rule(Text(title, "bold"), style=CHROME_STYLE, align="left"))
         stdout_console.print()
         stdout_console.print(Syntax(code, lexer, theme="ansi_dark", background_color="default", word_wrap=True))
     stdout_console.print()
