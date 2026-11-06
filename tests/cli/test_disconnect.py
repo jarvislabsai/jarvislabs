@@ -169,16 +169,20 @@ def test_disconnect_previews_a_removal_row_and_names_the_tool(subscribed: MagicM
 
     assert result.exit_code == 0, result.output
     # The row of the connect preview, with - for removal; the question names the tool.
-    assert result.output.startswith(
+    assert "DISCONNECT TOOLS" in result.output
+    assert (
         "- OpenCode  ~/opencode/opencode.json\n"
         "            remove the Jarvislabs entries, put back your model\n"
         "? Disconnect OpenCode? (y/N) "
-    )
+    ) in result.output
     # The last tool: its key is revoked, and the backup from connect stays.
     assert result.output.endswith(
         "✓ OpenCode disconnected\n"
         "  revoked this machine's key jl-devbox-f7a7\n"
         "  your config from before jl is still at ~/opencode/opencode.json.jl-backup\n"
+        "\n"
+        "Next: jl connect\n"
+        "      connect a tool\n"
     )
 
 

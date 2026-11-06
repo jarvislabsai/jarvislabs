@@ -57,6 +57,7 @@ from jarvislabs.config import (
     Replaced,
     load_config,
     load_connection,
+    resolve_token,
     save_config,
     save_connection,
     wallet_chosen,
@@ -302,9 +303,26 @@ def disconnect(
     With no tool named, jl asks which of the connected ones. Disconnecting the last connected harness also revokes this machine's key. Logged out, jl keeps the key saved and says how to revoke it: a later disconnect, logged in, revokes a key that no harness holds. The backups jl saved at connect stay, and their paths are printed.
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
+    if not state.json_output:
+        render.rule("DISCONNECT TOOLS")
+        render.info("Remove the Jarvislabs provider from your coding tools.")
     chosen = [_named_harness(harness_id)] if harness_id is not None else _picked_harnesses(load_connection())
     for harness in chosen:
         _disconnect(harness)
+    _next_after_disconnect()
+
+
+def _next_after_disconnect() -> None:
+    """End a disconnect with the one thing to do next, depending on what is left."""
+    if state.json_output:
+        return
+    connection = load_connection()
+    if connection and connection.harnesses:
+        render.next_step("see what is still connected", ["jl status"])
+    elif resolve_token():
+        render.next_step("connect a tool", ["jl connect"])
+    else:
+        render.next_step("set up again", ["jl setup"])
 
 
 def _named_harness(harness_id: str) -> Harness:
