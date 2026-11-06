@@ -5,10 +5,17 @@ from __future__ import annotations
 from typing import Annotated
 
 import typer
+import typer.rich_utils as rich_utils
 
 from jarvislabs.cli.render import die
 from jarvislabs.client import Client
 from jarvislabs.exceptions import JarvislabsError
+
+# Typer dims every help line after the first by default, which makes the whole page look disabled.
+# Description is body text; dim is for tertiary metadata only. Panel borders stay grey, not dim.
+rich_utils.STYLE_HELPTEXT = ""
+rich_utils.STYLE_OPTIONS_PANEL_BORDER = "bright_black"
+rich_utils.STYLE_COMMANDS_PANEL_BORDER = "bright_black"
 
 app = typer.Typer(
     name="jl",
