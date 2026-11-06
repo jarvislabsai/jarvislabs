@@ -303,8 +303,7 @@ def disconnect(
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     chosen = [_named_harness(harness_id)] if harness_id is not None else _picked_harnesses(load_connection())
-    for harness in chosen:
-        _disconnect(harness, spaced=True)
+    _disconnect_many(chosen, yes=yes)
 
 
 def _named_harness(harness_id: str) -> Harness:
@@ -350,12 +349,49 @@ def _picked_harnesses(connection: Connection | None) -> list[Harness]:
     return [harness for harness in connected if harness.id in picked]
 
 
-def _disconnect(harness: Harness, *, spaced: bool = False) -> None:
+def _disconnect_many(chosen: list[Harness], *, yes: bool) -> None:
+    """Show one removal preview for every chosen tool, confirm once, then remove them."""
+    if state.json_output:
+        for harness in chosen:
+            _disconnect(harness, preview=False)
+        return
+    connection = load_connection()
+    if connection is not None and not connection.harnesses:
+        # A key kept by a logged-out disconnect: no tool holds it, so this run revokes it.
+        for harness in chosen:
+            _disconnect(harness, preview=False)
+        return
+    plans = []
+    for harness in chosen:
+        if connection is None or harness.id not in connection.harnesses:
+            render.info(f"{harness.name} isn't connected.")
+            continue
+        record = connection.harnesses[harness.id]
+        plans.append((harness, plan_disconnect(harness, record), record))
+    if not plans:
+        return
+    render.change_rows([_row(plan) for _, plan, _ in plans], "Remove jl's setup", f"{len(plans)} tool{'s' if len(plans) != 1 else ''}")
+    for harness, _, record in plans:
+        if record.untracked:
+            render.warning(
+                f"{harness.name} was connected by an older jl, which didn't record the settings it replaced, "
+                "so jl takes out only its own and puts none back."
+            )
+    names = [harness.name for harness, _, _ in plans]
+    label = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    if not render.confirm(f"Disconnect {label}?", skip=yes):
+        return
+    for index, (harness, _, _) in enumerate(plans):
+        _disconnect(harness, preview=False, spaced=index == 0)
+
+
+def _disconnect(harness: Harness, *, spaced: bool = False, preview: bool = True) -> None:
     """Remove jl's setup from one harness, revoking this machine's key when it was the last.
 
     Args:
         harness: The tool to clean up.
         spaced: Put a blank line before the result. The standalone command does; logout's batch does not.
+        preview: Show the removal row and ask before writing. False when a combined preview already asked.
     """
     connection = load_connection()
     if connection and not connection.harnesses:
@@ -381,14 +417,14 @@ def _disconnect(harness: Harness, *, spaced: bool = False) -> None:
             client = Client()
     record = connection.harnesses[harness.id]
     plan = plan_disconnect(harness, record)
-    if not state.json_output:
+    if not state.json_output and preview:
         render.change_rows([_row(plan)])
         if record.untracked:
             render.warning(
                 f"{harness.name} was connected by an older jl, which didn't record the settings it replaced, "
                 "so jl takes out only its own and puts none back."
             )
-    if plan.writes and not render.confirm(f"Disconnect {harness.name}?", skip=state.yes):
+    if preview and plan.writes and not render.confirm(f"Disconnect {harness.name}?", skip=state.yes):
         return
 
     apply(plan, record)

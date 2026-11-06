@@ -48,7 +48,7 @@ def logout(
             state.yes = True
             try:
                 for harness in connected:
-                    connect._disconnect(harness)
+                    connect._disconnect(harness, preview=False, spaced=False)
             finally:
                 state.yes = old_yes
     config = load_config()
