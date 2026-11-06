@@ -13,27 +13,20 @@ from jarvislabs.exceptions import JarvislabsError
 app = typer.Typer(
     name="jl",
     help=(
-        "[bold cyan]⚡ Jarvislabs[/bold cyan] GPU Cloud CLI\n\n"
-        "[dim]Two types of instances:[/dim]\n"
-        "  [green]Containers[/green]  [dim]Pre-configured with PyTorch, Jupyter, and IDE. Default.[/dim]\n"
-        "  [yellow]VMs[/yellow]          [dim]Bare-metal SSH access. Use --vm.[/dim]\n\n"
-        "[dim]Quick examples:[/dim]\n"
-        "  [bold]jl create --gpu A100[/bold]                       [rgb(100,100,100)]container instance[/rgb(100,100,100)]\n"
-        "  [bold]jl create --gpu H100 --vm[/bold]                  [rgb(100,100,100)]VM instance[/rgb(100,100,100)]\n"
-        "  [bold]jl run train.py --gpu L4[/bold]                   [rgb(100,100,100)]run on a fresh GPU[/rgb(100,100,100)]\n"
-        "  [bold]jl run . --script train.py --on <id>[/bold]       [rgb(100,100,100)]upload project and run[/rgb(100,100,100)]\n"
-        "  [bold]jl ssh <id>[/bold]                                [rgb(100,100,100)]SSH into an instance[/rgb(100,100,100)]\n"
-        "  [bold]jl list[/bold]                                    [rgb(100,100,100)]list all instances[/rgb(100,100,100)]\n"
-        "  [bold]jl gpus[/bold]                                    [rgb(100,100,100)]GPU availability and pricing[/rgb(100,100,100)]\n"
-        "  [bold]jl pause <id>[/bold]                              [rgb(100,100,100)]stop GPU billing, keep data[/rgb(100,100,100)]\n"
-        "  [bold]jl destroy <id>[/bold]                            [rgb(100,100,100)]delete permanently[/rgb(100,100,100)]\n"
-        "  [bold]jl models list[/bold]                             [rgb(100,100,100)]pay-per-token models and prices[/rgb(100,100,100)]\n"
-        '  [bold]jl models chat <model> "Hello"[/bold]             [rgb(100,100,100)]call a model, no deployment needed[/rgb(100,100,100)]\n'
-        "  [bold]jl deploy managed-models create[/bold]            [rgb(100,100,100)]deploy a ready-made model (pick from a list)[/rgb(100,100,100)]\n\n"
-        "[dim]Every command supports[/dim] [bold]--help[/bold] [dim]for details:[/dim]\n"
-        "  [dim]jl create --help    jl run --help    jl ssh-key --help[/dim]\n\n"
-        "[dim]Using a coding agent? Run[/dim] [bold]jl setup[/bold] [dim]to install the jl skill. "
-        "It teaches your agent how to use jl.[/dim]"
+        "[bold cyan]⚡ Jarvislabs[/bold cyan]  [bold]GPU cloud[/bold]\n"
+        "Create GPU instances, run jobs, and call models.\n\n"
+        "[bold]Start here[/bold]\n"
+        "  [bold cyan]jl gpus[/bold cyan]                      see GPUs and prices\n"
+        "  [bold cyan]jl create --gpu A100[/bold cyan]         start a container (Jupyter, IDE)\n"
+        "  [bold cyan]jl run train.py --gpu A100[/bold cyan]   run a script on a fresh GPU\n"
+        "  [bold cyan]jl models list[/bold cyan]               pay-per-token models and prices\n\n"
+        "[bold]Instances[/bold]\n"
+        "  Containers  pre-configured with PyTorch, Jupyter and IDE\n"
+        "  VMs         bare-metal SSH; add --vm\n\n"
+        "[bold]More[/bold]\n"
+        "  [bold cyan]jl deploy managed-models create[/bold cyan]   serve a ready-made model\n"
+        "  [bold cyan]jl setup[/bold cyan]                          install the jl skill for coding agents\n\n"
+        "Every command has --help, e.g. jl create --help."
     ),
     rich_markup_mode="rich",
     pretty_exceptions_enable=False,

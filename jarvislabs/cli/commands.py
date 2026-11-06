@@ -5,7 +5,7 @@ from typing import Annotated
 
 import typer
 
-from jarvislabs.cli import options as cli_options, render, state, update
+from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
 from jarvislabs.config import load_config, load_connection, save_config
 from jarvislabs.constants import EUROPE_GPU_TYPES, EUROPE_REGION, INDIA_NOIDA_REGION
@@ -55,6 +55,8 @@ def status(
     all_tools: Annotated[bool, typer.Option("--all", help="Also list tools that aren't installed.")] = False,
 ) -> None:
     """See every coding tool: connected, installed, or where to get it."""
+    from jarvislabs.cli import update
+
     cli_options.apply_command_options(json_output=json_output)
     client = get_client()
     with render.spinner("Fetching account info..."):
