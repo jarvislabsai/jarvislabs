@@ -176,7 +176,8 @@ def connect(
         render.success(f"Revoked this machine's key {kept.name}. No tools are connected, so jl made no new one.")
         return
     if not (printed or only_rotate):
-        render.heading("Connect your coding tools", "to the Jarvislabs Models API")
+        render.rule("CONNECT TOOLS")
+        render.info("Connect the tools installed on this machine to the Models API.")
     with render.spinner("Checking your subscription..."):
         usage = client.subscription.usage()
     if usage is None:
@@ -534,6 +535,10 @@ def _pick_harnesses(show_all: bool = False) -> list[Harness]:
     """
     supported = [h for h in HARNESSES if h.support == "connect"]
     ticked = [h for h in supported if installed(h)]
+    if len(ticked) == 1 and not show_all:
+        render.info(f"{ticked[0].name} is the only installed tool.")
+        render.hint_line("Other tools: `jl connect --all` lists them")
+        return ticked
     choices: list[questionary.Choice] = [questionary.Choice(h.name, h.id, checked=True) for h in ticked]
     hidden = [h for h in HARNESSES if h not in ticked]
     if show_all:

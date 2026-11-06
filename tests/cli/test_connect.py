@@ -485,7 +485,7 @@ def test_the_picker_ticks_installed_harnesses_and_lists_coming_soon_last(subscri
 def test_an_empty_picker_says_how_to_come_back(subscribed, opencode_config, terminal):
     terminal.picked = []
 
-    result = runner.invoke(app, ["connect"])
+    result = runner.invoke(app, ["connect", "--all"])
 
     assert result.exit_code == 0, result.output
     assert result.output.endswith("Next: jl connect\n      set up a coding tool when you want\n")
@@ -961,13 +961,12 @@ def test_ctrl_c_in_the_picker_aborts_with_130(subscribed, monkeypatch):
     assert [call for call in subscribed.calls if call[0] == "POST"] == []
 
 
-def test_the_picker_lists_only_installed_tools_by_default(subscribed, terminal):
-    terminal.picked = ["opencode"]
-
+def test_a_single_installed_tool_skips_the_picker(subscribed, terminal):
     result = runner.invoke(app, ["connect", "--dry-run"])
 
     assert result.exit_code == 0, result.output
-    assert [choice.value for choice in terminal.picker.choices] == ["opencode"]
+    assert terminal.picker is None
+    assert "OpenCode is the only installed tool" in result.output
     assert "Other tools: jl connect --all lists them" in result.output
 
 
@@ -1055,7 +1054,8 @@ def test_connect_opens_with_a_heading_for_the_phase(subscribed, opencode_config)
     result = runner.invoke(app, ["connect", "opencode", "--dry-run"])
 
     assert result.exit_code == 0, result.output
-    assert result.stderr.startswith("\nConnect your coding tools  to the Jarvislabs Models API\n")
+    assert result.stderr.startswith("\nCONNECT TOOLS")
+    assert "Connect the tools installed on this machine to the Models API." in result.stderr
 
 
 def test_connect_shows_the_test_reply_or_the_server_error(subscribed, opencode_config, monkeypatch):
@@ -1113,7 +1113,7 @@ def test_ctrl_c_aborts_with_130(subscribed, opencode_config, terminal, monkeypat
         ctrl_c_at(monkeypatch, "Write these changes?")
 
     # The picker opens only when no harness is named.
-    result = runner.invoke(app, ["connect"] if question == "picker" else ["connect", "opencode"], input="y\n")
+    result = runner.invoke(app, ["connect", "--all"] if question == "picker" else ["connect", "opencode"], input="y\n")
 
     assert result.exit_code == 130, result.output
     assert not opencode_config.exists()
@@ -1233,7 +1233,7 @@ def test_a_changed_config_still_runs_the_flow(subscribed, opencode_config, termi
     result = runner.invoke(app, ["connect", "--yes"])
 
     assert result.exit_code == 0, result.output
-    assert terminal.picker is not None
+    assert terminal.picker is None
     assert read_json(opencode_config)["model"] == "jarvislabs/deepseek-v4.1-flash-1017"
 
 
