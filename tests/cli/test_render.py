@@ -74,6 +74,15 @@ def test_info_and_hints_are_not_faint(coloured):
     assert "\x1b[2m" not in out
 
 
+def test_success_colours_its_mark_not_its_message(coloured):
+    render.success("OpenCode connected")
+
+    line = coloured.getvalue()
+    assert "\x1b[32m✓ \x1b[0m" in line
+    # Green on the mark, not the sentence.
+    assert "\x1b[32mOpenCode" not in line
+
+
 def test_an_error_colours_the_whole_line(coloured):
     render.error("Test request failed")
 

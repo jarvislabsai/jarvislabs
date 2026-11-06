@@ -1176,9 +1176,10 @@ def change_row(row: Row, width: int, out: Console) -> None:
 def _status(mark: str, style: str, msg: str | Text, hint: str | Text | None) -> None:
     if state.json_output:
         return
-    # State owns the whole line, not just the mark: a green check beside white text still reads
-    # as plain text at a glance.
-    _hang(Text(mark + " ", style), msg if isinstance(msg, Text) else Text(msg, style), console)
+    # Success is frequent and can be long: green belongs on the mark, not the paragraph. Warnings and
+    # errors are rare and short, so they tint their message; that is where attention should go.
+    body_style = "bold" if style == "success" else style
+    _hang(Text(mark + " ", style), msg if isinstance(msg, Text) else Text(msg, body_style), console)
     if hint:
         _hang(Text("  "), _hint(hint), console)
 
