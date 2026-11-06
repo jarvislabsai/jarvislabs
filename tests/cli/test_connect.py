@@ -421,6 +421,17 @@ def terminal(server, tmp_path, monkeypatch):
     return fake
 
 
+def test_connect_list_names_every_tool(server):
+    result = runner.invoke(app, ["connect", "--list"])
+
+    assert result.exit_code == 0, result.output
+    for harness in harnesses.HARNESSES:
+        assert harness.id in result.output
+        assert harness.name in result.output
+    assert "print only" in result.output
+    assert server.calls == []
+
+
 @pytest.mark.parametrize("flags", ([], ["--yes"]), ids=["terminal", "yes"])
 def test_connect_never_starts_a_tool(subscribed, opencode_config, terminal, monkeypatch, flags):
     started = []

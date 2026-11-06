@@ -103,7 +103,7 @@ def connect(
         list[str] | None,
         typer.Argument(
             metavar="HARNESS...",
-            help="Harnesses to connect: " + ", ".join(h.id for h in HARNESSES if h.support == "connect"),
+            help="Harness IDs to connect; run jl connect --list for IDs and names.",
         ),
     ] = None,
     model: Annotated[
@@ -114,6 +114,7 @@ def connect(
         bool, typer.Option("--dry-run", help="Print the changes and make none: no file or key.")
     ] = False,
     show_all: Annotated[bool, typer.Option("--all", help="List tools that aren't installed too.")] = False,
+    list_tools: Annotated[bool, typer.Option("--list", help="List every tool ID and name, then exit.")] = False,
     yes: Annotated[
         bool,
         typer.Option(
@@ -124,7 +125,11 @@ def connect(
     ] = False,
     print_harness: Annotated[
         str | None,
-        typer.Option("--print", metavar="HARNESS", help="Print a harness's config to paste by hand, key filled in."),
+        typer.Option(
+            "--print",
+            metavar="HARNESS",
+            help="Print a harness's config to paste by hand, key filled in. IDs: jl connect --list.",
+        ),
     ] = None,
     rotate_key: Annotated[
         bool,
@@ -143,6 +148,9 @@ def connect(
       [dim]# Pick the tools to connect from a list[/dim]
       [cyan]jl connect[/cyan]
 
+      [dim]# List every tool ID and name[/dim]
+      [cyan]jl connect --list[/cyan]
+
       [dim]# Connect one tool, or see how to install it[/dim]
       [cyan]jl connect qwen[/cyan]
 
@@ -153,6 +161,9 @@ def connect(
       [cyan]jl connect --print zed[/cyan]
     """
     cli_options.apply_command_options(yes=yes)
+    if list_tools:
+        _print_harnesses()
+        raise typer.Exit()
     if print_harness and dry_run:
         render.die("--print writes no file, so it takes no --dry-run. Run it without --dry-run.")
     # --print also takes a coming-soon harness, which _named_harnesses refuses.
@@ -278,7 +289,10 @@ def connect(
 def disconnect(
     harness_id: Annotated[
         str | None,
-        typer.Argument(metavar="HARNESS", help="The harness to disconnect; with none, jl asks which."),
+        typer.Argument(
+            metavar="HARNESS",
+            help="The harness ID; with none, jl asks which. IDs: jl connect --list.",
+        ),
     ] = None,
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
@@ -425,6 +439,18 @@ def _test_request(api_key: str, model: str) -> None:
         )
         raise typer.Exit(1) from None
     render.info(f"API test passed in {time.monotonic() - started:.1f} s")
+
+
+def _print_harnesses() -> None:
+    """List every tool ID, its name, and whether jl can connect it or only print its config."""
+    rows = [{"id": harness.id, "name": harness.name, "support": harness.support} for harness in HARNESSES]
+    if state.json_output:
+        render.print_json(rows)
+        return
+    render.heading("Coding tools")
+    for row in rows:
+        label = "connect" if row["support"] == "connect" else "print only"
+        render.stdout_console.print(f"  {row['id']:<16} {row['name']:<22} {label}")
 
 
 def _start_command(harness: Harness) -> str:
