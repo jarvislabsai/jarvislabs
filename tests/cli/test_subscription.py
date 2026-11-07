@@ -52,6 +52,18 @@ def test_usage_shows_the_plan_and_each_window(server):
     assert "Next: jl usage manage" in result.output
 
 
+def test_usage_draws_a_bar_for_each_window(server):
+    server.routes[("GET", "subscription/usage")] = USAGE
+
+    result = runner.invoke(app, ["usage"])
+
+    assert result.exit_code == 0, result.output
+    assert "█" in result.output
+    assert "░" in result.output
+    # Three windows, each on its own row.
+    assert result.output.count("used, resets") == 3
+
+
 def test_usage_without_a_plan_points_at_subscribe(server):
     server.routes[("GET", "subscription/usage")] = NotFoundError("This account has no active subscription.")
 

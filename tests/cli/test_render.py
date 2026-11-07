@@ -14,6 +14,16 @@ from jarvislabs.cli import render, state
 COLOUR = re.compile(r"\x1b\[[0-9;]*(3[0-9]|9[0-7]|38;)")
 
 
+def test_a_usage_bar_fills_to_the_percentage_and_warns_near_the_limit():
+    assert str(render.usage_bar(0)) == "░" * 16
+    assert str(render.usage_bar(50)) == "█" * 8 + "░" * 8
+    assert render.usage_bar(10).style == "default"
+    assert render.usage_bar(85).style == "warning"
+    full = render.usage_bar(100)
+    assert str(full) == "█" * 16
+    assert full.style == "error"
+
+
 def test_a_link_is_accent_underlined_and_clickable():
     buffer = io.StringIO()
     Console(file=buffer, force_terminal=True, color_system="standard", theme=render.theme).print(

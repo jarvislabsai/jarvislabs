@@ -68,8 +68,24 @@ theme = Theme(
 console = Console(stderr=True, theme=theme)
 stdout_console = Console(theme=theme)
 
-UNICODE_MARKS = {"ok": "✓", "bad": "✗", "ticked": "●", "unticked": "○", "sep": " · "}
-ASCII_MARKS = {"ok": "+", "bad": "x", "ticked": "[*]", "unticked": "[ ]", "sep": " | "}
+UNICODE_MARKS = {
+    "ok": "✓",
+    "bad": "✗",
+    "ticked": "●",
+    "unticked": "○",
+    "sep": " · ",
+    "bar_full": "█",
+    "bar_empty": "░",
+}
+ASCII_MARKS = {
+    "ok": "+",
+    "bad": "x",
+    "ticked": "[*]",
+    "unticked": "[ ]",
+    "sep": " | ",
+    "bar_full": "#",
+    "bar_empty": "-",
+}
 # The theme's accent, bold, for the "?" that opens a prompt.
 ACCENT_BOLD = theme.styles["accent"] + Style(bold=True)
 
@@ -156,6 +172,18 @@ def account_status(info, bal, metrics, sym: str) -> None:
 NO_SUBSCRIPTION = Text.assemble("No subscription. Subscribe at ", link(SUBSCRIBE_URL))
 
 
+USAGE_BAR_WIDTH = 16
+
+
+def usage_bar(percent: float) -> Text:
+    """Return a fixed-width bar for a percentage: full to 80%, yellow, and red once it is used up."""
+    filled = max(0, min(USAGE_BAR_WIDTH, round(percent / 100 * USAGE_BAR_WIDTH)))
+    style = "error" if percent >= 100 else "warning" if percent >= 80 else "default"
+    bar = Text(MARKS["bar_full"] * filled, style)
+    bar.append(MARKS["bar_empty"] * (USAGE_BAR_WIDTH - filled), style="dim")
+    return bar
+
+
 def subscription_usage(usage: SubscriptionUsage | None) -> None:
     """Print the plan, its renewal, each window's share used, and the plan-paid requests running now.
 
@@ -177,7 +205,9 @@ def subscription_usage(usage: SubscriptionUsage | None) -> None:
     table.add_row("Plan", f"[bold]{escape(usage.plan.name)}[/bold], {renewal}")
     for label, window in (("5-hour", windows.five_hour), ("Weekly", windows.weekly), ("Monthly", windows.monthly)):
         resets = f", resets {_utc(window.resets_at)}" if window.resets_at else ""
-        table.add_row(label, f"{window.percent_used:.1f}% used{resets}")
+        table.add_row(
+            label, Text.assemble(usage_bar(window.percent_used), f"  {window.percent_used:4.1f}% used{resets}")
+        )
     table.add_row("Running now", f"{usage.slots.in_use} of {usage.slots.limit} requests")
     table.add_row("Use balance", "on" if usage.use_balance else "off")
     stdout_console.print(
