@@ -291,6 +291,10 @@ def test_connect_writes_claude_codes_env_block(subscribed, tmp_path, monkeypatch
             "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4.1-flash-1017",
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4.1-flash-1017",
             "ANTHROPIC_DEFAULT_FABLE_MODEL": "deepseek-v4.1-flash-1017",
+            # One extra /model row with our name, not only Claude's aliases.
+            "ANTHROPIC_CUSTOM_MODEL_OPTION": "deepseek-v4.1-flash-1017",
+            "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "DeepSeek V4.1 Flash",
+            "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Served by Jarvislabs",
         }
     }
 
