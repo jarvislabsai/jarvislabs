@@ -87,6 +87,11 @@ def test_claude_code_completes_a_turn_through_the_models_api(subscribed, tmp_pat
         # It reaches the gateway as a coding agent, with its tools, not as a chat box.
         assert request["body"]["tools"]
         assert request["body"]["stream"] is True
+        print(
+            f"claude says {json.loads(result.stdout)['result']!r} | POST {request['path']} "
+            f"model={request['body']['model']} auth={request['headers']['authorization'].split()[0]} "
+            f"tools={len(request['body']['tools'])}"
+        )
 
 
 def test_codex_completes_a_turn_through_the_models_api(subscribed, tmp_path, monkeypatch):
@@ -108,3 +113,8 @@ def test_codex_completes_a_turn_through_the_models_api(subscribed, tmp_path, mon
         # Codex sends its tool definitions too, so the endpoint must pass them through.
         assert request["body"]["tools"]
         assert request["body"]["stream"] is True
+        reply = next(line for line in result.stdout.splitlines() if "Hi from the mock" in line)
+        print(
+            f"codex says {reply!r} | POST {request['path']} model={request['body']['model']} "
+            f"auth={request['headers']['authorization'].split()[0]} tools={len(request['body']['tools'])}"
+        )
