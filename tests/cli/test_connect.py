@@ -1073,11 +1073,12 @@ def test_connect_opens_with_a_heading_for_the_phase(subscribed, opencode_config,
     assert "Sets up the Jarvislabs provider in your coding tools." in result.stderr
 
 
-def test_standalone_connect_has_no_phase_heading(subscribed, opencode_config):
+def test_standalone_connect_opens_with_the_same_heading(subscribed, opencode_config):
     result = runner.invoke(app, ["connect", "opencode", "--dry-run"])
 
     assert result.exit_code == 0, result.output
-    assert "CONNECT TOOLS" not in result.stderr
+    assert result.stderr.startswith("\nCONNECT TOOLS")
+    assert "Sets up the Jarvislabs provider in your coding tools." in result.stderr
 
 
 def test_connect_shows_the_test_reply_or_the_server_error(subscribed, opencode_config, monkeypatch):

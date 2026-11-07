@@ -197,11 +197,12 @@ def connect(
         _revoke_unused_key(client, kept)
         render.success(f"Revoked this machine's key {kept.name}. No tools are connected, so jl made no new one.")
         return
-    if not (printed or only_rotate) and os.environ.get("JL_FROM_INSTALLER"):
-        # The heading belongs to the guided installer flow. A standalone connect starts at its picker,
-        # the same way disconnect starts at its preview.
+    if not (printed or only_rotate):
+        # Connect is a multi-step flow (pay, pick, preview, write) whether the installer runs it or
+        # the user types it after setup. One heading frames it; per-step headings would be ceremony.
         render.rule("CONNECT TOOLS")
         render.console.print(Text("Sets up the Jarvislabs provider in your coding tools.", "dim"))
+        render.console.print()
     with render.spinner("Checking your subscription..."):
         usage = client.subscription.usage()
     if usage is None:

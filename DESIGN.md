@@ -46,10 +46,10 @@ the platform belongs in docs.** Do not duplicate a tutorial in both; one will go
 
 ### Connect
 
-14. A standalone `jl connect` starts at its picker, like `disconnect` starts at its preview. The
-    installer-guided flow opens with `CONNECT TOOLS` and one concrete line (what is written, not a
-    tautology), because it is a step in a guided sequence. The installer sets `JL_FROM_INSTALLER` for
-    both `setup` and `connect`; a user's shell never sees it.
+14. Every `jl connect` opens with `CONNECT TOOLS` and one concrete line (what is written, not a
+    tautology): pay, pick, preview and write are a multi-step flow whether the installer runs it or
+    the user types it after setup. `--print` and `--rotate-key` have no phase and skip the heading;
+    per-step headings inside connect would be ceremony.
 15. Picker lists installed tools only. `--all` reveals the catalog. One installed tool means no
     picker; connect it and point at `--all`.
 16. Preview with the `+ add` / `~ update` legend, then one read gate: `Write these changes?`.
