@@ -50,8 +50,8 @@ def test_connect_writes_each_json_family_harness_in_its_own_format(subscribed, t
     assert kilo["provider"]["jarvislabs"]["options"] == {"baseURL": URL, "apiKey": KEY}
     assert {model_id: m["limit"] for model_id, m in kilo["provider"]["jarvislabs"]["models"].items()} == {
         "deepseek-v4.1-flash-1017": {"context": 1048576, "output": 65536},
-        "glm-5.3": {"context": 230000, "output": 32768},
-        "gemma-3-1b-it": {"context": 32768, "output": 32768},
+        "glm-5.3": {"context": 230000, "output": 23000},
+        "gemma-3-1b-it": {"context": 32768, "output": 3276},
     }
 
     pi = read_json(tmp_path / ".pi" / "agent" / "models.json")["providers"]["jarvislabs"]
@@ -77,7 +77,7 @@ def test_connect_writes_each_json_family_harness_in_its_own_format(subscribed, t
                 "reasoning": True,
                 "input": ["text"],
                 "contextWindow": 230000,
-                "maxTokens": 32768,
+                "maxTokens": 23000,
             },
             {
                 "id": "gemma-3-1b-it",
@@ -85,7 +85,7 @@ def test_connect_writes_each_json_family_harness_in_its_own_format(subscribed, t
                 "reasoning": False,
                 "input": ["text"],
                 "contextWindow": 32768,
-                "maxTokens": 32768,
+                "maxTokens": 3276,
             },
         ],
     }
@@ -124,8 +124,10 @@ def test_connect_writes_each_json_family_harness_in_its_own_format(subscribed, t
     assert qwen["env"] == {"JARVISLABS_API_KEY": KEY}
     assert qwen["security"] == {"auth": {"selectedType": "openai"}}
     assert qwen["model"] == {"name": "deepseek-v4.1-flash-1017"}
+    # providerProtocol tells Qwen Code that jl's custom provider speaks OpenAI.
+    assert qwen["providerProtocol"] == {"jarvislabs": "openai"}
     assert qwen["modelProviders"] == {
-        "openai": [
+        "jarvislabs": [
             {
                 "id": "deepseek-v4.1-flash-1017",
                 "name": "DeepSeek V4.1 Flash",
@@ -144,7 +146,7 @@ def test_connect_writes_each_json_family_harness_in_its_own_format(subscribed, t
                 "baseUrl": URL,
                 "generationConfig": {
                     "contextWindowSize": 230000,
-                    "samplingParams": {"max_tokens": 32768},
+                    "samplingParams": {"max_tokens": 23000},
                     "modalities": {"image": False},
                 },
             },
@@ -155,7 +157,7 @@ def test_connect_writes_each_json_family_harness_in_its_own_format(subscribed, t
                 "baseUrl": URL,
                 "generationConfig": {
                     "contextWindowSize": 32768,
-                    "samplingParams": {"max_tokens": 32768},
+                    "samplingParams": {"max_tokens": 3276},
                     "modalities": {"image": False},
                 },
             },
@@ -180,14 +182,14 @@ def test_connect_writes_each_json_family_harness_in_its_own_format(subscribed, t
                 "provider": "jarvislabs",
                 "name": "GLM-5.3",
                 "maxPromptTokens": 230000,
-                "maxOutputTokens": 32768,
+                "maxOutputTokens": 23000,
             },
             {
                 "id": "gemma-3-1b-it",
                 "provider": "jarvislabs",
                 "name": "Gemma 3 1B IT",
                 "maxPromptTokens": 32768,
-                "maxOutputTokens": 32768,
+                "maxOutputTokens": 3276,
             },
         ],
     }
@@ -207,7 +209,7 @@ def test_connect_writes_each_json_family_harness_in_its_own_format(subscribed, t
         "apiType": "OpenAICompletion",
         "apiKey": KEY,
         "maxContextLength": 230000,
-        "extraBody": {"max_tokens": 32768},
+        "extraBody": {"max_tokens": 23000},
     }
     assert read_json(junie / "config.json") == {"model": "custom:jarvislabs-deepseek-v4.1-flash-1017"}
 
@@ -542,9 +544,14 @@ def test_connect_keeps_the_users_own_entries_in_shared_provider_lists(subscribed
     result = runner.invoke(app, ["connect", "qwen", "copilot", "--yes"])
 
     assert result.exit_code == 0, result.output
-    qwen = read_json(tmp_path / ".qwen" / "settings.json")["modelProviders"]["openai"]
-    assert [entry["id"] for entry in qwen] == ["gpt-4o", "deepseek-v4.1-flash-1017", "glm-5.3", "gemma-3-1b-it"]
-    assert qwen[0] == gpt
+    # Qwen Code: the user's own entries stay in the openai list, jl's go under its own provider.
+    qwen = read_json(tmp_path / ".qwen" / "settings.json")["modelProviders"]
+    assert qwen["openai"] == [gpt]
+    assert [entry["id"] for entry in qwen["jarvislabs"]] == [
+        "deepseek-v4.1-flash-1017",
+        "glm-5.3",
+        "gemma-3-1b-it",
+    ]
     copilot = read_json(tmp_path / ".copilot" / "providers.json")
     assert [provider["name"] for provider in copilot["providers"]] == ["ollama", "jarvislabs"]
     assert copilot["providers"][0] == ollama
@@ -561,6 +568,56 @@ def test_the_preview_doesnt_list_shared_provider_lists_as_replaced(subscribed, s
     # Both add to a list of the user's: added, not changed, and nothing replaced.
     rows = result.stdout.splitlines()[3:]
     assert [row.split("  ")[0] for row in rows] == ["+ Qwen Code", "+ Copilot CLI"]
+
+
+# An entry an earlier jl wrote into Qwen Code's shared modelProviders.openai list, before jl had
+# its own provider there.
+OLD_JL_GLM = {
+    "id": "glm-5.3",
+    "name": "GLM-5.3",
+    "envKey": "JARVISLABS_API_KEY",
+    "baseUrl": URL,
+    "generationConfig": {"contextWindowSize": 230000, "samplingParams": {"max_tokens": 32768}},
+}
+
+
+def test_connect_moves_entries_an_earlier_jl_left_in_the_openai_list(subscribed, tmp_path):
+    settings = tmp_path / ".qwen" / "settings.json"
+    settings.parent.mkdir()
+    gpt = {"id": "gpt-4o", "envKey": "OPENAI_API_KEY", "baseUrl": "https://api.openai.com/v1"}
+    settings.write_text(json.dumps({"modelProviders": {"openai": [gpt, OLD_JL_GLM]}}))
+
+    result = runner.invoke(app, ["connect", "qwen", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    qwen = read_json(settings)
+    # The user's own entry stays in the openai list; jl's move under its own provider, which
+    # providerProtocol maps to the OpenAI protocol.
+    assert qwen["modelProviders"]["openai"] == [gpt]
+    assert qwen["providerProtocol"] == {"jarvislabs": "openai"}
+    assert [entry["id"] for entry in qwen["modelProviders"]["jarvislabs"]] == [
+        "deepseek-v4.1-flash-1017",
+        "glm-5.3",
+        "gemma-3-1b-it",
+    ]
+
+
+def test_connect_removes_the_openai_list_when_it_held_only_jls_entries(subscribed, tmp_path):
+    settings = tmp_path / ".qwen" / "settings.json"
+    settings.parent.mkdir()
+    settings.write_text(json.dumps({"modelProviders": {"openai": [OLD_JL_GLM]}}))
+
+    result = runner.invoke(app, ["connect", "qwen", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    qwen = read_json(settings)
+    # Nothing of the user's is left in the openai list, so the key goes rather than an empty array.
+    assert "openai" not in qwen["modelProviders"]
+    assert [entry["id"] for entry in qwen["modelProviders"]["jarvislabs"]] == [
+        "deepseek-v4.1-flash-1017",
+        "glm-5.3",
+        "gemma-3-1b-it",
+    ]
 
 
 # What Junie wrote on its first launch: its settings file keeps every value as a string.

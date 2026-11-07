@@ -176,11 +176,11 @@ def test_each_model_gets_its_context_and_max_output(subscribed, opencode_config)
 
     assert result.exit_code == 0, result.output
     models = read_json(opencode_config)["provider"]["jarvislabs"]["models"]
-    # GLM has no max_output_tokens and Gemma's is null: both fall back to 32768.
+    # GLM has no max_output_tokens and Gemma's is null: both fall back to a tenth of the context.
     assert {model_id: m["limit"] for model_id, m in models.items()} == {
         "deepseek-v4.1-flash-1017": {"context": 1048576, "output": 65536},
-        "glm-5.3": {"context": 230000, "output": 32768},
-        "gemma-3-1b-it": {"context": 32768, "output": 32768},
+        "glm-5.3": {"context": 230000, "output": 23000},
+        "gemma-3-1b-it": {"context": 32768, "output": 3276},
     }
 
 
@@ -1521,13 +1521,13 @@ def test_connect_writes_goose_aider_and_crush_in_their_formats(subscribed, tmp_p
         },
         "openai/glm-5.3": {
             "max_input_tokens": 230000,
-            "max_output_tokens": 32768,
+            "max_output_tokens": 23000,
             "litellm_provider": "openai",
             "mode": "chat",
         },
         "openai/gemma-3-1b-it": {
             "max_input_tokens": 32768,
-            "max_output_tokens": 32768,
+            "max_output_tokens": 3276,
             "litellm_provider": "openai",
             "mode": "chat",
         },
@@ -1539,10 +1539,10 @@ def test_connect_writes_goose_aider_and_crush_in_their_formats(subscribed, tmp_p
         " --base-url https://models.jarvislabs.net/v1 --api-key jlsk-new-secret\n"
         "model add jarvislabs/deepseek-v4.1-flash-1017 --name 'DeepSeek V4.1 Flash'"
         " --context-window 1048576 --default-max-tokens 65536 --supports-images true\n"
-        "model add jarvislabs/glm-5.3 --name GLM-5.3 --context-window 230000 --default-max-tokens 32768"
+        "model add jarvislabs/glm-5.3 --name GLM-5.3 --context-window 230000 --default-max-tokens 23000"
         " --supports-images false\n"
         "model add jarvislabs/gemma-3-1b-it --name 'Gemma 3 1B IT' --context-window 32768"
-        " --default-max-tokens 32768 --supports-images false\n"
+        " --default-max-tokens 3276 --supports-images false\n"
         "model large jarvislabs/deepseek-v4.1-flash-1017\n"
         "model small jarvislabs/deepseek-v4.1-flash-1017\n"
         "# <<< jl <<<\n"

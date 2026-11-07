@@ -99,7 +99,7 @@ class ConfigEdit:
         keep: Key paths in values that disconnect leaves in place, because the harness needs them
             once it shares the file, such as Cline's schema version.
         items: jl's own entries in each list in values that also holds the user's entries, such
-            as Qwen Code's modelProviders.openai. Disconnect takes out only these.
+            as Qwen Code's modelProviders.jarvislabs. Disconnect takes out only these.
         delete: Key paths to remove, for entries jl wrote before that this setup no longer has,
             such as a model the catalog dropped.
     """
@@ -860,7 +860,13 @@ def _xdg_config_home() -> Path:
 
 def _limits(model: ModelInfo) -> tuple[int, int]:
     # The catalog always has a context length; the fallback only keeps such a model usable.
-    return model.context_length or MODELS_DEFAULT_MAX_TOKENS, model.max_output_tokens or MODELS_DEFAULT_MAX_TOKENS
+    context = model.context_length or MODELS_DEFAULT_MAX_TOKENS
+    # A harness that compacts (OpenCode) sends the whole conversation plus the model's full
+    # advertised output budget as max_tokens, and the Models API refuses prompt_tokens +
+    # max_tokens over the context window. Compaction keeps a 15% buffer, so an output budget
+    # of a tenth of the window always fits (0.85 + 0.10 < 1); a flat 32768 doesn't on the
+    # smaller windows.
+    return context, min(model.max_output_tokens or MODELS_DEFAULT_MAX_TOKENS, context // 10)
 
 
 def _opencode(setup: Setup) -> tuple[ConfigEdit, ...]:
@@ -1085,13 +1091,38 @@ def _qwen(setup: Setup) -> tuple[ConfigEdit, ...]:
         }
         for model in setup.models
     ]
-    # Every OpenAI-compatible model shares the "openai" list, so the user's own entries are kept.
-    providers = _others(path, ("modelProviders", "openai"), "baseUrl", setup.base_url) + ours
-    values: dict[KeyPath, object] = {("env", key_env): setup.api_key, ("modelProviders", "openai"): providers}
+    # A custom provider loads only once providerProtocol names its protocol; ours speaks OpenAI.
+    # security.auth.selectedType stays "openai" though: a custom id there crashes Qwen Code.
+    values: dict[KeyPath, object] = {
+        ("env", key_env): setup.api_key,
+        ("providerProtocol", PROVIDER_ID): "openai",
+        # jl's own provider list, which holds the user's entries too, if they added any.
+        ("modelProviders", PROVIDER_ID): _others(path, ("modelProviders", PROVIDER_ID), "baseUrl", setup.base_url)
+        + ours,
+    }
+    items: dict[KeyPath, Sequence[object]] = {("modelProviders", PROVIDER_ID): ours}
+    delete: tuple[KeyPath, ...] = ()
+    # An earlier jl wrote its entries into the shared modelProviders.openai list, where they
+    # shadow these (Qwen Code keeps the first entry of a protocol+id+baseUrl), so a refresh
+    # moves them out; the user's own entries stay.
+    openai = ("modelProviders", "openai")
+    entries = _current(path, openai)
+    stale = (
+        [entry for entry in entries if isinstance(entry, dict) and entry.get("baseUrl") == setup.base_url]
+        if isinstance(entries, list)
+        else ()
+    )
+    if stale:
+        items[openai] = stale
+        if kept := _others(path, openai, "baseUrl", setup.base_url):
+            values[openai] = kept
+        else:
+            # Nothing of the user's is left in the list: the key goes rather than an empty array.
+            delete = (openai,)
     if setup.default_model:
         values["security", "auth", "selectedType"] = "openai"
         values["model", "name"] = setup.default_model
-    return (ConfigEdit(path, "jsonc", values, items={("modelProviders", "openai"): ours}),)
+    return (ConfigEdit(path, "jsonc", values, items=items, delete=delete),)
 
 
 def _copilot(setup: Setup) -> tuple[ConfigEdit, ...]:
@@ -1455,6 +1486,9 @@ HARNESSES: tuple[Harness, ...] = (
         launch=("qwen",),
         writer=_qwen,
         install_url="https://qwenlm.github.io/qwen-code-docs/en/users/quickstart/",
+        # The providerProtocol mapping is new in Qwen Code 0.19.3; older builds skip an unmapped
+        # custom provider, so jl's models never reach the picker.
+        min_version="0.19.3",
     ),
     Harness(
         id="copilot",

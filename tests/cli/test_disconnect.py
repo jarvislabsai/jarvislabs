@@ -576,6 +576,14 @@ def test_disconnect_prints_where_the_backups_are(subscribed: MagicMock, opencode
 GPT = {"id": "gpt-4o", "envKey": "OPENAI_API_KEY", "baseUrl": "https://api.openai.com/v1"}
 OLLAMA = {"name": "ollama", "type": "openai", "baseUrl": "http://localhost:11434/v1"}
 LLAMA = {"id": "llama3", "provider": "ollama"}
+# An entry an earlier jl wrote into Qwen Code's shared modelProviders.openai list.
+OLD_JL_GLM = {
+    "id": "glm-5.3",
+    "name": "GLM-5.3",
+    "envKey": "JARVISLABS_API_KEY",
+    "baseUrl": "https://models.jarvislabs.net/v1",
+    "generationConfig": {"contextWindowSize": 230000, "samplingParams": {"max_tokens": 32768}},
+}
 
 
 def shared_lists(tmp_path: Path) -> tuple[Path, Path]:
@@ -628,7 +636,7 @@ def test_disconnect_keeps_items_the_user_added_to_shared_lists(subscribed: Magic
 def test_disconnect_keeps_a_jl_list_item_the_user_edited(subscribed: MagicMock, tmp_path: Path) -> None:
     qwen, copilot = shared_lists(tmp_path)
     data = read_json(qwen)
-    glm = next(entry for entry in data["modelProviders"]["openai"] if entry["id"] == GLM["id"])
+    glm = next(entry for entry in data["modelProviders"]["jarvislabs"] if entry["id"] == GLM["id"])
     glm["name"] = "My GLM"
     qwen.write_text(json.dumps(data, indent=2))
     data = read_json(copilot)
@@ -638,7 +646,8 @@ def test_disconnect_keeps_a_jl_list_item_the_user_edited(subscribed: MagicMock, 
 
     disconnect_qwen_and_copilot()
 
-    assert read_json(qwen) == {"modelProviders": {"openai": [GPT, glm]}}
+    # The user's own openai entry and their edit of jl's entry stay; the rest of jl's go.
+    assert read_json(qwen) == {"modelProviders": {"openai": [GPT], "jarvislabs": [glm]}}
     assert read_json(copilot) == {"providers": [OLLAMA], "models": [LLAMA, deepseek]}
 
 
@@ -664,6 +673,43 @@ def test_qwen_and_copilot_files_jl_created_go(subscribed: MagicMock, tmp_path: P
 
     assert not (tmp_path / ".qwen" / "settings.json").exists()
     assert not (tmp_path / ".copilot" / "providers.json").exists()
+
+
+def test_an_old_jl_qwen_record_disconnects_leaving_the_users_entries(subscribed: MagicMock, tmp_path: Path) -> None:
+    settings = tmp_path / ".qwen" / "settings.json"
+    settings.parent.mkdir()
+    # What an earlier jl wrote, before it had its own provider there: its entries in the shared
+    # modelProviders.openai list, and no record of what it set.
+    settings.write_text(
+        json.dumps(
+            {
+                "env": {"JARVISLABS_API_KEY": "jlsk-old"},
+                "security": {"auth": {"selectedType": "openai"}},
+                "model": {"name": "glm-5.3"},
+                "modelProviders": {"openai": [GPT, OLD_JL_GLM]},
+            }
+        )
+    )
+    config.save_connection(
+        config.Connection(
+            "key_1",
+            "jl-devbox-f7a7",
+            "subscription",
+            "jlsk-old",
+            harnesses={"qwen": config.Replaced(untracked=True)},
+        )
+    )
+
+    result = runner.invoke(app, ["disconnect", "qwen", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # jl's old entries leave the shared list and the env var naming it; the user's own entry and
+    # the values that don't name Jarvislabs (the default model, the auth type) stay, as for Aider.
+    assert read_json(settings) == {
+        "security": {"auth": {"selectedType": "openai"}},
+        "model": {"name": "glm-5.3"},
+        "modelProviders": {"openai": [GPT]},
+    }
 
 
 def test_a_record_saved_without_list_entries_still_disconnects(subscribed: MagicMock, opencode_config: Path) -> None:

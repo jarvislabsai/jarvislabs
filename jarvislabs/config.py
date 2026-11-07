@@ -104,7 +104,7 @@ class Written:
         kept: Key paths jl set that disconnect leaves, because the harness needs them once it
             shares the file, such as Cline's schema version. They have no hash.
         items: Per key path holding a list that jl shares with the user's own entries, such as
-            Qwen Code's modelProviders.openai, a hash of each entry jl last wrote there. Such a
+            Qwen Code's modelProviders.jarvislabs, a hash of each entry jl last wrote there. Such a
             path has no hash of its own: disconnect takes out only the entries still matching.
     """
 
