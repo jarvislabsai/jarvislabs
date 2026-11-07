@@ -483,24 +483,25 @@ def test_status_json_includes_cli_block(monkeypatch, capsys):
 
 
 @pytest.mark.parametrize(
-    ("latest", "skill", "hint"),
+    ("latest", "skill", "warning", "hint"),
     [
-        ("0.2.19", "old", "jl 0.2.19 is available. Run jl update."),
-        ("0.2.18", "old", "The jl agent skill is out of date. Run jl update."),
-        ("0.2.18", None, "No jl agent skill is installed. Run jl setup to add one."),
+        ("0.2.19", "old", "jl 0.2.19 is available. Run jl update.", None),
+        ("0.2.18", "old", "The jl agent skill is out of date. Run jl update.", None),
+        ("0.2.18", None, None, "No jl agent skill is installed. Run `jl setup` to add one."),
         (
             "0.2.19",
             None,
-            "jl 0.2.19 is available. Run jl update. No jl agent skill is installed. Run jl setup to add one.",
+            "jl 0.2.19 is available. Run jl update.",
+            "No jl agent skill is installed. Run `jl setup` to add one.",
         ),
-        ("0.2.18", BUNDLED, None),
+        ("0.2.18", BUNDLED, None, None),
     ],
 )
-def test_status_hint(monkeypatch, latest, skill, hint):
+def test_status_hints(monkeypatch, latest, skill, warning, hint):
     _fake_pypi(monkeypatch, latest=latest)
     if skill is not None:
         _write_skill(setup.UNIVERSAL_PATH, skill)
-    assert update.status_hint(update.cli_status()) == hint
+    assert update.status_hints(update.cli_status()) == (warning, hint)
 
 
 def test_help_tells_agents_to_install_the_skill():

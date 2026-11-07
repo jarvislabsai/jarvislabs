@@ -143,8 +143,11 @@ def status(
             "These tools pay from your wallet",
             "You have a subscription now. Run `jl connect` to switch them to your plan.",
         )
-    if hint := update.status_hint(cli):
-        render.warning(hint)
+    warning, hint = update.status_hints(cli)
+    if warning:
+        render.warning(warning)
+    if hint:
+        render.hint_line(hint)
     next_command = "connect another tool:" if recorded else "connect a tool:"
     render.next_step(next_command, ["jl connect"])
 

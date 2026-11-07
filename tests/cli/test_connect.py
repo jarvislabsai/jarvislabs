@@ -1370,6 +1370,17 @@ def test_status_hides_tools_that_are_not_installed(subscribed, monkeypatch):
     assert "OpenCode" in full.output
 
 
+def test_status_names_a_missing_skill_as_a_hint_not_a_warning(subscribed, monkeypatch, tmp_path):
+    monkeypatch.setattr(setup, "UNIVERSAL_PATH", tmp_path / "none" / "SKILL.md")
+    monkeypatch.setattr(setup, "ADDITIONAL_AGENTS", {})
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "No jl agent skill is installed. Run jl setup to add one." in result.output
+    assert "! No jl agent skill" not in result.output
+
+
 def test_status_ends_with_what_to_run_next(subscribed, opencode_config):
     result = runner.invoke(app, ["status"])
 

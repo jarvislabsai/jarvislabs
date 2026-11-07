@@ -133,16 +133,20 @@ def cli_status() -> dict:
     }
 
 
-def status_hint(cli: dict) -> str | None:
-    """The line `jl status` prints when jl or the agent skill needs attention."""
-    hints = []
+def status_hints(cli: dict) -> tuple[str | None, str | None]:
+    """The warning, and the hint, `jl status` prints when jl or the agent skill needs attention.
+
+    An update or an out-of-date skill needs attention: a warning. A missing skill is an option not
+    taken — the user declined it in setup, or hasn't run setup — so it is a hint; as a warning it
+    would read as a failure right after leaving setup.
+    """
+    warning = None
     if cli["update_available"]:
-        hints.append(f"jl {cli['latest']} is available. Run jl update.")
+        warning = f"jl {cli['latest']} is available. Run jl update."
     elif cli["skill_current"] is False:
-        hints.append("The jl agent skill is out of date. Run jl update.")
-    if cli["skill_current"] is None:
-        hints.append("No jl agent skill is installed. Run jl setup to add one.")
-    return " ".join(hints) or None
+        warning = "The jl agent skill is out of date. Run jl update."
+    hint = "No jl agent skill is installed. Run `jl setup` to add one." if cli["skill_current"] is None else None
+    return warning, hint
 
 
 def _update_message(current: str, latest: str) -> str:

@@ -954,7 +954,11 @@ def _revoke_lost_key(client: Client, name: str) -> None:
     for key in client.account.list_api_keys():
         if key.name == name:
             _revoke(client, key.id)
-            render.info(f"Revoked the key {name}, whose secret this machine no longer has.")
+            # Bookkeeping between the write gate and the result rows: dim, so the rows stay the
+            # loudest thing on screen.
+            render.console.print(
+                Text(f"Revoked the key {name}, whose secret this machine no longer has.", "dim"), highlight=False
+            )
 
 
 def _free_a_key_slot(client: Client, cap_message: str) -> None:
