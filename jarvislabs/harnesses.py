@@ -1507,6 +1507,7 @@ def _coming_soon(
     command: tuple[str, ...],
     writer: Callable[[Setup], tuple[ConfigEdit, ...]] | None = None,
     preview: bool = False,
+    one_model: bool = False,
 ) -> Harness:
     docs_url = f"{HARNESS_DOCS_URL}/{harness_id}"
     return Harness(
@@ -1518,15 +1519,18 @@ def _coming_soon(
         writer=writer,
         docs_url=docs_url,
         preview=preview,
+        one_model=one_model,
     )
 
 
-# Claude Code and Codex wait for the Models API's Anthropic and Responses endpoints. Cursor,
-# VS Code Copilot and Zed keep the key in an app database or the OS keychain (phase 2).
+# Claude Code and Codex wait for the Models API's Anthropic and Responses endpoints, so they are
+# preview-only until those are public. Cursor, VS Code Copilot and Zed keep the key in an app
+# database or the OS keychain (phase 2).
 HARNESSES += (
-    # Behind JL_PREVIEW_HARNESSES until /v1/messages and /v1/responses are public.
-    _coming_soon("claude-code", "Claude Code", "cli", ("claude",), writer=_claude_code, preview=True),
-    _coming_soon("codex", "Codex", "cli", ("codex",), writer=_codex, preview=True),
+    # Behind JL_PREVIEW_HARNESSES until /v1/messages and /v1/responses are public. Both hold one
+    # model: the gateway name is passed as the model, not picked from a catalog in the file.
+    _coming_soon("claude-code", "Claude Code", "cli", ("claude",), writer=_claude_code, preview=True, one_model=True),
+    _coming_soon("codex", "Codex", "cli", ("codex",), writer=_codex, preview=True, one_model=True),
     _coming_soon("cursor", "Cursor", "cli", ("cursor", ".")),
     _coming_soon("vscode-copilot", "VS Code Copilot", "vscode", ("code", ".")),
     # A writer, though jl doesn't write Zed's key to the keychain yet: jl connect --print shows the settings.
