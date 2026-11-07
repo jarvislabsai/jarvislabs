@@ -43,9 +43,12 @@ def test_usage_shows_the_plan_and_each_window(server):
     for text in (
         "Pro",
         "renews 2026-11-20 09:00 UTC",
-        "42.5% used, resets 2026-11-05 16:05 UTC",
-        "10.0% used, resets 2026-11-09 00:00 UTC",
-        "3.2% used, resets 2026-11-20 09:00 UTC",
+        "42.5% used",
+        "resets 2026-11-05 16:05 UTC",
+        "10.0% used",
+        "resets 2026-11-09 00:00 UTC",
+        "3.2% used",
+        "resets 2026-11-20 09:00 UTC",
         "1 of 4",
     ):
         assert text in result.output
@@ -59,9 +62,10 @@ def test_usage_draws_a_bar_for_each_window(server):
 
     assert result.exit_code == 0, result.output
     assert "█" in result.output
-    assert "░" in result.output
-    # Three windows, each on its own row.
-    assert result.output.count("used, resets") == 3
+    # Claude Code's style: a filled bar, blank track, and the percentage at its right edge.
+    assert "░" not in result.output
+    assert result.output.count("% used") == 3
+    assert result.output.count("resets ") == 3
 
 
 def test_usage_without_a_plan_points_at_subscribe(server):

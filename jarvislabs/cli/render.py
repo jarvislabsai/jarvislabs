@@ -172,15 +172,19 @@ def account_status(info, bal, metrics, sym: str) -> None:
 NO_SUBSCRIPTION = Text.assemble("No subscription. Subscribe at ", link(SUBSCRIBE_URL))
 
 
-USAGE_BAR_WIDTH = 16
+USAGE_BAR_WIDTH = 32
 
 
 def usage_bar(percent: float) -> Text:
-    """Return a fixed-width bar for a percentage: full to 80%, yellow, and red once it is used up."""
+    """Return a bar like Claude Code's: blocks to the percentage, then blank space, no frame.
+
+    The percentage is printed at the bar's right edge by the caller, so an empty bar reads as
+    "nothing used" rather than as a track.
+    """
     filled = max(0, min(USAGE_BAR_WIDTH, round(percent / 100 * USAGE_BAR_WIDTH)))
     style = "error" if percent >= 100 else "warning" if percent >= 80 else "default"
     bar = Text(MARKS["bar_full"] * filled, style)
-    bar.append(MARKS["bar_empty"] * (USAGE_BAR_WIDTH - filled), style="dim")
+    bar.append(" " * (USAGE_BAR_WIDTH - filled))
     return bar
 
 
@@ -204,10 +208,9 @@ def subscription_usage(usage: SubscriptionUsage | None) -> None:
     table.add_column()
     table.add_row("Plan", f"[bold]{escape(usage.plan.name)}[/bold], {renewal}")
     for label, window in (("5-hour", windows.five_hour), ("Weekly", windows.weekly), ("Monthly", windows.monthly)):
-        resets = f", resets {_utc(window.resets_at)}" if window.resets_at else ""
-        table.add_row(
-            label, Text.assemble(usage_bar(window.percent_used), f"  {window.percent_used:4.1f}% used{resets}")
-        )
+        table.add_row(label, Text.assemble(usage_bar(window.percent_used), f"  {window.percent_used:5.1f}% used"))
+        if window.resets_at:
+            table.add_row("", Text(f"resets {_utc(window.resets_at)}", "dim"))
     table.add_row("Running now", f"{usage.slots.in_use} of {usage.slots.limit} requests")
     table.add_row("Use balance", "on" if usage.use_balance else "off")
     stdout_console.print(
