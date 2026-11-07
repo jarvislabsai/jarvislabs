@@ -14,6 +14,18 @@ from jarvislabs.cli import render, state
 COLOUR = re.compile(r"\x1b\[[0-9;]*(3[0-9]|9[0-7]|38;)")
 
 
+def test_a_link_is_accent_underlined_and_clickable():
+    buffer = io.StringIO()
+    Console(file=buffer, force_terminal=True, color_system="standard", theme=render.theme).print(
+        render.link("https://example.com")
+    )
+
+    out = buffer.getvalue()
+    assert "\x1b[4;36mhttps://example.com" in out  # underline, in the theme's cyan
+    assert "\x1b]8;" in out  # OSC 8, so the terminal makes it clickable
+    assert "https://example.com" in out
+
+
 @pytest.fixture(autouse=True)
 def human_output(monkeypatch):
     """Output for a person, as an earlier command's --json may have left it otherwise."""

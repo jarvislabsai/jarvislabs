@@ -611,13 +611,13 @@ def _stop_without_a_tool() -> None:
     body.append(":\n", "dim")
     for harness in offered:
         body.append(f"{harness.name:<{width}}  ", "bold")
-        body.append(harness.install_url, "accent")
+        body.append_text(render.link(harness.install_url))
         body.append("\n")
     if coming:
         names = ", ".join(h.name for h in coming[:-1])
         names = f"{names} or {coming[-1].name}" if names else coming[-1].name
         body.append(f"\nUsing {names}? jl doesn't set them up yet: ", "dim")
-        body.append(HARNESS_DOCS_URL, "accent")
+        body.append_text(render.link(HARNESS_DOCS_URL))
         body.append(".", "dim")
     body.append("\n\nJust installed one? Open a new terminal, then run ", "dim")
     body.append("jl connect", render.ACCENT_BOLD)
@@ -916,7 +916,13 @@ def _create_key(client: Client, kind: Literal["payg", "subscription"]) -> Create
         try:
             _revoke(client, key.id)
         except JarvislabsError as error:
-            render.die(f"jl couldn't revoke the key {key.name} it just created ({error}). Revoke it at {API_KEYS_URL}.")
+            render.die(
+                Text.assemble(
+                    f"jl couldn't revoke the key {key.name} it just created ({error}). Revoke it at ",
+                    render.link(API_KEYS_URL),
+                    ".",
+                )
+            )
         render.die(
             "Subscriptions aren't available yet. Run jl connect again later."
             if kind == "subscription"
@@ -972,13 +978,11 @@ def _free_a_key_slot(client: Client, cap_message: str) -> None:
         )
         for key in keys
     }
-    give_up = "\n".join(
-        [
-            cap_message,
-            *(f"  {name} ({pays}, created {created})" for name, pays, created in rows.values()),
-            f"Revoke one at {API_KEYS_URL}, then run jl connect again.",
-        ]
+    give_up = Text(
+        "\n".join([cap_message, *(f"  {name} ({pays}, created {created})" for name, pays, created in rows.values())])
+        + "\n"
     )
+    give_up.append_text(Text.assemble("Revoke one at ", render.link(API_KEYS_URL), ", then run jl connect again."))
     if not ours or state.yes or not _can_ask():
         render.die(give_up)
     render.warning(cap_message)

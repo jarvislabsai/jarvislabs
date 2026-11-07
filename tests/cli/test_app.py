@@ -21,9 +21,9 @@ runner = CliRunner()
         ["logout"],
         ["status"],
         ["subscribe"],
-        ["subscription"],
-        ["subscription", "use-balance"],
-        ["subscription", "manage"],
+        ["usage"],
+        ["usage", "use-balance"],
+        ["usage", "manage"],
     ],
     ids=" ".join,
 )
@@ -49,7 +49,7 @@ def test_new_commands_help_wraps_cleanly(command):
 
 def test_help_says_what_each_command_is_for():
     for command, purpose in (
-        ("status", "See your account, plan, and coding tools."),
+        ("status", "See your account and coding tools. Plan usage: jl usage."),
         ("connect", "Write the Jarvislabs provider into your coding tools."),
         ("disconnect", "Remove jl's provider and key from your coding tools."),
     ):

@@ -1,10 +1,9 @@
-"""`jl subscription` and `jl subscribe`: the account's Models API plan, from the terminal.
+"""`jl usage` and `jl subscribe`: the account's Models API plan, from the terminal.
 
-`jl subscription` shows the plan and its usage, `use-balance` sets whether the wallet pays once
-the plan's limits are reached, and `manage` opens the Stripe billing page. `jl subscribe` opens
-the console's subscribe page. Pages are opened in the browser and their URL printed; without a
-desktop to open a browser in (over SSH, or Linux without X11 or Wayland) and no BROWSER set, only the
-URL is printed.
+`jl usage` shows the plan and its usage, `use-balance` sets whether the wallet pays once the plan's
+limits are reached, and `manage` opens the Stripe billing page. `jl subscribe` opens the console's
+subscribe page. Pages are opened in the browser and their URL printed; without a desktop to open a
+browser in (over SSH, or Linux without X11 or Wayland) and no BROWSER set, only the URL is printed.
 """
 
 from __future__ import annotations
@@ -25,15 +24,15 @@ from jarvislabs.exceptions import NotFoundError
 
 subscription_app = typer.Typer(
     context_settings=cli_options.HELP_CONTEXT,
-    name="subscription",
-    help="Your Models API subscription: usage, paying from the wallet, billing.",
+    name="usage",
+    help="Your Models API plan's usage, paying from the wallet, billing.",
     invoke_without_command=True,
 )
 app.add_typer(subscription_app, rich_help_panel="Coding plan")
 
 
 @subscription_app.callback()
-def subscription_show(ctx: typer.Context, json_output: cli_options.JsonOption = False) -> None:
+def usage_show(ctx: typer.Context, json_output: cli_options.JsonOption = False) -> None:
     """Show your plan, its renewal date and limits."""
     if ctx.invoked_subcommand:
         return
@@ -42,14 +41,14 @@ def subscription_show(ctx: typer.Context, json_output: cli_options.JsonOption = 
         usage = get_client().subscription.usage()
 
     if state.json_output:
-        render.print_json({"subscription": usage})
+        render.print_json({"usage": usage})
         return
     if usage is None:
         render.warning("No subscription", "Run `jl subscribe` to get a plan.")
         render.next_step("get a plan", ["jl subscribe"])
         return
     render.subscription_usage(usage)
-    render.next_step("manage or cancel", ["jl subscription manage"])
+    render.next_step("manage or cancel", ["jl usage manage"])
 
 
 @subscription_app.command("use-balance")
@@ -106,7 +105,7 @@ def _open(url: str) -> None:
         )
     )
     if no_desktop:
-        render.stdout_console.print(Text(f"Open {url} in your browser."), soft_wrap=True)
+        render.stdout_console.print(Text.assemble("Open ", render.link(url), " in your browser."), soft_wrap=True)
         return
-    render.stdout_console.print(Text(f"Opening {url}"), soft_wrap=True)
+    render.stdout_console.print(Text.assemble("Opening ", render.link(url)), soft_wrap=True)
     webbrowser.open(url)

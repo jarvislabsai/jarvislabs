@@ -34,61 +34,28 @@ def opened(monkeypatch):
     return pages
 
 
-@pytest.mark.parametrize(
-    ("usage", "expected"),
-    [
-        (
-            USAGE,
-            [
-                "Pro",
-                "renews 2026-11-20 09:00 UTC",
-                "42.5% used, resets 2026-11-05 16:05 UTC",
-                "10.0% used, resets 2026-11-09 00:00 UTC",
-                "3.2% used, resets 2026-11-20 09:00 UTC",
-                "1 of 4",
-            ],
-        ),
-        (
-            NotFoundError("This account has no active subscription."),
-            ["No subscription", "https://jarvislabs.ai/products/coding-plan"],
-        ),
-    ],
-    ids=["subscribed", "no-subscription"],
-)
-def test_status_shows_the_plan_windows_or_no_subscription(server, usage, expected):
-    server.routes[("GET", "subscription/usage")] = usage
+def test_usage_shows_the_plan_and_each_window(server):
+    server.routes[("GET", "subscription/usage")] = USAGE
 
-    result = runner.invoke(app, ["status"])
+    result = runner.invoke(app, ["usage"])
 
     assert result.exit_code == 0, result.output
-    for text in expected:
+    for text in (
+        "Pro",
+        "renews 2026-11-20 09:00 UTC",
+        "42.5% used, resets 2026-11-05 16:05 UTC",
+        "10.0% used, resets 2026-11-09 00:00 UTC",
+        "3.2% used, resets 2026-11-20 09:00 UTC",
+        "1 of 4",
+    ):
         assert text in result.output
+    assert "Next: jl usage manage" in result.output
 
 
-def test_status_still_shows_when_the_subscription_is_unavailable(server):
-    server.routes[("GET", "subscription/usage")] = APIError(503, "Billing is unavailable right now.")
-
-    result = runner.invoke(app, ["status"])
-
-    assert result.exit_code == 0, result.output
-    assert "Ada" in result.output
-    assert "Subscription: unavailable right now" in result.output
-
-
-def test_use_balance_sets_spill_over(server):
-    server.routes[("PUT", "subscription/use_balance")] = {"use_balance": True}
-
-    result = runner.invoke(app, ["subscription", "use-balance", "on"])
-
-    assert result.exit_code == 0, result.output
-    assert server.calls == [("PUT", "subscription/use_balance", {"enabled": True})]
-    assert "Use balance is on" in result.output
-
-
-def test_subscription_without_a_plan_points_at_subscribe(server):
+def test_usage_without_a_plan_points_at_subscribe(server):
     server.routes[("GET", "subscription/usage")] = NotFoundError("This account has no active subscription.")
 
-    result = runner.invoke(app, ["subscription"])
+    result = runner.invoke(app, ["usage"])
 
     assert result.exit_code == 0, result.output
     assert "No subscription" in result.output
@@ -96,21 +63,54 @@ def test_subscription_without_a_plan_points_at_subscribe(server):
     assert "get a plan" in result.output
 
 
-def test_subscription_with_a_plan_points_at_manage(server):
+def test_status_leaves_plan_usage_to_jl_usage(server):
     server.routes[("GET", "subscription/usage")] = USAGE
 
-    result = runner.invoke(app, ["subscription"])
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "42.5% used" not in result.output
+    assert "Coding tools" in result.output
+    assert "Ada" in result.output
+
+
+def test_status_works_when_billing_is_unavailable(server):
+    server.routes[("GET", "subscription/usage")] = APIError(503, "Billing is unavailable right now.")
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    # Usage is not status's job, so a billing outage doesn't clutter the overview.
+    assert "Billing is unavailable" not in result.output
+    assert "Ada" in result.output
+    assert "Coding tools" in result.output
+
+
+def test_use_balance_sets_spill_over(server):
+    server.routes[("PUT", "subscription/use_balance")] = {"use_balance": True}
+
+    result = runner.invoke(app, ["usage", "use-balance", "on"])
+
+    assert result.exit_code == 0, result.output
+    assert server.calls == [("PUT", "subscription/use_balance", {"enabled": True})]
+    assert "Use balance is on" in result.output
+
+
+def test_usage_with_a_plan_points_at_manage(server):
+    server.routes[("GET", "subscription/usage")] = USAGE
+
+    result = runner.invoke(app, ["usage"])
 
     assert result.exit_code == 0, result.output
     assert "Pro" in result.output
-    assert "Next: jl subscription manage" in result.output
+    assert "Next: jl usage manage" in result.output
     assert "manage or cancel" in result.output
 
 
 def test_manage_opens_the_billing_page(server, opened):
     server.routes[("POST", "subscription/portal")] = {"url": "https://billing.example.com/session/test_1"}
 
-    result = runner.invoke(app, ["subscription", "manage"])
+    result = runner.invoke(app, ["usage", "manage"])
 
     assert result.exit_code == 0, result.output
     assert opened == ["https://billing.example.com/session/test_1"]

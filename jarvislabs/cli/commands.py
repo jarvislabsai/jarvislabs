@@ -76,7 +76,7 @@ def status(
     json_output: cli_options.JsonOption = False,
     all_tools: Annotated[bool, typer.Option("--all", help="Also list tools that aren't installed.")] = False,
 ) -> None:
-    """See your account, plan, and coding tools."""
+    """See your account and coding tools. Plan usage: jl usage."""
     from jarvislabs.cli import update
 
     cli_options.apply_command_options(json_output=json_output)
@@ -118,7 +118,7 @@ def status(
                 "balance": bal.model_dump(),
                 "resources": metrics.model_dump(),
                 "currency": currency,
-                "subscription": {"error": usage_error} if usage_error else usage,
+                "usage": {"error": usage_error} if usage_error else usage,
                 "cli": cli,
                 "harnesses": harnesses,
                 "switch_available": switch_available,
@@ -127,11 +127,6 @@ def status(
         return
 
     render.account_status(info, bal, metrics, sym)
-    render.console.print()
-    if usage_error:
-        render.warning(f"Subscription: unavailable right now ({usage_error})")
-    else:
-        render.subscription_usage(usage)
     render.console.print()
     # Default to what the user can act on: connected tools, and installed ones jl can connect. The
     # rest is catalog, one flag away.

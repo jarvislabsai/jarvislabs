@@ -74,6 +74,15 @@ ASCII_MARKS = {"ok": "+", "bad": "x", "ticked": "[*]", "unticked": "[ ]", "sep":
 ACCENT_BOLD = theme.styles["accent"] + Style(bold=True)
 
 
+def link(url: str, text: str | None = None) -> Text:
+    """Return a URL as a clickable, underlined accent link.
+
+    The underline is the signal where the terminal doesn't support OSC 8 links; where it does,
+    the whole thing is also clickable.
+    """
+    return Text(text or url, style=theme.styles["accent"] + Style(underline=True, link=url))
+
+
 def choose_marks() -> dict[str, str]:
     """Return the marks this console can draw: ASCII ones on a legacy Windows console or a non-UTF-8 stream.
 
@@ -144,7 +153,7 @@ def account_status(info, bal, metrics, sym: str) -> None:
     stdout_console.print(panel)
 
 
-NO_SUBSCRIPTION = f"No subscription. Subscribe at {SUBSCRIBE_URL}"
+NO_SUBSCRIPTION = Text.assemble("No subscription. Subscribe at ", link(SUBSCRIBE_URL))
 
 
 def subscription_usage(usage: SubscriptionUsage | None) -> None:
@@ -172,9 +181,7 @@ def subscription_usage(usage: SubscriptionUsage | None) -> None:
     table.add_row("Running now", f"{usage.slots.in_use} of {usage.slots.limit} requests")
     table.add_row("Use balance", "on" if usage.use_balance else "off")
     stdout_console.print(
-        Panel(
-            table, title="[bold cyan]Subscription[/bold cyan]", border_style=CHROME_STYLE, padding=(1, 2), expand=False
-        )
+        Panel(table, title="[bold cyan]Usage[/bold cyan]", border_style=CHROME_STYLE, padding=(1, 2), expand=False)
     )
 
 
@@ -1035,10 +1042,10 @@ def error(msg: str | Text, hint: str | None = None) -> None:
     _status(MARKS["bad"], "error", msg, hint)
 
 
-def info(msg: str) -> None:
+def info(msg: str | Text) -> None:
     if state.json_output:
         return
-    console.print(Text(msg, style="info"), highlight=False)
+    console.print(msg if isinstance(msg, Text) else Text(msg, style="info"), highlight=False)
 
 
 def warning(msg: str | Text, hint: str | Text | None = None) -> None:
@@ -1288,10 +1295,10 @@ def _status_style(status: str) -> str:
     }.get(status, "white")
 
 
-def die(msg: str, code: int = 1) -> NoReturn:
+def die(msg: str | Text, code: int = 1) -> NoReturn:
     """Print error and exit. Emits JSON to stdout when --json is active."""
     if state.json_output:
-        print_json({"error": msg})
+        print_json({"error": msg.plain if isinstance(msg, Text) else msg})
     else:
         error(msg)
     sys.exit(code)

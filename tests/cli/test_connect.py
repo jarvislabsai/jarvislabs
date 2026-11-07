@@ -567,7 +567,9 @@ def test_no_tool_install_rows_show_names_bold_and_urls_accent(subscribed, tmp_pa
 
     out = buffer.getvalue()
     assert re.search(r"\x1b\[1mOpenCode  \x1b\[0m", out)
-    assert re.search(r"\x1b\[36mhttps://opencode\.ai/docs/#install\x1b\[0m", out)
+    # Accent and underlined; the terminal also gets OSC 8, so it is clickable.
+    assert re.search(r"\x1b\[4;36mhttps://opencode\.ai/docs/#install\x1b\[0m", out)
+    assert "\x1b]8;" in out
 
 
 def test_no_tool_installed_with_no_coming_soon_tools_skips_the_using_line(subscribed, tmp_path, monkeypatch):

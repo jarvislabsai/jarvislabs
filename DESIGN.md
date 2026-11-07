@@ -62,7 +62,7 @@ the platform belongs in docs.** Do not duplicate a tutorial in both; one will go
 
 ### Status
 
-21. Account, Subscription, Coding tools. One blank line between panels.
+21. Account, then Coding tools. Plan usage is its own command, `jl usage`; status never repeats it.
 22. Hide tools that are not installed; `--all` shows them, with a hint naming the count.
 23. Never print an empty panel. If nothing is shown, say `No coding tools installed.`
 24. A connected tool that has been uninstalled is a warning row with `jl disconnect <id>`.
@@ -108,6 +108,8 @@ Rules:
 36. Marks and words carry state together; colour is never the only signal. `NO_COLOR` keeps both marks
     and plain text.
 37. No emoji as UI chrome. The brand mark is the wordmark and the cyan `.ai`, not `⚡`.
+38. Links are accent, underlined and clickable where the terminal supports OSC 8. The underline is
+    the signal in error messages and anywhere the terminal can't make the link clickable.
 
 ## Space
 

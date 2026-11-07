@@ -84,7 +84,7 @@ def _login_flow(token: str | None) -> Client:
     typed = not token
     if typed:
         render.rule("SIGN IN")
-        render.info("Get your Jarvis key at: https://jarvislabs.ai/settings/api-keys")
+        render.info(Text.assemble("Get your Jarvis key at: ", render.link("https://jarvislabs.ai/settings/api-keys")))
         render.console.print()
     for attempt in range(1, 4):
         if typed:
