@@ -48,7 +48,16 @@ def _run(argv: list[str], home: str) -> subprocess.CompletedProcess[str]:
         "ANTHROPIC_API_KEY": "",
         "OPENAI_API_KEY": "",
     }
-    return subprocess.run(argv, env=env, capture_output=True, text=True, timeout=180, check=False)
+    return subprocess.run(
+        argv,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+        # Codex appends stdin to the prompt when it isn't a TTY; a closed stdin keeps the turn exact.
+        stdin=subprocess.DEVNULL,
+    )
 
 
 def test_claude_code_completes_a_turn_through_the_models_api(subscribed, tmp_path, monkeypatch):
