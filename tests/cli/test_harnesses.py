@@ -290,6 +290,7 @@ def test_connect_writes_claude_codes_env_block(subscribed, tmp_path, monkeypatch
             "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4.1-flash-1017",
             "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4.1-flash-1017",
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4.1-flash-1017",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "deepseek-v4.1-flash-1017",
         }
     }
 

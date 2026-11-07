@@ -1224,7 +1224,8 @@ def _claude_code(setup: Setup) -> tuple[ConfigEdit, ...]:
         values[("env", "ANTHROPIC_MODEL")] = setup.default_model
         values[("env", "ANTHROPIC_SMALL_FAST_MODEL")] = setup.default_model
         values[("env", "CLAUDE_CODE_SUBAGENT_MODEL")] = setup.default_model
-        for tier in ("OPUS", "SONNET", "HAIKU"):
+        # Every alias Claude Code can pick (--model opus/sonnet/haiku/fable, subagents, /compact).
+        for tier in ("OPUS", "SONNET", "HAIKU", "FABLE"):
             values[("env", f"ANTHROPIC_DEFAULT_{tier}_MODEL")] = setup.default_model
     return (ConfigEdit(Path.home() / ".claude" / "settings.json", "jsonc", values),)
 
