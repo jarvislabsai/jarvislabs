@@ -33,7 +33,6 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import hashlib
-import os
 import re
 import shlex
 import socket
