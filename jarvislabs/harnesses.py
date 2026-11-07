@@ -1231,7 +1231,9 @@ def _claude_code(setup: Setup) -> tuple[ConfigEdit, ...]:
         # not only Claude's aliases renamed to our id.
         model = next((m for m in setup.models if m.id == setup.default_model), None)
         values[("env", "ANTHROPIC_CUSTOM_MODEL_OPTION")] = setup.default_model
-        values[("env", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME")] = (model.name if model and model.name else setup.default_model)
+        values[("env", "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME")] = (
+            model.name if model and model.name else setup.default_model
+        )
         values[("env", "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION")] = "Served by Jarvislabs"
     return (ConfigEdit(Path.home() / ".claude" / "settings.json", "jsonc", values),)
 
