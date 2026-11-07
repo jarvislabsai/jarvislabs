@@ -51,7 +51,21 @@ def server(tmp_path, monkeypatch):
         monkeypatch.setenv(var, str(tmp_path))
     installed = tmp_path / "installed-harnesses"
     installed.mkdir()
-    for name in ("opencode", "kilo", "pi", "kimi", "cline", "qwen", "copilot", "junie", "goose", "aider", "crush"):
+    for name in (
+        "opencode",
+        "kilo",
+        "pi",
+        "kimi",
+        "cline",
+        "qwen",
+        "copilot",
+        "junie",
+        "goose",
+        "aider",
+        "crush",
+        "claude",
+        "codex",
+    ):
         for program in (name, name + ".cmd"):  # .cmd so that Windows finds it too
             (installed / program).write_text("")
             (installed / program).chmod(0o755)

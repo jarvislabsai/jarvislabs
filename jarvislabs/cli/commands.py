@@ -10,7 +10,7 @@ from jarvislabs.cli.app import app, get_client
 from jarvislabs.config import load_config, load_connection, save_config
 from jarvislabs.constants import EUROPE_GPU_TYPES, EUROPE_REGION, INDIA_NOIDA_REGION
 from jarvislabs.exceptions import JarvislabsError
-from jarvislabs.harnesses import HARNESSES, default_model, installed
+from jarvislabs.harnesses import HARNESSES, connectable, default_model, installed
 
 EUROPE_AVAILABILITY_NOTE = "EU1 H100/H200 launches are currently limited to 1 GPU."
 
@@ -102,13 +102,13 @@ def status(
             "id": h.id,
             "name": h.name,
             "installed": installed(h),
-            "connected": h.support == "connect" and h.id in recorded,
+            "connected": connectable(h) and h.id in recorded,
             # A coming-soon harness is recorded only when jl connect --print showed its config.
-            "printed": h.support != "connect" and h.id in recorded,
-            "default_model": default_model(h) if h.support == "connect" and h.id in recorded else None,
+            "printed": not connectable(h) and h.id in recorded,
+            "default_model": default_model(h) if connectable(h) and h.id in recorded else None,
         }
         for h in HARNESSES
-        if h.support == "connect" or h.id in recorded
+        if connectable(h) or h.id in recorded
     ]
 
     if state.json_output:

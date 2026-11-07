@@ -1263,9 +1263,9 @@ def test_a_changed_config_still_runs_the_flow(subscribed, opencode_config, termi
     ("name", "message"),
     [
         ("opencod", "Unknown tool opencod. Choose from: opencode"),
-        ("claude-code", "Claude Code is coming soon: see https://docs.jarvislabs.ai/models-api/harnesses/claude-code"),
+        ("claude-code", "Claude Code is in preview: set JL_PREVIEW_HARNESSES=1 to connect it."),
     ],
-    ids=["typo", "coming-soon"],
+    ids=["typo", "preview"],
 )
 def test_a_harness_jl_cant_connect_stops_before_any_server_call(server, name, message):
     result = runner.invoke(app, ["connect", name, "--yes"])

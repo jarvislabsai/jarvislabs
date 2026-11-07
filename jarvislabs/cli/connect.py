@@ -67,15 +67,18 @@ from jarvislabs.exceptions import APIError, JarvislabsError, NotFoundError
 from jarvislabs.harnesses import (
     HARNESS_DOCS_URL,
     HARNESSES,
+    PREVIEW_FLAG,
     Harness,
     Plan,
     Setup,
     apply,
     check_version,
+    connectable,
     default_model,
     installed,
     plan_connect,
     plan_disconnect,
+    preview_enabled,
     snippet,
     vscode_running,
 )
@@ -248,8 +251,8 @@ def connect(
         render.change_rows([_row(plan) for plan in plans], f"jl will {verb} the Jarvislabs provider", shared)
     if dry_run:
         if rotate_key and kept:
-            connectable = {h.id for h in HARNESSES if h.support == "connect"}
-            tools = {h.id for h in chosen} | (set(kept.harnesses) & connectable)
+            connectable_ids = {h.id for h in HARNESSES if connectable(h)}
+            tools = {h.id for h in chosen} | (set(kept.harnesses) & connectable_ids)
             s = "" if len(tools) == 1 else "s"
             render.info(f"Would replace this machine's key {kept.name} and update {len(tools)} tool{s}.")
         return
@@ -544,13 +547,16 @@ def _test_request(api_key: str, model: str) -> None:
 
 def _print_harnesses() -> None:
     """List every tool ID, its name, and whether jl can connect it or only print its config."""
-    rows = [{"id": harness.id, "name": harness.name, "support": harness.support} for harness in HARNESSES]
+    rows = [
+        {"id": harness.id, "name": harness.name, "support": harness.support, "preview": harness.preview}
+        for harness in HARNESSES
+    ]
     if state.json_output:
         render.print_json(rows)
         return
     render.heading("Coding tools")
     for row in rows:
-        label = "connect" if row["support"] == "connect" else "print only"
+        label = "connect" if row["support"] == "connect" or (row["preview"] and preview_enabled()) else "print only"
         render.stdout_console.print(f"  {row['id']:<16} {row['name']:<22} {label}")
     # On stdout with the rows: --list is data, so piping it must keep the whole list.
     render.stdout_console.print(
@@ -573,10 +579,12 @@ def _named_harnesses(ids: list[str] | None) -> list[Harness]:
     by_id = {h.id: h for h in HARNESSES}
     unknown = [i for i in ids if i not in by_id]
     if unknown:
-        supported = ", ".join(h.id for h in HARNESSES if h.support == "connect")
+        supported = ", ".join(h.id for h in HARNESSES if connectable(h))
         render.die(f"Unknown tool {', '.join(unknown)}. Choose from: {supported}.")
     for harness in (by_id[i] for i in ids):
-        if harness.support == "coming_soon":
+        if harness.preview and not preview_enabled():
+            render.die(f"{harness.name} is in preview: set {PREVIEW_FLAG}=1 to connect it.")
+        if harness.support == "coming_soon" and not connectable(harness):
             render.die(f"{harness.name} is coming soon: see {harness.docs_url}")
     return [by_id[i] for i in ids]
 
@@ -589,13 +597,13 @@ def _stop_without_a_tool() -> None:
     Raises:
         typer.Exit: No supported harness is installed.
     """
-    supported = [h for h in HARNESSES if h.support == "connect"]
+    supported = [h for h in HARNESSES if connectable(h)]
     if any(installed(h) for h in supported):
         return
     # Three popular ones, so the list stays short; --list has the rest.
     offered = [h for i in ("opencode", "pi", "kilo") for h in supported if h.id == i]
     width = max(len(h.name) for h in offered)
-    coming = [h for h in HARNESSES if h.support == "coming_soon"]
+    coming = [h for h in HARNESSES if h.support == "coming_soon" and not connectable(h)]
 
     body = Text()
     body.append("Install one, then run ", "dim")
@@ -632,7 +640,7 @@ def _stop_if_up_to_date(connection: Connection | None, models: tuple[ModelInfo, 
     Raises:
         typer.Exit: Every installed tool is connected, and no refresh changes a file.
     """
-    supported = [harness for harness in HARNESSES if harness.support == "connect"]
+    supported = [harness for harness in HARNESSES if connectable(harness)]
     installed_tools = [harness for harness in supported if installed(harness)]
     if not connection or not installed_tools:
         return
@@ -670,7 +678,7 @@ def _pick_harnesses(show_all: bool = False) -> list[Harness]:
     Raises:
         typer.Exit: Nothing ticked; with 130, Ctrl-C.
     """
-    supported = [h for h in HARNESSES if h.support == "connect"]
+    supported = [h for h in HARNESSES if connectable(h)]
     ticked = [h for h in supported if installed(h)]
     if len(ticked) == 1 and not show_all:
         render.info(f"{ticked[0].name} is the only installed tool.")
@@ -679,7 +687,10 @@ def _pick_harnesses(show_all: bool = False) -> list[Harness]:
     if show_all:
         groups = (
             ("Not installed: run the command to see where to get it", [h for h in supported if h not in ticked]),
-            ("Coming soon: run the command for its docs", [h for h in HARNESSES if h.support == "coming_soon"]),
+            (
+                "Coming soon: run the command for its docs",
+                [h for h in HARNESSES if h.support == "coming_soon" and not connectable(h)],
+            ),
         )
         for heading, group in groups:
             if group:
@@ -1102,7 +1113,7 @@ def refresh_connected() -> int:
     connection = load_connection()
     if not connection:
         return 0
-    connected = [h for h in HARNESSES if h.support == "connect" and h.id in connection.harnesses]
+    connected = [h for h in HARNESSES if connectable(h) and h.id in connection.harnesses]
     if not connected:
         return 0
     try:

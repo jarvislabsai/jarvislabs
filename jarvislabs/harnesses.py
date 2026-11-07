@@ -52,6 +52,16 @@ if TYPE_CHECKING:
 
 # The provider ID jl writes into each harness; models are picked as "jarvislabs/<model>".
 PROVIDER_ID = "jarvislabs"
+# Harnesses whose backend endpoint isn't public yet stay behind this flag. It is read on every
+# call, so a test or a preview shell can set it without reloading jl.
+PREVIEW_FLAG = "JL_PREVIEW_HARNESSES"
+# The Anthropic Messages endpoint (Claude Code appends /v1/messages) and the Responses endpoint
+# (Codex appends /responses). Both are jarvislabs.net hosts; the env override is for preview
+# builds and tests that stand up a local server.
+ANTHROPIC_API_URL = "https://models.jarvislabs.net"
+RESPONSES_API_URL = "https://models.jarvislabs.net/v1"
+ANTHROPIC_URL_VAR = "JL_ANTHROPIC_URL"
+RESPONSES_URL_VAR = "JL_RESPONSES_URL"
 # Reading a harness's config fails on bad syntax (ValueError, YAMLError) and on a shape the writer
 # doesn't expect, such as a string where an object belongs (TypeError, AttributeError, KeyError).
 CONFIG_ERRORS = (ValueError, TypeError, AttributeError, KeyError, YAMLError)
@@ -121,6 +131,8 @@ class Harness:
         install_url: The harness's own install page, for a CLI harness.
         min_version: The oldest version, as "<major>.<minor>.<patch>", that reads the config jl writes;
             None when every version does.
+        preview: True while the endpoint it needs isn't public. jl connects it only with
+            ``JL_PREVIEW_HARNESSES=1``; otherwise it is listed as coming soon.
     """
 
     id: str
@@ -135,6 +147,7 @@ class Harness:
     extension: tuple[str, ...] = ()
     install_url: str | None = None
     min_version: str | None = None
+    preview: bool = False
 
 
 @dataclass(frozen=True)
@@ -247,6 +260,26 @@ def check_version(harness: Harness) -> None:
             f"{harness.name} {version} is too old for jl's setup: update it to {harness.min_version} or later, "
             f"then run jl connect {harness.id}."
         )
+
+
+def preview_enabled() -> bool:
+    """Return whether the preview endpoints are switched on: ``JL_PREVIEW_HARNESSES=1``."""
+    return os.environ.get(PREVIEW_FLAG, "").strip().lower() not in ("", "0", "false", "no")
+
+
+def connectable(harness: Harness) -> bool:
+    """Return whether jl can connect this harness now, counting a preview one with the flag on."""
+    return harness.support == "connect" or (harness.preview and preview_enabled())
+
+
+def anthropic_base_url() -> str:
+    """Return the Anthropic Messages base URL: the preview override, else the Models API host."""
+    return os.environ.get(ANTHROPIC_URL_VAR, ANTHROPIC_API_URL).rstrip("/")
+
+
+def responses_base_url() -> str:
+    """Return the OpenAI Responses base URL: the preview override, else the Models API host."""
+    return os.environ.get(RESPONSES_URL_VAR, RESPONSES_API_URL).rstrip("/")
 
 
 def vscode_running() -> bool:
@@ -1180,6 +1213,42 @@ def _opencode_values(setup: Setup) -> dict[KeyPath, object]:
     return values
 
 
+def _claude_code(setup: Setup) -> tuple[ConfigEdit, ...]:
+    # Claude Code keeps a custom gateway in settings.json's env block, the same file on every OS.
+    # The tiers are Claude names; pointing all of them at our default keeps /model on our models.
+    values: dict[KeyPath, object] = {
+        ("env", "ANTHROPIC_BASE_URL"): anthropic_base_url(),
+        ("env", "ANTHROPIC_AUTH_TOKEN"): setup.api_key,
+    }
+    if setup.default_model:
+        values[("env", "ANTHROPIC_MODEL")] = setup.default_model
+        values[("env", "ANTHROPIC_SMALL_FAST_MODEL")] = setup.default_model
+        values[("env", "CLAUDE_CODE_SUBAGENT_MODEL")] = setup.default_model
+        for tier in ("OPUS", "SONNET", "HAIKU"):
+            values[("env", f"ANTHROPIC_DEFAULT_{tier}_MODEL")] = setup.default_model
+    return (ConfigEdit(Path.home() / ".claude" / "settings.json", "jsonc", values),)
+
+
+def _codex(setup: Setup) -> tuple[ConfigEdit, ...]:
+    # Codex reads $CODEX_HOME/config.toml, else ~/.codex/config.toml, and only speaks the
+    # Responses API. The bearer token is inline so the user doesn't have to export a variable.
+    folder = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
+    values: dict[KeyPath, object] = {
+        ("model_provider",): PROVIDER_ID,
+        ("model_providers", PROVIDER_ID): {
+            "name": "Jarvislabs",
+            "base_url": responses_base_url(),
+            "wire_api": "responses",
+            "experimental_bearer_token": setup.api_key,
+        },
+    }
+    if setup.default_model:
+        values[("model",)] = setup.default_model
+        if model := next((m for m in setup.models if m.id == setup.default_model), None):
+            values[("model_context_window",)] = _limits(model)[0]
+    return (ConfigEdit(folder / "config.toml", "toml", values),)
+
+
 def _zed(setup: Setup) -> tuple[ConfigEdit, ...]:
     # Zed keeps its settings in %APPDATA%\Zed on Windows, the XDG config folder on Linux, and
     # ~/.config/zed on macOS. Its docs say keys don't belong in this file: Zed asks for the key.
@@ -1437,18 +1506,27 @@ def _coming_soon(
     kind: Literal["cli", "vscode"],
     command: tuple[str, ...],
     writer: Callable[[Setup], tuple[ConfigEdit, ...]] | None = None,
+    preview: bool = False,
 ) -> Harness:
     docs_url = f"{HARNESS_DOCS_URL}/{harness_id}"
     return Harness(
-        id=harness_id, name=name, kind=kind, support="coming_soon", launch=command, writer=writer, docs_url=docs_url
+        id=harness_id,
+        name=name,
+        kind=kind,
+        support="coming_soon",
+        launch=command,
+        writer=writer,
+        docs_url=docs_url,
+        preview=preview,
     )
 
 
 # Claude Code and Codex wait for the Models API's Anthropic and Responses endpoints. Cursor,
 # VS Code Copilot and Zed keep the key in an app database or the OS keychain (phase 2).
 HARNESSES += (
-    _coming_soon("claude-code", "Claude Code", "cli", ("claude",)),
-    _coming_soon("codex", "Codex", "cli", ("codex",)),
+    # Behind JL_PREVIEW_HARNESSES until /v1/messages and /v1/responses are public.
+    _coming_soon("claude-code", "Claude Code", "cli", ("claude",), writer=_claude_code, preview=True),
+    _coming_soon("codex", "Codex", "cli", ("codex",), writer=_codex, preview=True),
     _coming_soon("cursor", "Cursor", "cli", ("cursor", ".")),
     _coming_soon("vscode-copilot", "VS Code Copilot", "vscode", ("code", ".")),
     # A writer, though jl doesn't write Zed's key to the keychain yet: jl connect --print shows the settings.

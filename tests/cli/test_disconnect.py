@@ -161,6 +161,35 @@ def test_disconnect_restores_replaced_values_and_keeps_later_edits(
     assert opencode_config.read_text() == original.replace("tokyonight", "gruvbox")
 
 
+def test_disconnect_gives_back_claude_codes_settings(subscribed: MagicMock, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("JL_PREVIEW_HARNESSES", "1")
+    path = tmp_path / ".claude" / "settings.json"
+    path.parent.mkdir()
+    original = '{\n  "permissions": {"allow": ["Bash(ls:*)"]},\n  "env": {"FOO": "bar"}\n}\n'
+    path.write_text(original)
+    runner.invoke(app, ["connect", "claude-code", "--yes"])
+
+    result = runner.invoke(app, ["disconnect", "claude-code", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # The user's own env and permissions are back; jl's gateway vars are gone.
+    assert path.read_text() == original
+
+
+def test_disconnect_gives_back_codexs_config(subscribed: MagicMock, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("JL_PREVIEW_HARNESSES", "1")
+    path = tmp_path / ".codex" / "config.toml"
+    path.parent.mkdir()
+    original = '# Mine\napproval_policy = "never"\n'
+    path.write_text(original)
+    runner.invoke(app, ["connect", "codex", "--yes"])
+
+    result = runner.invoke(app, ["disconnect", "codex", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert path.read_text() == original
+
+
 def test_disconnecting_kilo_keeps_the_file_its_extension_uses(subscribed: MagicMock, tmp_path: Path) -> None:
     (tmp_path / ".vscode" / "extensions" / "kilocode.kilo-code-1.0.0").mkdir(parents=True)
     runner.invoke(app, ["connect", "kilo", "kilo-vscode", "--yes"])

@@ -271,6 +271,101 @@ def test_kimi_keeps_the_users_config_and_follows_kimi_code_home(subscribed, tmp_
     assert not (tmp_path / ".kimi-code").exists()
 
 
+def test_connect_writes_claude_codes_env_block(subscribed, tmp_path, monkeypatch):
+    monkeypatch.setenv("JL_PREVIEW_HARNESSES", "1")
+
+    result = runner.invoke(app, ["connect", "claude-code", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    settings = read_json(tmp_path / ".claude" / "settings.json")
+    assert settings == {
+        "env": {
+            # Claude Code's SDK appends /v1/messages to this host.
+            "ANTHROPIC_BASE_URL": "https://models.jarvislabs.net",
+            "ANTHROPIC_AUTH_TOKEN": KEY,
+            # Every Claude tier points at the one model jl wrote, so /model can't pick a model we lack.
+            "ANTHROPIC_MODEL": "deepseek-v4.1-flash-1017",
+            "ANTHROPIC_SMALL_FAST_MODEL": "deepseek-v4.1-flash-1017",
+            "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-v4.1-flash-1017",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-v4.1-flash-1017",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-v4.1-flash-1017",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-v4.1-flash-1017",
+        }
+    }
+
+
+def test_connect_writes_codexs_responses_provider(subscribed, tmp_path, monkeypatch):
+    monkeypatch.setenv("JL_PREVIEW_HARNESSES", "1")
+
+    result = runner.invoke(app, ["connect", "codex", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    written = tomllib.loads((tmp_path / ".codex" / "config.toml").read_text())
+    assert written == {
+        "model": "deepseek-v4.1-flash-1017",
+        "model_provider": "jarvislabs",
+        "model_context_window": 1048576,
+        "model_providers": {
+            "jarvislabs": {
+                "name": "Jarvislabs",
+                # Codex appends /responses to this URL; wire_api only takes "responses".
+                "base_url": "https://models.jarvislabs.net/v1",
+                "wire_api": "responses",
+                # Inline, so the user doesn't have to export a variable.
+                "experimental_bearer_token": KEY,
+            }
+        },
+    }
+
+
+def test_status_names_claude_codes_default_when_preview_is_on(subscribed, monkeypatch):
+    monkeypatch.setenv("JL_PREVIEW_HARNESSES", "1")
+    runner.invoke(app, ["connect", "claude-code", "--yes"])
+    monkeypatch.setattr(shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert re.search(r"✓ Claude Code\s+connected\s+default deepseek-v4\.1-flash-1017", result.output)
+
+
+def test_a_preview_harness_needs_the_flag(subscribed):
+    result = runner.invoke(app, ["connect", "claude-code"])
+
+    assert result.exit_code == 1, result.output
+    said = " ".join(result.output.split())
+    assert "in preview" in said
+    assert "JL_PREVIEW_HARNESSES=1" in said
+
+
+def test_the_flag_marks_preview_harnesses_connectable_in_the_list(subscribed, monkeypatch):
+    off = runner.invoke(app, ["connect", "--list"])
+    row = next(line for line in off.stdout.splitlines() if line.strip().startswith("claude-code"))
+    assert row.endswith("print only")
+
+    monkeypatch.setenv("JL_PREVIEW_HARNESSES", "1")
+    on = runner.invoke(app, ["connect", "--list"])
+    row = next(line for line in on.stdout.splitlines() if line.strip().startswith("claude-code"))
+    assert row.endswith("connect")
+
+
+def test_codex_follows_codex_home_and_keeps_the_users_config(subscribed, tmp_path, monkeypatch):
+    monkeypatch.setenv("JL_PREVIEW_HARNESSES", "1")
+    elsewhere = tmp_path / "codex-home"
+    elsewhere.mkdir()
+    original = '# Mine\napproval_policy = "never"\n'
+    (elsewhere / "config.toml").write_text(original)
+    monkeypatch.setenv("CODEX_HOME", str(elsewhere))
+
+    result = runner.invoke(app, ["connect", "codex", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    written = (elsewhere / "config.toml").read_text()
+    assert "# Mine" in written
+    assert 'approval_policy = "never"' in written
+    assert not (tmp_path / ".codex").exists()
+
+
 def test_a_symlinked_config_is_written_through(subscribed, tmp_path):
     # A dotfiles user's link stays the live config; replacing it with a regular file would
     # silently stop their dotfiles from managing the file.
