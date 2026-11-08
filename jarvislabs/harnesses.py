@@ -1603,9 +1603,14 @@ def _zed(setup: Setup) -> tuple[ConfigEdit, ...]:
             # Zed sends this as the request's output ceiling; without it no max-token field
             # goes out and the Models API cuts replies at 1024 tokens.
             "max_output_tokens": _limits(model)[1],
+            # Zed requires all four once capabilities is there: a missing one fails the whole
+            # provider, which then never shows in its list (settings_content/src/language_model.rs).
+            # The last two are Zed's own defaults.
             "capabilities": {
                 "tools": bool(model.capabilities.tool_calling),
                 "images": "image" in model.input_modalities,
+                "parallel_tool_calls": False,
+                "prompt_cache_key": False,
             },
         }
         for model in setup.models

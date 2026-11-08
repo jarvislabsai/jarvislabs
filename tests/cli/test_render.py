@@ -255,3 +255,14 @@ def test_paths_label_uses_posix_separators(monkeypatch, tmp_path):
     )
 
     assert label == "~/.config/kilo/kilo.jsonc, settings.json"
+
+
+def test_a_url_in_a_row_note_is_a_clickable_link():
+    buffer = io.StringIO()
+    console = Console(file=buffer, force_terminal=True, color_system="standard", width=120, theme=render.theme)
+
+    render.change_row(render.Row("todo", "Zed", "added", note="Zed's guide: https://zed.dev/docs/x#y"), 3, console)
+
+    # OSC 8 makes it clickable where the terminal supports it; the underline is the signal elsewhere.
+    assert "\x1b]8;" in buffer.getvalue() and "https://zed.dev/docs/x#y" in buffer.getvalue()
+    assert "\x1b[4;36m" in buffer.getvalue() or "\x1b[36;4m" in buffer.getvalue()

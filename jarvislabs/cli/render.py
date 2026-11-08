@@ -5,6 +5,7 @@ from __future__ import annotations
 import codecs
 import json
 import os
+import re
 import sys
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -1218,7 +1219,11 @@ def change_row(row: Row, width: int, out: Console) -> None:
     indent = Text(" " * prefix.cell_len)
     for line, line_style in ((row.warning, "warning"), (row.note, "hint")):
         if line:
-            _hang(indent, Text(line, line_style), out)
+            text = Text(line, line_style)
+            # A URL in a note is a link, like every other URL jl prints, not plain text.
+            for match in re.finditer(r"https?://\S+", line):
+                text.stylize(theme.styles["accent"] + Style(underline=True, link=match.group(0)), *match.span())
+            _hang(indent, text, out)
 
 
 def _status(mark: str, style: str, msg: str | Text, hint: str | Text | None) -> None:

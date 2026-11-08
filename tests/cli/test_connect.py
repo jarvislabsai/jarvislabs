@@ -1480,10 +1480,12 @@ def test_print_shows_the_config_with_the_key_filled_in(subscribed, tmp_path, mon
     settings = json.loads(out[out.index("{") : out.rindex("}") + 1])
     provider = settings["language_models"]["openai_compatible"]["Jarvislabs"]
     assert provider["api_url"] == "https://models.jarvislabs.net/v1"
+    # Zed requires all four capability fields once the object is there, or it drops the provider.
+    rest = {"parallel_tool_calls": False, "prompt_cache_key": False}
     assert [(m["name"], m["max_tokens"], m["capabilities"]) for m in provider["available_models"]] == [
-        ("deepseek-v4.1-flash-1017", 1048576, {"tools": True, "images": True}),
-        ("glm-5.3", 230000, {"tools": True, "images": False}),
-        ("gemma-3-1b-it", 32768, {"tools": False, "images": False}),
+        ("deepseek-v4.1-flash-1017", 1048576, {"tools": True, "images": True, **rest}),
+        ("glm-5.3", 230000, {"tools": True, "images": False, **rest}),
+        ("gemma-3-1b-it", 32768, {"tools": False, "images": False, **rest}),
     ]
     assert settings["agent"]["default_model"] == {"provider": "Jarvislabs", "model": "deepseek-v4.1-flash-1017"}
     assert "jlsk-new-secret" in out
