@@ -266,3 +266,13 @@ def test_a_url_in_a_row_note_is_a_clickable_link():
     # OSC 8 makes it clickable where the terminal supports it; the underline is the signal elsewhere.
     assert "\x1b]8;" in buffer.getvalue() and "https://zed.dev/docs/x#y" in buffer.getvalue()
     assert "\x1b[4;36m" in buffer.getvalue() or "\x1b[36;4m" in buffer.getvalue()
+
+
+def test_a_url_in_a_warning_hint_is_a_link_too(monkeypatch):
+    buffer = io.StringIO()
+    console = Console(file=buffer, force_terminal=True, color_system="standard", width=120, theme=render.theme)
+    monkeypatch.setattr(render, "console", console)
+
+    render.warning("Zed needs your key", "Zed's guide: https://zed.dev/docs/x#y")
+
+    assert "\x1b]8;" in buffer.getvalue()

@@ -1219,11 +1219,7 @@ def change_row(row: Row, width: int, out: Console) -> None:
     indent = Text(" " * prefix.cell_len)
     for line, line_style in ((row.warning, "warning"), (row.note, "hint")):
         if line:
-            text = Text(line, line_style)
-            # A URL in a note is a link, like every other URL jl prints, not plain text.
-            for match in re.finditer(r"https?://\S+", line):
-                text.stylize(theme.styles["accent"] + Style(underline=True, link=match.group(0)), *match.span())
-            _hang(indent, text, out)
+            _hang(indent, _linked(Text(line, line_style)), out)
 
 
 def _status(mark: str, style: str, msg: str | Text, hint: str | Text | None) -> None:
@@ -1244,7 +1240,14 @@ def _hint(text: str | Text) -> Text:
     hint = Text(style="hint")
     for i, part in enumerate(text.split("`")):
         hint.append(part, "accent" if i % 2 else None)
-    return hint
+    return _linked(hint)
+
+
+def _linked(text: Text) -> Text:
+    """Return text with each URL in it styled as a link, like every other URL jl prints."""
+    for match in re.finditer(r"https?://\S+", text.plain):
+        text.stylize(theme.styles["accent"] + Style(underline=True, link=match.group(0)), *match.span())
+    return text
 
 
 def _hang(prefix: Text, body: Text, out: Console) -> None:
