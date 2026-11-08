@@ -2778,6 +2778,8 @@ def test_zed_next_step_leaves_out_zed_while_another_tool_is_ready(subscribed, op
 
     assert result.exit_code == 0, result.output
     assert "Next: opencode start a tool in your project folder" in said(result)
+    # The hint after Zed's steps is set apart, not read as a third step.
+    assert "api-keys\n\n  Add another tool: jl connect" in result.output
 
 
 def test_over_ssh_the_zed_steps_name_both_shortcuts(subscribed, tmp_path, monkeypatch):

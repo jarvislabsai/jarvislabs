@@ -352,6 +352,9 @@ def connect(
         render.console.print()
         render.warning(headline, _key_steps(harness, connection.token, replace=reason == "replace"))
     if connected:
+        if pending:
+            # The steps are a block of their own; the hint below isn't one of them.
+            render.console.print()
         # Under curl | sh, this window's PATH predates jl's folder, so jl runs only in a new terminal.
         if os.environ.get("JL_FROM_INSTALLER"):
             render.hint_line("Add another tool later: open a new terminal, then run `jl connect`")
