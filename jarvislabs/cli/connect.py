@@ -260,7 +260,19 @@ def connect(
         shared = f"{len(models)} models, default {default}" if many else f"default {default}"
         # A tool that keeps its key where jl can't write it says so before the gate, in yellow.
         rows = [
-            dataclasses.replace(row, warning=f"then you add your key in {plan.harness.name}: jl shows how")
+            dataclasses.replace(
+                row,
+                # The row's own warning (what it replaces) stays; the key step joins it.
+                warning="\n".join(
+                    filter(
+                        None,
+                        [
+                            row.warning,
+                            f"then you add your key in {plan.harness.name}, which keeps keys in its own keychain",
+                        ],
+                    )
+                ),
+            )
             if plan.harness.key_by_hand
             else row
             for row, plan in ((_row(plan), plan) for plan in plans)
@@ -342,31 +354,31 @@ def connect(
             _revoke_unused_key(client, connection)
         raise typer.Exit(1)
     _test_request(connection.token, default)
-    # Last before Next, so a user skimming a long connect ends on the one thing left to do.
-    for harness, reason in pending:
-        headline = {
-            "add": f"{harness.name} needs your key",
-            "check": f"{harness.name} needs your key, if it isn't there yet",
-            "replace": f"{harness.name} has the revoked key: its requests fail until you replace it",
-        }[reason]
-        render.console.print()
-        render.warning(headline, _key_steps(harness, connection.token, replace=reason == "replace"))
     if connected:
-        if pending:
-            # The steps are a block of their own; the hint below isn't one of them.
-            render.console.print()
         # Under curl | sh, this window's PATH predates jl's folder, so jl runs only in a new terminal.
         if os.environ.get("JL_FROM_INSTALLER"):
             render.hint_line("Add another tool later: open a new terminal, then run `jl connect`")
         else:
             render.hint_line("Add another tool: `jl connect`")
-        # A tool waiting for its key isn't ready to start: it joins Next only when nothing else is.
-        waiting = {harness.id for harness, _ in pending}
-        ready = [h for h in connected if h.id not in waiting]
-        if ready:
-            render.next_step("start a tool in your project folder:", [_start_command(h) for h in ready])
-        else:
-            render.next_step("start it once it has your key:", [_start_command(h) for h in connected])
+    # Last before Next, so a user reading from the bottom ends on the one thing left to do. jl
+    # can't see the app's keychain, so each headline says only what jl knows.
+    for harness, reason in pending:
+        headline = {
+            "add": f"{harness.name} needs your key",
+            "check": f"{harness.name} may need your key: jl can't see whether you added it",
+            "replace": f"Your old key is revoked: if you added it to {harness.name}, replace it",
+        }[reason]
+        render.console.print()
+        render.warning(headline, _key_steps(harness, connection.token, replace=reason == "replace"))
+    if connected:
+        waiting = [harness for harness, _ in pending if harness in connected]
+        ready = [h for h in connected if h not in waiting]
+        names = " and ".join(h.name for h in waiting)
+        text = "start a tool in your project folder"
+        if waiting:
+            # In the list, so the ending names every tool; the line says which waits for its key.
+            text = f"{text}; {names} once it has your key" if ready else f"start {names} once it has your key"
+        render.next_step(text, [_start_command(h) for h in [*ready, *waiting]])
 
 
 @app.command(rich_help_panel="Coding plan")
@@ -591,8 +603,8 @@ def _disconnect(
     hints += [f"your config from before jl is still at {render.short_path(backup)}" for backup in backups]
     if harness.key_by_hand:
         # jl never wrote that key and can't see it; say what holds either way.
-        dead = ", though it no longer works" if revoked else ""
-        hints.append(f"a key you pasted into {harness.name} stays in its keychain{dead}: remove it in its settings")
+        dead = ", and no longer works" if revoked else ""
+        hints.append(f"if you added a key to {harness.name}, it stays in your OS keychain{dead}")
     if spaced:
         render.console.print()
     render.success(f"{harness.name} disconnected", "\n".join(hints))
@@ -686,6 +698,7 @@ def _key_steps(harness: Harness, key: str, *, replace: bool = False) -> str:
     steps = [f"{i}. {step.format(palette=palette, paste=paste)}" for i, step in enumerate(harness.key_by_hand, 1)]
     if not copied:
         steps.append(f"   {key}")
+        steps.append("   (no clipboard here, so it's shown; it stays in this terminal's scrollback)")
     if harness.docs_url:
         steps.append(f"{harness.name}'s guide: {harness.docs_url}")
     return "\n".join(steps)

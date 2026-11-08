@@ -1914,6 +1914,7 @@ HARNESSES: tuple[Harness, ...] = (
         key_by_hand=(
             'In Zed, open the command palette ({palette}) and run "agent: open settings".',
             "Under LLM Providers, find Jarvislabs and {paste}",
+            "Pick a Jarvislabs model in Zed's agent panel and send a message to check.",
         ),
         docs_url="https://zed.dev/docs/ai/use-api-access#api-keys",
     ),

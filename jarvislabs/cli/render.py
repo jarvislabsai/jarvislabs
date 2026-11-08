@@ -1230,7 +1230,14 @@ def _status(mark: str, style: str, msg: str | Text, hint: str | Text | None) -> 
     body_style = "bold" if style == "success" else style
     _hang(Text(mark + " ", style), msg if isinstance(msg, Text) else Text(msg, body_style), console)
     if hint:
-        _hang(Text("  "), _hint(hint), console)
+        if isinstance(hint, Text):
+            _hang(Text("  "), hint, console)
+            return
+        # Each line on its own, so a numbered step that wraps hangs under its text, not its number.
+        for line in hint.split("\n"):
+            number = re.match(r"\s*\d+\. ", line)
+            prefix = "  " + (number.group(0) if number else "")
+            _hang(Text(prefix), _hint(line[len(prefix) - 2 :]), console)
 
 
 def _hint(text: str | Text) -> Text:
