@@ -167,7 +167,7 @@ def load_connection() -> Connection | None:
         return None
     try:
         return _connection_from(table)
-    except (KeyError, TypeError, ValueError) as e:
+    except (AttributeError, KeyError, TypeError, ValueError) as e:
         raise JarvislabsError(
             f"Can't read this machine's saved connection in {config_path()}: {e}. "
             "Edit the file, or remove its [connect] table to start over."

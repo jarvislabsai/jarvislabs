@@ -52,7 +52,6 @@ def test_usage_shows_the_plan_and_each_window(server):
         "1 of 4",
     ):
         assert text in result.output
-    assert "Next: jl usage manage" in result.output
 
 
 def test_usage_draws_a_bar_for_each_window(server):
@@ -75,8 +74,18 @@ def test_usage_without_a_plan_points_at_subscribe(server):
 
     assert result.exit_code == 0, result.output
     assert "No subscription" in result.output
+    assert "Requests are charged to your wallet." in result.output
     assert "Next: jl subscribe" in result.output
     assert "get a plan" in result.output
+    assert "Run jl subscribe to get a plan." not in result.output
+
+
+def test_usage_help_says_what_the_group_covers():
+    result = runner.invoke(app, ["usage", "--help"], env={"COLUMNS": "1000"})
+
+    assert result.exit_code == 0, result.output
+    text = " ".join(result.output.split())
+    assert "Your plan's usage and limits, use balance, and billing. With no command, shows usage." in text
 
 
 def test_status_leaves_plan_usage_to_jl_usage(server):
@@ -112,15 +121,48 @@ def test_use_balance_sets_spill_over(server):
     assert "Use balance is on" in result.output
 
 
-def test_usage_with_a_plan_points_at_manage(server):
+def test_usage_with_every_window_below_eighty_percent_shows_no_next_step(server):
     server.routes[("GET", "subscription/usage")] = USAGE
 
     result = runner.invoke(app, ["usage"])
 
     assert result.exit_code == 0, result.output
     assert "Pro" in result.output
-    assert "Next: jl usage manage" in result.output
-    assert "manage or cancel" in result.output
+    assert "Next:" not in result.output
+
+
+def test_usage_with_a_window_at_eighty_percent_and_the_wallet_off_points_at_switching_it_on(server):
+    # 80% is where a window counts as near its limit; below it the plan still has room.
+    near_a_limit = {
+        **USAGE,
+        "windows": {
+            **USAGE["windows"],
+            "five_hour": {"percent_used": 80.0, "resets_at": "2026-11-05T16:05:00Z"},
+        },
+    }
+    server.routes[("GET", "subscription/usage")] = near_a_limit
+
+    result = runner.invoke(app, ["usage"])
+
+    assert result.exit_code == 0, result.output
+    assert "Next: jl usage use-balance on" in result.output
+    assert "pay from your wallet once a limit is reached" in result.output
+
+
+def test_usage_near_a_limit_with_the_wallet_on_shows_no_next_step(server):
+    server.routes[("GET", "subscription/usage")] = {
+        **USAGE,
+        "use_balance": True,
+        "windows": {
+            **USAGE["windows"],
+            "five_hour": {"percent_used": 82.0, "resets_at": "2026-11-05T16:05:00Z"},
+        },
+    }
+
+    result = runner.invoke(app, ["usage"])
+
+    assert result.exit_code == 0, result.output
+    assert "Next:" not in result.output
 
 
 def test_manage_opens_the_billing_page(server, opened):

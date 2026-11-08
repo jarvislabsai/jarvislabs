@@ -25,7 +25,7 @@ from jarvislabs.exceptions import NotFoundError
 subscription_app = typer.Typer(
     context_settings=cli_options.HELP_CONTEXT,
     name="usage",
-    help="Your Models API plan's usage, paying from the wallet, billing.",
+    help="Your plan's usage and limits, use balance, and billing. With no command, shows usage.",
     invoke_without_command=True,
 )
 app.add_typer(subscription_app, rich_help_panel="Coding plan")
@@ -44,11 +44,15 @@ def usage_show(ctx: typer.Context, json_output: cli_options.JsonOption = False) 
         render.print_json({"usage": usage})
         return
     if usage is None:
-        render.warning("No subscription", "Run `jl subscribe` to get a plan.")
+        render.warning("No subscription", "Requests are charged to your wallet.")
         render.next_step("get a plan", ["jl subscribe"])
         return
     render.subscription_usage(usage)
-    render.next_step("manage or cancel", ["jl usage manage"])
+    windows = usage.windows
+    # A window under 80% still has room, so the wallet is not the next step yet.
+    near_a_limit = any(w.percent_used >= 80 for w in (windows.five_hour, windows.weekly, windows.monthly))
+    if not usage.use_balance and near_a_limit:
+        render.next_step("pay from your wallet once a limit is reached", ["jl usage use-balance on"])
 
 
 @subscription_app.command("use-balance")

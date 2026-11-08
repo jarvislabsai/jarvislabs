@@ -22,7 +22,7 @@ from jarvislabs.cli import connect
 from jarvislabs.cli.app import app
 from jarvislabs.harnesses import HARNESSES, installed
 from tests.cli import test_connect
-from tests.cli.test_connect import CREATED_KEY, DEEPSEEK, GEMMA, GLM, read_json
+from tests.cli.test_connect import CREATED_KEY, DEEPSEEK, GEMMA, GLM, PRICED_CATALOG, WALLET_KEY, read_json
 
 runner = CliRunner()
 # A subscriber with no key yet, and the DeepSeek, GLM and Gemma catalog.
@@ -30,6 +30,8 @@ subscribed = test_connect.subscribed
 opencode_config = test_connect.opencode_config
 # jl is already the latest version, for jl update.
 up_to_date = test_connect.up_to_date
+# An account with no subscription, whose connect takes the wallet.
+unsubscribed = test_connect.unsubscribed
 
 URL = "https://models.jarvislabs.net/v1"
 KEY = "jlsk-new-secret"
@@ -136,7 +138,7 @@ def test_connect_writes_each_json_family_harness_in_its_own_format(subscribed, t
                 "generationConfig": {
                     "contextWindowSize": 1048576,
                     "samplingParams": {"max_tokens": 65536},
-                    "modalities": {"image": True},
+                    "modalities": {"image": True, "video": True},
                 },
             },
             {
@@ -147,7 +149,7 @@ def test_connect_writes_each_json_family_harness_in_its_own_format(subscribed, t
                 "generationConfig": {
                     "contextWindowSize": 230000,
                     "samplingParams": {"max_tokens": 23000},
-                    "modalities": {"image": False},
+                    "modalities": {"image": False, "video": False},
                 },
             },
             {
@@ -158,7 +160,7 @@ def test_connect_writes_each_json_family_harness_in_its_own_format(subscribed, t
                 "generationConfig": {
                     "contextWindowSize": 32768,
                     "samplingParams": {"max_tokens": 3276},
-                    "modalities": {"image": False},
+                    "modalities": {"image": False, "video": False},
                 },
             },
         ]
@@ -176,6 +178,7 @@ def test_connect_writes_each_json_family_harness_in_its_own_format(subscribed, t
                 "name": "DeepSeek V4.1 Flash",
                 "maxPromptTokens": 1048576,
                 "maxOutputTokens": 65536,
+                "capabilities": {"supports": {"vision": True}},
             },
             {
                 "id": "glm-5.3",
@@ -230,6 +233,7 @@ def test_connect_writes_kimi_code_config_in_toml(subscribed, tmp_path, monkeypat
                 "provider": "jarvislabs",
                 "model": "deepseek-v4.1-flash-1017",
                 "max_context_size": 1048576,
+                "max_output_size": 65536,
                 "display_name": "DeepSeek V4.1 Flash",
                 "capabilities": ["tool_use", "image_in", "video_in"],
             },
@@ -237,6 +241,7 @@ def test_connect_writes_kimi_code_config_in_toml(subscribed, tmp_path, monkeypat
                 "provider": "jarvislabs",
                 "model": "glm-5.3",
                 "max_context_size": 230000,
+                "max_output_size": 23000,
                 "display_name": "GLM-5.3",
                 # The catalog says it reasons and has no toggle, so it always thinks.
                 "capabilities": ["tool_use", "always_thinking"],
@@ -245,6 +250,7 @@ def test_connect_writes_kimi_code_config_in_toml(subscribed, tmp_path, monkeypat
                 "provider": "jarvislabs",
                 "model": "gemma-3-1b-it",
                 "max_context_size": 32768,
+                "max_output_size": 3276,
                 "display_name": "Gemma 3 1B IT",
             },
         },
@@ -341,14 +347,21 @@ def test_a_preview_harness_needs_the_flag(subscribed):
 
     assert result.exit_code == 1, result.output
     said = " ".join(result.output.split())
-    assert "in preview" in said
-    assert "JL_PREVIEW_HARNESSES=1" in said
+    # Coming soon to a user; the testing flag isn't theirs to know about.
+    assert "Claude Code is coming soon" in said
+    assert "JL_PREVIEW_HARNESSES" not in said
 
 
 def test_the_flag_marks_preview_harnesses_connectable_in_the_list(subscribed, monkeypatch):
     off = runner.invoke(app, ["connect", "--list"])
     row = next(line for line in off.stdout.splitlines() if line.strip().startswith("claude-code"))
-    assert row.endswith("print only")
+    # Its config would point at an endpoint that isn't public yet, so it isn't printable either.
+    assert row.endswith("coming soon")
+    printed = runner.invoke(app, ["connect", "--print", "claude-code"])
+    assert printed.exit_code == 1
+    assert "Claude Code is coming soon: see https://docs.jarvislabs.ai/models-api/harnesses/claude-code" in " ".join(
+        printed.output.split()
+    )
 
     monkeypatch.setenv("JL_PREVIEW_HARNESSES", "1")
     on = runner.invoke(app, ["connect", "--list"])
@@ -518,6 +531,25 @@ def test_pi_thinking_levels_map_to_supported_efforts(subscribed, tmp_path):
     }
 
 
+def test_pi_starts_each_model_at_its_default_effort(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = EFFORTS_CATALOG
+
+    result = runner.invoke(app, ["connect", "pi", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    settings = read_json(tmp_path / ".pi" / "agent" / "settings.json")
+    # pi starts every model at its global medium level; modelThinkingLevels names the level whose
+    # thinkingLevelMap value is the model's own default effort, and keeps the default keys.
+    assert settings == {
+        "defaultProvider": "jarvislabs",
+        "defaultModel": "deepseek-v4.1-flash-1017",
+        "modelThinkingLevels": {
+            "jarvislabs/deepseek-v4.1-flash-1017": "high",
+            "jarvislabs/glm-5.3": "medium",
+        },
+    }
+
+
 def test_opencode_offers_the_models_real_reasoning_efforts(subscribed, tmp_path):
     # OpenCode offers low, medium and high when a model carries no efforts, and the Models API
     # refuses an effort the model doesn't list; the catalog's efforts replace that ladder.
@@ -551,9 +583,29 @@ def test_opencode_offers_the_models_real_reasoning_efforts(subscribed, tmp_path)
 EFFORTS_CATALOG = {
     "object": "list",
     "data": [
-        {**DEEPSEEK, "thinking": {"supported": True, "supported_efforts": ["low", "high", "max"], "default_effort": "high"}},
+        {
+            **DEEPSEEK,
+            "thinking": {"supported": True, "supported_efforts": ["low", "high", "max"], "default_effort": "high"},
+        },
         {**GLM, "thinking": {"supported": True, "supported_efforts": ["medium"]}},
         {**GEMMA, "thinking": {"supported": True, "supported_efforts": []}},
+    ],
+}
+
+# A model that can turn thinking off, and one whose toggle has no effort ladder to send with it.
+TOGGLE_CATALOG = {
+    "object": "list",
+    "data": [
+        {
+            **DEEPSEEK,
+            "thinking": {
+                "supported": True,
+                "supports_toggle": True,
+                "supported_efforts": ["low", "medium", "high"],
+                "default_effort": "medium",
+            },
+        },
+        {**GLM, "thinking": {"supported": True, "supports_toggle": True}},
     ],
 }
 
@@ -582,7 +634,12 @@ def test_qwen_declares_each_models_own_efforts(subscribed, tmp_path):
 def test_qwen_never_defaults_to_an_effort_the_model_refuses(subscribed, tmp_path):
     subscribed.routes[("GET", "models")] = {
         "object": "list",
-        "data": [{**DEEPSEEK, "thinking": {"supported": True, "supported_efforts": ["low", "high"], "default_effort": "xhigh"}}],
+        "data": [
+            {
+                **DEEPSEEK,
+                "thinking": {"supported": True, "supported_efforts": ["low", "high"], "default_effort": "xhigh"},
+            }
+        ],
     }
 
     result = runner.invoke(app, ["connect", "qwen", "--yes"])
@@ -609,6 +666,19 @@ def test_kimi_offers_each_models_own_efforts(subscribed, tmp_path):
     assert "default_effort" not in models["jarvislabs/gemma-3-1b-it"]
 
 
+def test_kimi_writes_off_effort_only_for_a_model_that_can_toggle_thinking(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = TOGGLE_CATALOG
+
+    result = runner.invoke(app, ["connect", "kimi", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    models = tomllib.loads((tmp_path / ".kimi-code" / "config.toml").read_text())["models"]
+    # Off in Kimi's picker sends off_effort's value; without it Kimi raises off-needs-offeffort.
+    assert models["jarvislabs/deepseek-v4.1-flash-1017"]["off_effort"] == "none"
+    # A toggle without an effort ladder has nothing to turn off from, so it gets no off_effort.
+    assert "off_effort" not in models["jarvislabs/glm-5.3"]
+
+
 def test_copilot_offers_each_models_own_efforts(subscribed, tmp_path):
     subscribed.routes[("GET", "models")] = EFFORTS_CATALOG
 
@@ -616,9 +686,10 @@ def test_copilot_offers_each_models_own_efforts(subscribed, tmp_path):
 
     assert result.exit_code == 0, result.output
     models = {m["id"]: m for m in read_json(tmp_path / ".copilot" / "providers.json")["models"]}
-    # The ladder the picker's Reasoning column cycles through; without it the column is hidden.
+    # The ladder the picker's Reasoning column cycles through, and image support beside it: without
+    # either, the column is hidden or the CLI refuses an image for a vision model.
     assert models["deepseek-v4.1-flash-1017"]["capabilities"] == {
-        "supports": {"reasoning_effort": ["low", "high", "max"]}
+        "supports": {"reasoning_effort": ["low", "high", "max"], "vision": True}
     }
     assert models["glm-5.3"]["capabilities"] == {"supports": {"reasoning_effort": ["medium"]}}
     assert "capabilities" not in models["gemma-3-1b-it"]
@@ -636,6 +707,83 @@ def test_kilo_pins_each_models_default_effort(subscribed, tmp_path):
     assert models["deepseek-v4.1-flash-1017"]["options"] == {"reasoningEffort": "high"}
     assert models["glm-5.3"]["options"] == {"reasoningEffort": "medium"}
     assert "options" not in models["gemma-3-1b-it"]
+
+
+def test_aider_sets_each_models_output_limit_alongside_its_effort(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = EFFORTS_CATALOG
+
+    result = runner.invoke(app, ["connect", "aider", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    written = (tmp_path / ".aider.model.settings.yml").read_text()
+    # max_tokens is the output cap Aider puts on the wire; the model's effort rides in extra_body
+    # in the same entry, and a model without one still gets its limit.
+    assert (
+        "- name: openai/deepseek-v4.1-flash-1017\n  extra_params:\n    max_tokens: 65536\n"
+        "    extra_body:\n      reasoning_effort: high" in written
+    )
+    assert "- name: openai/gemma-3-1b-it\n  extra_params:\n    max_tokens: 3276" in written
+
+
+def test_aider_lets_vision_models_take_images(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = CATALOG
+
+    result = runner.invoke(app, ["connect", "aider", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    metadata = read_json(tmp_path / ".aider.model.metadata.json")
+    # Aider refuses an image for a model whose metadata doesn't say it takes one.
+    assert metadata["openai/deepseek-v4.1-flash-1017"]["supports_vision"] is True
+    assert metadata["openai/glm-5.3"]["supports_vision"] is False
+
+
+def test_goose_sets_each_models_output_limit_alongside_its_effort(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = EFFORTS_CATALOG
+    goose = tmp_path / "Block" / "goose" / "config" if os.name == "nt" else tmp_path / "goose"
+
+    result = runner.invoke(app, ["connect", "goose", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    models = {m["name"]: m for m in read_json(goose / "custom_providers" / "jarvislabs.json")["models"]}
+    # Goose sends request_params verbatim, so max_tokens is the output cap on every request and
+    # the effort joins it where the model has one.
+    assert models["deepseek-v4.1-flash-1017"]["request_params"] == {
+        "max_tokens": 65536,
+        "reasoning_effort": "high",
+    }
+    assert models["gemma-3-1b-it"]["request_params"] == {"max_tokens": 3276}
+
+
+def test_zed_sets_each_models_output_limit(subscribed):
+    result = runner.invoke(app, ["connect", "--print", "zed"])
+
+    assert result.exit_code == 0, result.output
+    out = result.stdout
+    settings = json.loads(out[out.index("{") : out.rindex("}") + 1])
+    models = settings["language_models"]["openai_compatible"]["Jarvislabs"]["available_models"]
+    # max_tokens is the context window; without max_output_tokens Zed sends no output ceiling
+    # and the Models API cuts replies at 1024 tokens.
+    assert [model["max_output_tokens"] for model in models] == [65536, 23000, 3276]
+
+
+def test_opencode_and_kilo_take_video_when_the_catalog_lists_it(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = CATALOG
+
+    result = runner.invoke(app, ["connect", "opencode", "kilo", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    opencode = read_json(tmp_path / "opencode" / "opencode.json")
+    v2 = opencode["providers"]["jarvislabs"]["models"]["deepseek-v4.1-flash-1017"]
+    assert v2["capabilities"]["input"] == ["text", "image", "video"]
+    # The V1 entry, which Kilo reads too, names video as well; Kilo's own copy is the same entry.
+    v1 = opencode["provider"]["jarvislabs"]["models"]["deepseek-v4.1-flash-1017"]
+    assert v1["modalities"]["input"] == ["text", "image", "video"]
+    kilo = read_json(tmp_path / "kilo" / "kilo.jsonc")
+    assert kilo["provider"]["jarvislabs"]["models"]["deepseek-v4.1-flash-1017"]["modalities"]["input"] == [
+        "text",
+        "image",
+        "video",
+    ]
 
 
 def test_cline_preview_warns_when_its_slot_is_taken(subscribed, tmp_path):
@@ -947,6 +1095,12 @@ def test_cline_extension_gets_its_own_provider_state(subscribed, tmp_path):
     slot = read_json(cline_data(tmp_path) / "settings" / "providers.json")["providers"]["openai-compatible"]
     assert slot["settings"]["model"] == "glm-5.3"
     assert slot["settings"]["apiKey"] == KEY
+    info = {
+        "contextWindow": slot["settings"]["contextWindow"],
+        "maxTokens": slot["settings"]["maxTokens"],
+        "supportsImages": "vision" in slot["settings"]["capabilities"],
+        "supportsPromptCache": False,
+    }
     assert read_json(cline_data(tmp_path) / "globalState.json") == {
         "welcomeViewCompleted": True,
         "planModeApiProvider": "openai",
@@ -954,7 +1108,11 @@ def test_cline_extension_gets_its_own_provider_state(subscribed, tmp_path):
         "openAiBaseUrl": URL,
         "planModeOpenAiModelId": "glm-5.3",
         "actModeOpenAiModelId": "glm-5.3",
+        # The model's own window, the same limits as providers.json; without it Cline assumes 128k.
+        "planModeOpenAiModelInfo": info,
+        "actModeOpenAiModelInfo": info,
     }
+    assert info["contextWindow"] == 230000
     assert read_json(cline_data(tmp_path) / "secrets.json") == {"openAiApiKey": KEY}
 
 
@@ -1063,3 +1221,91 @@ def test_cline_extension_honours_clines_data_dir(subscribed, tmp_path, monkeypat
     assert result.exit_code == 0, result.output
     assert read_json(custom / folder / "globalState.json")["actModeApiProvider"] == "openai"
     assert not (tmp_path / ".cline").exists()
+
+
+def connect_on_wallet(server, *tools):
+    """Connect tools on a wallet key, with the USD-priced catalog."""
+    server.routes[("GET", "models")] = PRICED_CATALOG
+    server.routes[("POST", "users/api_keys")] = WALLET_KEY
+    return runner.invoke(app, ["connect", *tools, "--wallet", "--yes"])
+
+
+def test_a_wallet_connect_writes_kilos_usd_prices(unsubscribed, tmp_path):
+    result = connect_on_wallet(unsubscribed, "kilo")
+
+    assert result.exit_code == 0, result.output
+    models = read_json(tmp_path / "kilo" / "kilo.jsonc")["provider"]["jarvislabs"]["models"]
+    assert {model_id: model.get("cost") for model_id, model in models.items()} == {
+        "deepseek-v4.1-flash-1017": {"input": 0.14, "output": 0.28, "cache_read": 0.014},
+        # No cached price, so no cache key.
+        "glm-5.3": {"input": 0.55, "output": 2.2},
+        "gemma-3-1b-it": None,
+    }
+
+
+def test_a_wallet_connect_writes_pis_usd_prices(unsubscribed, tmp_path):
+    result = connect_on_wallet(unsubscribed, "pi")
+
+    assert result.exit_code == 0, result.output
+    pi = read_json(tmp_path / ".pi" / "agent" / "models.json")["providers"]["jarvislabs"]["models"]
+    models = {model["id"]: model for model in pi}
+    # pi needs all four rates, so the cache-write price the catalog lacks is written as zero.
+    assert models["deepseek-v4.1-flash-1017"]["cost"] == {
+        "input": 0.14,
+        "output": 0.28,
+        "cacheRead": 0.014,
+        "cacheWrite": 0,
+    }
+    # A model without a cached price gets no cost at all: pi refuses a cost missing a rate, and a
+    # zero would report cached reads as free.
+    assert "cost" not in models["glm-5.3"]
+
+
+def test_a_wallet_connect_writes_gooses_per_token_prices(unsubscribed, tmp_path):
+    result = connect_on_wallet(unsubscribed, "goose")
+
+    assert result.exit_code == 0, result.output
+    goose = tmp_path / "Block" / "goose" / "config" if os.name == "nt" else tmp_path / "goose"
+    models = {model["name"]: model for model in read_json(goose / "custom_providers" / "jarvislabs.json")["models"]}
+    # Goose prices per token, and prints the currency it is given beside the session's cost.
+    assert {
+        key: models["deepseek-v4.1-flash-1017"][key]
+        for key in ("input_token_cost", "output_token_cost", "cache_read_token_cost", "currency")
+    } == {
+        "input_token_cost": 1.4e-07,
+        "output_token_cost": 2.8e-07,
+        "cache_read_token_cost": 1.4e-08,
+        "currency": "USD",
+    }
+    assert "cache_read_token_cost" not in models["glm-5.3"]
+    assert "input_token_cost" not in models["gemma-3-1b-it"]
+
+
+def test_a_wallet_connect_writes_aiders_per_token_prices(unsubscribed, tmp_path):
+    result = connect_on_wallet(unsubscribed, "aider")
+
+    assert result.exit_code == 0, result.output
+    metadata = read_json(tmp_path / ".aider.model.metadata.json")
+    # Aider reads litellm's per-token prices for its cost report.
+    assert {
+        key: metadata["openai/deepseek-v4.1-flash-1017"][key]
+        for key in ("input_cost_per_token", "output_cost_per_token", "input_cost_per_token_cache_hit")
+    } == {
+        "input_cost_per_token": 1.4e-07,
+        "output_cost_per_token": 2.8e-07,
+        "input_cost_per_token_cache_hit": 1.4e-08,
+    }
+    assert "input_cost_per_token_cache_hit" not in metadata["openai/glm-5.3"]
+    assert "input_cost_per_token" not in metadata["openai/gemma-3-1b-it"]
+
+
+@pytest.mark.parametrize("harness", ["kilo", "pi", "goose", "aider"])
+def test_a_subscription_connect_writes_no_prices(subscribed, tmp_path, harness):
+    subscribed.routes[("GET", "models")] = PRICED_CATALOG
+
+    result = runner.invoke(app, ["connect", harness, "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # The plan pays nothing per token, so a cost readout there would be wrong.
+    written = "\n".join(path.read_text() for path in tmp_path.rglob("*") if path.is_file())
+    assert "cost" not in written

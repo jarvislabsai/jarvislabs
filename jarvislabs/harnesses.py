@@ -2,9 +2,9 @@
 
 A harness is a coding agent, such as OpenCode. HARNESSES lists the ones jl knows. A harness
 that jl connects has a writer: a function that takes a Setup (the Models API base URL, this
-machine's key, the model catalog and the default model) and returns the config files to edit
-and the value to set at each key path in them. Paths are worked out when the writer runs, from
-the user's home and environment.
+machine's key, the model catalog, the default model and whether this machine pays per token)
+and returns the config files to edit and the value to set at each key path in them. Paths are
+worked out when the writer runs, from the user's home and environment.
 
 plan_connect reads the current files and returns a Plan: each file's new text, the values it
 overwrites, and a preview of the changes: whether they add, update or change, and what they
@@ -80,12 +80,15 @@ class Setup:
         models: Every model in the catalog.
         default_model: The ID of the model to set as the harness's default, or None to leave the
             harness's default as it is. Writers set no default-model value when it is None.
+        costs: True when this machine pays per token, so writers add the catalog's USD prices;
+            False on the plan, which pays nothing per token and would show a wrong cost.
     """
 
     base_url: str
     api_key: str
     models: tuple[ModelInfo, ...]
     default_model: str | None
+    costs: bool = False
 
 
 @dataclass(frozen=True)
@@ -134,6 +137,10 @@ class Harness:
             None when every version does.
         preview: True while the endpoint it needs isn't public. jl connects it only with
             ``JL_PREVIEW_HARNESSES=1``; otherwise it is listed as coming soon.
+        apps: Where the app lives when it has no command on PATH, such as a macOS app bundle;
+            "~" and environment variables are expanded. Any one existing counts as installed.
+        key_by_hand: Where the user pastes the key, for a harness that keeps it in a store jl
+            doesn't write (Zed's keychain); None when jl writes the key with the config.
     """
 
     id: str
@@ -149,6 +156,8 @@ class Harness:
     install_url: str | None = None
     min_version: str | None = None
     preview: bool = False
+    apps: tuple[str, ...] = ()
+    key_by_hand: str | None = None
 
 
 @dataclass(frozen=True)
@@ -215,7 +224,7 @@ def installed(harness: Harness) -> bool:
         folder = Path.home() / ".vscode" / "extensions"
         obsolete = _obsolete_extensions(folder)
         return any(path.name not in obsolete for path in folder.glob(f"{harness.extension[0]}-*"))
-    return launchable(harness)
+    return launchable(harness) or any(Path(os.path.expandvars(app)).expanduser().exists() for app in harness.apps)
 
 
 def _obsolete_extensions(folder: Path) -> set[str]:
@@ -271,6 +280,15 @@ def preview_enabled() -> bool:
 def connectable(harness: Harness) -> bool:
     """Return whether jl can connect this harness now, counting a preview one with the flag on."""
     return harness.support == "connect" or (harness.preview and preview_enabled())
+
+
+def printable(harness: Harness) -> bool:
+    """Return whether jl connect --print can print this harness's config now.
+
+    A preview harness's config points at an endpoint that isn't public yet, so it prints only with
+    ``JL_PREVIEW_HARNESSES=1``, the same as it connects.
+    """
+    return harness.writer is not None and (not harness.preview or preview_enabled())
 
 
 def anthropic_base_url() -> str:
@@ -444,11 +462,17 @@ def apply(plan: Plan, previous: Replaced | None = None) -> Replaced:
     for write in plan.writes:
         backup = write.path.with_name(write.path.name + ".jl-backup")
         if write.text is None:
-            write.path.unlink(missing_ok=True)
+            # Only a plain file goes. A symlink is the user's (a dotfiles link, say), even when jl
+            # wrote through it, and unlink never touches a folder.
+            if write.path.is_file() and not write.path.is_symlink():
+                write.path.unlink()
             continue
         text = write.text
         if not write.path.exists():
-            created.append(write.path)
+            # A dangling symlink doesn't exist either, but it is the user's link, not a file jl
+            # created, and there is nothing behind it to back up.
+            if not write.path.is_symlink():
+                created.append(write.path)
         elif not backup.exists() and not (previous and write.path in previous.created):
             write_private(backup, write.path.read_bytes())
             backups.append(backup)
@@ -521,6 +545,33 @@ def snippet(harness: Harness, setup: Setup) -> str:
     if setup.api_key not in text:
         text += f"\nThen give {harness.name} your key: {setup.api_key}\n"
     return text
+
+
+def usd_rates(model: ModelInfo) -> tuple[float, float | None, float] | None:
+    """Return a model's prices in USD per million tokens: input, cached input and output.
+
+    A row priced in another currency carries the same rates in USD. A row from an older API,
+    and a model with no price, has none.
+
+    Args:
+        model: A model from the catalog.
+
+    Returns:
+        The input, cached input and output rates in USD per million tokens, with the cached
+        rate None when the catalog has none, or None when the model has no USD price.
+    """
+    pricing = model.pricing
+    if pricing is None:
+        return None
+    if pricing.currency.upper() != "USD":
+        pricing = pricing.usd
+        if pricing is None:
+            return None
+    return (
+        pricing.input_per_million_tokens,
+        pricing.cached_input_per_million_tokens,
+        pricing.output_per_million_tokens,
+    )
 
 
 def _windows_path() -> str | None:
@@ -908,17 +959,22 @@ def _pi(setup: Setup) -> tuple[ConfigEdit, ...]:
         # pi takes an unknown base URL for OpenAI and sends store, the developer role and
         # max_completion_tokens; the Models API reads max_tokens, and caps output at 1024 without it.
         "compat": {"supportsStore": False, "supportsDeveloperRole": False, "maxTokensField": "max_tokens"},
-        "models": [_pi_model(model) for model in setup.models],
+        "models": [_pi_model(model, setup.costs) for model in setup.models],
     }
     edits = [ConfigEdit(folder / "models.json", "jsonc", {("providers", PROVIDER_ID): provider})]
     if setup.default_model:
-        # pi keeps the default provider and model apart, in settings.json.
+        # pi keeps the default provider and model apart, in settings.json. It starts each model at
+        # its global medium level, so modelThinkingLevels pins the level that sends the model's
+        # own default effort; pi's level names are the thinkingLevelMap keys.
         default: dict[KeyPath, object] = {("defaultProvider",): PROVIDER_ID, ("defaultModel",): setup.default_model}
+        for model in setup.models:
+            if level := _pi_starting_level(model):
+                default[("modelThinkingLevels", f"{PROVIDER_ID}/{model.id}")] = level
         edits.append(ConfigEdit(folder / "settings.json", "jsonc", default))
     return tuple(edits)
 
 
-def _pi_model(model: ModelInfo) -> dict[str, object]:
+def _pi_model(model: ModelInfo, costs: bool = False) -> dict[str, object]:
     entry: dict[str, object] = {
         "id": model.id,
         "name": model.name or model.id,
@@ -927,6 +983,12 @@ def _pi_model(model: ModelInfo) -> dict[str, object]:
         "contextWindow": _limits(model)[0],
         "maxTokens": _limits(model)[1],
     }
+    # pi shows each request's cost from this, and refuses the whole file unless all four rates are
+    # there. cacheWrite is always missing from the catalog, and the Models API charges nothing to
+    # write the cache; a model with no cached-input price gets no cost at all, since a zero there
+    # would report cached reads as free.
+    if costs and (rates := usd_rates(model)) and rates[1] is not None:
+        entry["cost"] = {"input": rates[0], "output": rates[2], "cacheRead": rates[1], "cacheWrite": 0}
     efforts = model.thinking.supported_efforts
     if model.thinking.supported and efforts:
         # pi sends its thinking level as the effort, medium by default, and the Models API refuses an
@@ -935,6 +997,15 @@ def _pi_model(model: ModelInfo) -> dict[str, object]:
         levels = ("minimal", "low", "medium", "high", "xhigh", "max")
         entry["thinkingLevelMap"] = {level: level if level in efforts else None for level in levels}
     return entry
+
+
+def _pi_starting_level(model: ModelInfo) -> str | None:
+    """Return pi's level that sends a model's default effort, or None when no level carries it."""
+    effort = _default_effort(model)
+    levels = _pi_model(model).get("thinkingLevelMap")
+    if effort is None or not isinstance(levels, dict):
+        return None
+    return next((level for level, value in levels.items() if value == effort), None)
 
 
 def _cline_data_dir() -> Path:
@@ -967,6 +1038,9 @@ def _kimi(setup: Setup) -> tuple[ConfigEdit, ...]:
             "model": model.id,
             # Required by Kimi Code; a model without one would fail at startup.
             "max_context_size": _limits(model)[0],
+            # An openai-type provider sends this as the request's max_tokens; without it the
+            # Models API caps output at 1024 tokens.
+            "max_output_size": _limits(model)[1],
         }
         if model.name:
             entry["display_name"] = model.name
@@ -979,6 +1053,10 @@ def _kimi(setup: Setup) -> tuple[ConfigEdit, ...]:
             entry["support_efforts"] = efforts
             if effort := _default_effort(model):
                 entry["default_effort"] = effort
+            if model.thinking.supports_toggle:
+                # Off in Kimi's thinking picker sends this value; without it Kimi raises
+                # off-needs-offeffort, and "none" is the effort that turns thinking off.
+                entry["off_effort"] = "none"
         values[("models", alias)] = entry
     if setup.default_model:
         # An alias from models above, so Kimi Code finds it at startup.
@@ -1073,6 +1151,16 @@ def _cline_extension(setup: Setup) -> tuple[ConfigEdit, ...]:
         if _current(state, ("openAiBaseUrl",)) != setup.base_url:
             return edits
         return (*edits, ConfigEdit(secrets, "jsonc", key))
+    model = _model(setup, setup.default_model)
+    context, output = _limits(model)
+    # Without this the extension falls back to a 128k window for any OpenAI-compatible model, and
+    # compacts a 1M-window model at an eighth of its size (Cline's provider-settings-legacy-migration.ts).
+    info = {
+        "contextWindow": context,
+        "maxTokens": output,
+        "supportsImages": "image" in model.input_modalities,
+        "supportsPromptCache": False,
+    }
     return (
         *edits,
         ConfigEdit(
@@ -1087,6 +1175,8 @@ def _cline_extension(setup: Setup) -> tuple[ConfigEdit, ...]:
                 ("openAiBaseUrl",): setup.base_url,
                 ("planModeOpenAiModelId",): setup.default_model,
                 ("actModeOpenAiModelId",): setup.default_model,
+                ("planModeOpenAiModelInfo",): info,
+                ("actModeOpenAiModelInfo",): info,
             },
         ),
         # apply writes every file owner-only, which is the mode Cline gives its secrets file.
@@ -1109,7 +1199,10 @@ def _qwen(setup: Setup) -> tuple[ConfigEdit, ...]:
                 "contextWindowSize": _limits(model)[0],
                 # The Models API caps output at 1024 tokens when a request doesn't set max_tokens.
                 "samplingParams": {"max_tokens": _limits(model)[1]},
-                "modalities": {"image": "image" in model.input_modalities},
+                "modalities": {
+                    "image": "image" in model.input_modalities,
+                    "video": "video" in model.input_modalities,
+                },
             },
         }
         if efforts := model.thinking.supported_efforts:
@@ -1176,10 +1269,16 @@ def _copilot(setup: Setup) -> tuple[ConfigEdit, ...]:
             "maxPromptTokens": _limits(model)[0],
             "maxOutputTokens": _limits(model)[1],
         }
+        supports: dict[str, object] = {}
         if efforts := model.thinking.supported_efforts:
             # The ladder the picker's Reasoning column cycles through; without it the column is
             # hidden and no effort is ever sent. Copilot itself never sends a default.
-            entry["capabilities"] = {"supports": {"reasoning_effort": efforts}}
+            supports["reasoning_effort"] = efforts
+        if "image" in model.input_modalities:
+            # Without this the CLI treats the model as text-only and refuses images.
+            supports["vision"] = True
+        if supports:
+            entry["capabilities"] = {"supports": supports}
         models.append(entry)
     # Providers and models are lists shared with the user's own, which are kept.
     values: dict[KeyPath, object] = {
@@ -1248,9 +1347,11 @@ def _model(setup: Setup, model_id: str) -> ModelInfo:
     return next((model for model in setup.models if model.id == model_id), ModelInfo(id=model_id))
 
 
-def _input(model: ModelInfo) -> list[str]:
-    # The input kinds harnesses take; the catalog also lists ones they don't, such as video.
-    return [kind for kind in ("text", "image") if kind in model.input_modalities]
+def _input(model: ModelInfo, video: bool = False) -> list[str]:
+    # The input kinds harnesses take; the catalog also lists ones some don't. OpenCode and Kilo
+    # accept video, while pi and the rest only take text and images.
+    kinds = ("text", "image", "video") if video else ("text", "image")
+    return [kind for kind in kinds if kind in model.input_modalities]
 
 
 def _opencode_values(setup: Setup) -> dict[KeyPath, object]:
@@ -1264,16 +1365,23 @@ def _opencode_values(setup: Setup) -> dict[KeyPath, object]:
         reasoning: dict[str, object] = {"supported": model.thinking.supported}
         if efforts := model.thinking.supported_efforts:
             reasoning["effort"] = efforts
-        models[model.id] = {
+        entry: dict[str, object] = {
             "name": model.name or model.id,
             "capabilities": {
                 "tools": bool(model.capabilities.tool_calling),
-                "input": _input(model),
+                "input": _input(model, video=True),
                 "output": ["text"],
                 "reasoning": reasoning,
             },
             "limit": {"context": context, "output": output},
         }
+        if setup.costs and (rates := usd_rates(model)):
+            # OpenCode shows a session's spend from this, so only a machine that pays per token gets it.
+            cost: dict[str, object] = {"input": rates[0], "output": rates[2]}
+            if rates[1] is not None:
+                cost["cache"] = {"read": rates[1]}
+            entry["cost"] = cost
+        models[model.id] = entry
     values: dict[KeyPath, object] = {
         ("providers", PROVIDER_ID): {
             "name": "Jarvislabs",
@@ -1309,12 +1417,18 @@ def _v1_provider(setup: Setup, fixed_effort: bool = False) -> dict[str, object]:
             "tool_call": bool(model.capabilities.tool_calling),
             "limit": {"context": context, "output": output},
             "modalities": {
-                "input": _input(model),
+                "input": _input(model, video=True),
                 "output": ["text"],
             },
         }
         if fixed_effort and (effort := _default_effort(model)):
             entry["options"] = {"reasoningEffort": effort}
+        if setup.costs and (rates := usd_rates(model)):
+            # The V1 entry's own shape, read by OpenCode 1.x and Kilo for the session's spend.
+            cost: dict[str, object] = {"input": rates[0], "output": rates[2]}
+            if rates[1] is not None:
+                cost["cache_read"] = rates[1]
+            entry["cost"] = cost
         models[model.id] = entry
     return {
         "npm": "@ai-sdk/openai-compatible",
@@ -1383,8 +1497,7 @@ def _codex(setup: Setup) -> tuple[ConfigEdit, ...]:
             entry
             for entry in (current if isinstance(current, list) else ())
             if not (
-                isinstance(entry, dict)
-                and (entry.get("description") == _CODEX_MARKER or entry.get("slug") in slugs)
+                isinstance(entry, dict) and (entry.get("description") == _CODEX_MARKER or entry.get("slug") in slugs)
             )
         ]
         values[("model_catalog_json",)] = str(catalog)
@@ -1486,6 +1599,9 @@ def _zed(setup: Setup) -> tuple[ConfigEdit, ...]:
             "name": model.id,
             "display_name": model.name or model.id,
             "max_tokens": _limits(model)[0],
+            # Zed sends this as the request's output ceiling; without it no max-token field
+            # goes out and the Models API cuts replies at 1024 tokens.
+            "max_output_tokens": _limits(model)[1],
             "capabilities": {
                 "tools": bool(model.capabilities.tool_calling),
                 "images": "image" in model.input_modalities,
@@ -1515,10 +1631,20 @@ def _goose(setup: Setup) -> tuple[ConfigEdit, ...]:
             "context_limit": _limits(model)[0],
             "supports_vision": "image" in model.input_modalities,
         }
+        # Goose sends request_params verbatim with every request for the model, whichever of them
+        # the user picks; max_tokens is the output cap, without which the Models API cuts output
+        # at 1024 tokens.
+        request_params: dict[str, object] = {"max_tokens": _limits(model)[1]}
         if effort := _default_effort(model):
-            # Goose sends request_params verbatim with every request for the model, whichever of
-            # them the user picks; a model without efforts gets no request_params at all.
-            entry["request_params"] = {"reasoning_effort": effort}
+            request_params["reasoning_effort"] = effort
+        entry["request_params"] = request_params
+        if setup.costs and (rates := usd_rates(model)):
+            # Goose prices per token; it prints the currency it is given beside the session's cost.
+            entry["input_token_cost"] = rates[0] / 1_000_000
+            entry["output_token_cost"] = rates[2] / 1_000_000
+            entry["currency"] = "USD"
+            if rates[1] is not None:
+                entry["cache_read_token_cost"] = rates[1] / 1_000_000
         provider_models.append(entry)
     provider = {
         "name": PROVIDER_ID,
@@ -1555,22 +1681,32 @@ def _aider(setup: Setup) -> tuple[ConfigEdit, ...]:
     metadata: dict[KeyPath, object] = {}
     for model in setup.models:
         context, output = _limits(model)
-        metadata[(f"openai/{model.id}",)] = {
+        entry: dict[str, object] = {
             "max_input_tokens": context,
             "max_output_tokens": output,
             "litellm_provider": "openai",
             "mode": "chat",
+            # Aider refuses --image for a model unless its metadata says it takes images.
+            "supports_vision": "image" in model.input_modalities,
         }
+        if setup.costs and (rates := usd_rates(model)):
+            # Aider reads litellm's per-token prices for its cost report; it has no currency of its own.
+            entry["input_cost_per_token"] = rates[0] / 1_000_000
+            entry["output_cost_per_token"] = rates[2] / 1_000_000
+            if rates[1] is not None:
+                entry["input_cost_per_token_cache_hit"] = rates[1] / 1_000_000
+        metadata[(f"openai/{model.id}",)] = entry
     limits = ConfigEdit(Path.home() / ".aider.model.metadata.json", "jsonc", metadata)
-    # Aider reads each model's reasoning effort from .aider.model.settings.yml, a list the user
-    # may hold entries in too, so jl's sit in a marked block that leaves theirs alone. Aider
-    # flattens extra_body onto the request, and takes the entry of whichever model it runs.
+    # Aider reads each model's settings from .aider.model.settings.yml, a list the user may hold
+    # entries in too, so jl's sit in a marked block that leaves theirs alone. Every model gets
+    # max_tokens, the output cap on the wire; without it the Models API cuts output at 1024
+    # tokens. Aider flattens extra_body onto the request, so an effort goes there.
     entries = "\n".join(
-        f"- name: openai/{model.id}\n  extra_params:\n    extra_body:\n      reasoning_effort: {effort}"
+        f"- name: openai/{model.id}\n  extra_params:\n    max_tokens: {_limits(model)[1]}"
+        + (f"\n    extra_body:\n      reasoning_effort: {effort}" if (effort := _default_effort(model)) else "")
         for model in setup.models
-        if (effort := _default_effort(model))
     )
-    efforts = ConfigEdit(Path.home() / ".aider.model.settings.yml", "block", {(): entries}) if entries else None
+    model_settings = ConfigEdit(Path.home() / ".aider.model.settings.yml", "block", {(): entries}) if entries else None
     conf = Path.home() / ".aider.conf.yml"
     settings: dict[KeyPath, object] = {("openai-api-base",): setup.base_url, ("openai-api-key",): setup.api_key}
     if setup.default_model:
@@ -1582,8 +1718,8 @@ def _aider(setup: Setup) -> tuple[ConfigEdit, ...]:
         write_conf = _current(conf, ("openai-api-base",), "yaml") == setup.base_url
     edits = [ConfigEdit(conf, "yaml", settings)] if write_conf else []
     edits.append(limits)
-    if efforts:
-        edits.append(efforts)
+    if model_settings:
+        edits.append(model_settings)
     return tuple(edits)
 
 
@@ -1609,7 +1745,7 @@ def _crush(setup: Setup) -> tuple[ConfigEdit, ...]:
         options = ""
         model = next((m for m in setup.models if m.id == setup.default_model), None)
         if model and (effort := _default_effort(model)):
-                options = f" --provider-options {shlex.quote(json.dumps({'reasoning_effort': effort}))}"
+            options = f" --provider-options {shlex.quote(json.dumps({'reasoning_effort': effort}))}"
         lines += [f"model large {PROVIDER_ID}/{default}{options}", f"model small {PROVIDER_ID}/{default}{options}"]
     else:
         # The block is rewritten whole, so a refresh carries over the default the last connect set.
@@ -1751,6 +1887,24 @@ HARNESSES: tuple[Harness, ...] = (
         # --type completions in jl's crushrc is new in Crush 0.99.0; older ones ignore jl's provider.
         min_version="0.99.0",
     ),
+    Harness(
+        id="zed",
+        name="Zed",
+        kind="cli",
+        support="connect",
+        launch=("zed", "."),
+        writer=_zed,
+        install_url="https://zed.dev/download",
+        # Zed's command-line launcher is optional: the app alone is Zed installed.
+        apps=(
+            "/Applications/Zed.app",
+            "~/Applications/Zed.app",
+            "~/.local/zed.app",
+            "%LOCALAPPDATA%/Programs/Zed/Zed.exe",
+        ),
+        # Zed keeps provider keys in the OS keychain, written by its own Agent settings.
+        key_by_hand="Zed > Agent settings > Jarvislabs",
+    ),
 )
 
 # Each coming-soon harness's manual setup page is <HARNESS_DOCS_URL>/<id>.
@@ -1781,15 +1935,13 @@ def _coming_soon(
 
 
 # Claude Code and Codex wait for the Models API's Anthropic and Responses endpoints, so they are
-# preview-only until those are public. Cursor, VS Code Copilot and Zed keep the key in an app
-# database or the OS keychain (phase 2).
+# preview-only until those are public. VS Code Copilot keeps the key in an app database (phase 2). Cursor isn't listed: its own key works only for its built-in
+# providers' standard, non-reasoning chat models, routed through Cursor's servers, with no base URL
+# setting to point it at another API.
 HARNESSES += (
     # Behind JL_PREVIEW_HARNESSES until /v1/messages and /v1/responses are public. Both hold one
     # model: the gateway name is passed as the model, not picked from a catalog in the file.
     _coming_soon("claude-code", "Claude Code", "cli", ("claude",), writer=_claude_code, preview=True, one_model=True),
     _coming_soon("codex", "Codex", "cli", ("codex",), writer=_codex, preview=True, one_model=True),
-    _coming_soon("cursor", "Cursor", "cli", ("cursor", ".")),
     _coming_soon("vscode-copilot", "VS Code Copilot", "vscode", ("code", ".")),
-    # A writer, though jl doesn't write Zed's key to the keychain yet: jl connect --print shows the settings.
-    _coming_soon("zed", "Zed", "cli", ("zed", "."), writer=_zed),
 )

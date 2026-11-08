@@ -145,11 +145,7 @@ def instance_get(
     render.instance_detail(inst, currency)
 
 
-@app.command(
-    "create",
-    rich_help_panel=_MACHINE_PANEL,
-    epilog="Examples:\n\n  jl create --gpu A100\n\n  jl create --gpu H100 --vm\n\n  jl create --cpu --vcpus 8 --ram 32 --vm",
-)
+@app.command("create", rich_help_panel=_MACHINE_PANEL)
 def instance_create(
     gpu: Annotated[str | None, typer.Option("--gpu", "-g", help="GPU type (e.g. H100, A100, L4).")] = None,
     vm: Annotated[bool, typer.Option("--vm", help="Create a VM instance (SSH-only, no container).")] = False,
@@ -180,6 +176,17 @@ def instance_create(
     """Create a GPU instance, VM, or CPU VM.
 
     A container comes with PyTorch, Jupyter and an IDE. Add --vm for a bare-metal VM with SSH only.
+
+    [bold]Examples:[/bold]
+
+      # A container with PyTorch and Jupyter
+      [bold cyan]jl create --gpu A100[/bold cyan]
+
+      # A bare-metal VM with SSH only
+      [bold cyan]jl create --gpu H100 --vm[/bold cyan]
+
+      # A CPU-only VM, with 8 vCPUs and 32 GB of RAM
+      [bold cyan]jl create --cpu --vcpus 8 --ram 32 --vm[/bold cyan]
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
 

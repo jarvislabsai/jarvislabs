@@ -71,6 +71,8 @@ def _login_flow(token: str | None) -> Client:
 
     # Already authenticated — ask to re-authenticate
     if existing and not token:
+        # The header ends without a blank line, and a login line brings none of its own.
+        render.console.print()
         try:
             client = Client(api_key=existing)
             info = client.account.user_info()
@@ -103,6 +105,9 @@ def _login_flow(token: str | None) -> Client:
 
     config.setdefault("auth", {})["token"] = token
     save_config(config)
+    if not typed:
+        # A --token login has no SIGN IN rule to open the block, so the blank line comes here.
+        render.console.print()
     render.success(f"Logged in as {info.name}")
     return client
 
@@ -255,8 +260,10 @@ def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
 
     names = [*UNIVERSAL_AGENTS, *(label for label, _ in installed[1:])]
     summary = f"for {', '.join(names[:-1])} and {names[-1]}" if len(names) > 1 else f"for {names[0]}"
-    render.success(f"Agent skills installed  {summary}")
-    render.console.print(Text("  " + " · ".join(render.short_path(path) for _, path in installed), "dim"))
+    render.success("Agent skills installed")
+    # Hung under its indent: ten agent names wrap, and a wrap at column 0 reads as a new block.
+    render._hang(Text("  "), Text(summary, "dim"), render.console)
+    render.console.print(Text("  " + render.MARKS["sep"].join(render.short_path(path) for _, path in installed), "dim"))
 
     return installed
 
@@ -278,12 +285,13 @@ def _show_account_status(client: Client) -> None:
 
 
 def _show_next_steps() -> None:
-    """Print three commands to try and where the full walkthrough lives, before the next action."""
+    """Print four commands to try and where the full walkthrough lives, before the next action."""
     render.rule("GET STARTED")
     rows = (
+        ("jl connect", "add Jarvislabs models to your coding tools"),
         ("jl gpus", "GPUs and prices"),
         ("jl run train.py --gpu A100", "run a script on a GPU"),
-        ("jl status", "plan, balance and connected tools"),
+        ("jl status", "balance and connected tools"),
     )
     width = max(len(command) for command, _ in rows)
     for command, detail in rows:
@@ -299,8 +307,8 @@ def _show_header() -> None:
     """
     if not state.yes and render.can_prompt() and render.console.width >= 80:
         render.console.print()
+        # No blank line here: each block after the wordmark prints its own first.
         render.console.print(WORDMARK, markup=False, highlight=False, end="")
-        render.console.print()
     else:
         render.heading("Jarvislabs CLI setup")
 
@@ -332,7 +340,6 @@ def setup(
 
     # Show account status, then the short next steps.
     # The install scripts run jl connect next, so they would only sit between the two.
-    render.rule()
     _show_account_status(client)
     if not os.environ.get("JL_FROM_INSTALLER"):
         _show_next_steps()

@@ -16,8 +16,17 @@ from jarvislabs.exceptions import JarvislabsError
 # Typer dims every help line after the first by default, which makes the whole page look disabled.
 # Description is body text; dim is for tertiary metadata only. Panel borders stay grey, not dim.
 rich_utils.STYLE_HELPTEXT = ""
+# A default is help content too, so it is printed in body weight rather than dim.
+rich_utils.STYLE_OPTION_DEFAULT = ""
 rich_utils.STYLE_OPTIONS_PANEL_BORDER = "bright_black"
 rich_utils.STYLE_COMMANDS_PANEL_BORDER = "bright_black"
+# Typer colours Usage: yellow and switches green, but in jl yellow means warning and green means
+# success. Help stays in body weight, with commands in the same accent as the option names.
+rich_utils.STYLE_USAGE = "bold"
+# Typer 0.28 renamed STYLE_METAVAR to STYLE_TYPES; users get whichever Typer uv resolves, so set both.
+rich_utils.STYLE_METAVAR = "bold"
+rich_utils.STYLE_TYPES = "bold"
+rich_utils.STYLE_SWITCH = "bold cyan"
 
 app = typer.Typer(
     name="jl",
@@ -28,9 +37,8 @@ app = typer.Typer(
         "  GPU     [bold cyan]jl gpus[/bold cyan] → [bold cyan]jl create --gpu A100[/bold cyan] → [bold cyan]jl run train.py --on <id>[/bold cyan]\n"
         "  Stop    [bold cyan]jl pause <id>[/bold cyan]  stop GPU billing, keep the disk\n"
         '  Models  [bold cyan]jl models list[/bold cyan] → [bold cyan]jl models chat <model> "Hello"[/bold cyan]\n'
-        "  Tools   [bold cyan]jl connect[/bold cyan]  add Jarvislabs models to your coding tool\n"
         "  Serve   [bold cyan]jl deploy managed-models create[/bold cyan]\n\n"
-        "Using a coding agent? jl setup signs you in and installs the jl skill; jl connect adds your models.\n\n"
+        "Using a coding agent? [bold cyan]jl setup[/bold cyan] adds the jl skill; [bold cyan]jl connect[/bold cyan] adds our models.\n\n"
         "Use jl help <command> for details."
     ),
     rich_markup_mode="rich",
@@ -69,17 +77,17 @@ def help_command(
     """Show help for jl or one of its commands."""
     target = get_command(app)
     for name in command or []:
-        target = target.commands.get(name)
-        if target is None:
-            from jarvislabs.cli.render import die
-
+        # A plain command has no subcommands, so a name after it is unknown too.
+        found = target.commands.get(name) if isinstance(target, click.Group) else None
+        if found is None:
             die(f"Unknown command {name}.")
+        target = found
     click.echo(
         target.get_help(
             click.Context(
                 target,
                 info_name="jl" + (" " + " ".join(command) if command else ""),
-                help_option_names=app.info.context_settings.get("help_option_names", ["--help"]),
+                help_option_names=(app.info.context_settings or {}).get("help_option_names", ["--help"]),
             )
         )
     )

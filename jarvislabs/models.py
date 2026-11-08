@@ -478,10 +478,17 @@ class ManagedModelListResult(BaseModel):
 
 
 class ModelPricing(BaseModel):
+    """A model's prices per million tokens, in ``currency``.
+
+    ``usd`` holds the same rates in US dollars, for a row priced in another currency;
+    None when the API sends none.
+    """
+
     currency: str
     input_per_million_tokens: float
     cached_input_per_million_tokens: float | None = None
     output_per_million_tokens: float
+    usd: ModelPricing | None = None
 
 
 class ModelThinking(BaseModel):

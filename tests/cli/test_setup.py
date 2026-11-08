@@ -155,6 +155,32 @@ def test_setup_ends_with_a_neutral_next_step(typed: list[str]) -> None:
     assert "quick reference" not in result.output
 
 
+@pytest.mark.parametrize("args", [["setup"], ["setup", "--token", "jarvis-key"]], ids=["typed", "token"])
+def test_setup_leaves_at_most_one_blank_line_between_blocks(typed: list[str], args: list[str]) -> None:
+    typed += ["jarvis-key"]
+
+    result = runner.invoke(app, args, input="n\n", env={"COLUMNS": "80"})
+
+    assert result.exit_code == 0, result.output
+    # The wordmark, which needs 80 columns, is where the extra blank line was.
+    assert setup.WORDMARK.splitlines()[0] in result.output
+    assert "\n\n\n" not in result.output
+
+
+def test_setup_has_no_untitled_rule_before_the_account_panel(typed: list[str]) -> None:
+    typed += ["jarvis-key"]
+
+    # Yes to the skills, so the block before the panel ends on its own lines rather than a prompt.
+    result = runner.invoke(app, ["setup"], input="y\n")
+
+    assert result.exit_code == 0, result.output
+    lines = result.output.splitlines()
+    account = next(i for i, line in enumerate(lines) if "Account" in line and line.startswith("╭"))
+    assert lines[account - 1] == ""
+    # Only titled phase rules and the panel frame draw lines, never a bare grey rule.
+    assert not any(line and set(line) == {"─"} for line in lines)
+
+
 def test_enter_at_install_agent_skills_installs_them(
     typed: list[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

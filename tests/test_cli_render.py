@@ -393,3 +393,59 @@ def test_confirm_text_is_not_read_as_markup(monkeypatch):
     monkeypatch.setattr(render, "console", console)
     assert render.confirm("Delete deployment [/]?") is False
     assert "Delete deployment [/]?" in buf.getvalue()
+
+
+# ── account_status() ────────────────────────────────────────────────────────
+
+
+def _capture_account_status(monkeypatch, *, grants, running, paused):
+    buf = StringIO()
+    monkeypatch.setattr(
+        render, "stdout_console", Console(file=buf, force_terminal=True, color_system="standard", width=80)
+    )
+    info = SimpleNamespace(name="Ada", user_id="u_123")
+    bal = SimpleNamespace(balance=42.5, grants=grants)
+    metrics = SimpleNamespace(running_instances=running, paused_instances=paused)
+    render.account_status(info, bal, metrics, "$")
+    return buf.getvalue()
+
+
+def test_account_status_shows_the_user_id_dim(monkeypatch):
+    out = _capture_account_status(monkeypatch, grants=0, running=0, paused=0)
+
+    assert "\x1b[2m  u_123" in out
+    assert "\x1b[36m  u_123" not in out
+
+
+def test_account_status_leaves_zero_grants_and_counts_in_the_default_colour(monkeypatch):
+    out = _capture_account_status(monkeypatch, grants=0, running=0, paused=0)
+
+    assert "\x1b[1m$0.00" in out
+    assert "\x1b[1m0" in out
+    assert "\x1b[1;33m$0.00" not in out
+    assert "\x1b[1;32m0" not in out
+    assert "\x1b[1;33m0" not in out
+
+
+def test_account_status_colours_only_what_needs_attention(monkeypatch):
+    out = _capture_account_status(monkeypatch, grants=5, running=2, paused=1)
+
+    # Values are content: green is for done marks, so a balance, grants or running count stay bold.
+    assert "\x1b[1m$42.50" in out
+    assert "\x1b[1m$5.00" in out
+    assert "\x1b[1m2" in out
+    # Paused machines still bill for storage: that is worth a look.
+    assert "\x1b[1;33m1" in out
+
+
+def test_account_status_warns_on_an_empty_wallet(monkeypatch):
+    buf = StringIO()
+    monkeypatch.setattr(
+        render, "stdout_console", Console(file=buf, force_terminal=True, color_system="standard", width=80)
+    )
+    info = SimpleNamespace(name="Ada", user_id="u_123")
+    render.account_status(
+        info, SimpleNamespace(balance=0, grants=0), SimpleNamespace(running_instances=0, paused_instances=0), "$"
+    )
+
+    assert "\x1b[1;33m$0.00" in buf.getvalue()

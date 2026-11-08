@@ -128,13 +128,16 @@ def test_connect_writes_the_provider_models_and_default_into_opencode(subscribed
     assert provider["name"] == "Jarvislabs"
     assert provider["package"] == "@opencode/ai/providers/openai-compatible"
     assert provider["settings"] == {"baseURL": "https://models.jarvislabs.net/v1", "apiKey": "jlsk-new-secret"}
-    # Video isn't offered to OpenCode, and a model the catalog doesn't mark as tool-calling gets no tools.
+    # OpenCode takes video, and a model the catalog doesn't mark as tool-calling gets no tools.
     assert {model_id: (m["name"], m["capabilities"]) for model_id, m in provider["models"].items()} == {
         "deepseek-v4.1-flash-1017": (
             "DeepSeek V4.1 Flash",
-            {"tools": True, "input": ["text", "image"], "output": ["text"], "reasoning": {"supported": False}},
+            {"tools": True, "input": ["text", "image", "video"], "output": ["text"], "reasoning": {"supported": False}},
         ),
-        "glm-5.3": ("GLM-5.3", {"tools": True, "input": ["text"], "output": ["text"], "reasoning": {"supported": False}}),
+        "glm-5.3": (
+            "GLM-5.3",
+            {"tools": True, "input": ["text"], "output": ["text"], "reasoning": {"supported": False}},
+        ),
         "gemma-3-1b-it": (
             "Gemma 3 1B IT",
             {"tools": False, "input": ["text"], "output": ["text"], "reasoning": {"supported": False}},
@@ -440,10 +443,21 @@ def test_connect_list_names_every_tool(server):
     for harness in harnesses.HARNESSES:
         assert harness.id in result.output
         assert harness.name in result.output
-    assert "print only" in result.output
+    # No tool is print-only today, so the legend doesn't explain a label no row shows.
+    assert "print only" not in result.output
     # The whole list is data, so a pipe gets the legend too.
-    assert "connect: jl writes the config" in result.stdout
+    assert "connect      jl writes the config" in result.stdout
     assert server.calls == []
+
+
+def test_connect_list_says_print_only_only_where_print_works(server):
+    result = runner.invoke(app, ["connect", "--list"])
+
+    rows = {line.split()[0]: line for line in result.stdout.splitlines() if line.startswith("  ") and ":" not in line}
+    # VS Code Copilot has no writer, so --print would refuse it: coming soon, not print only.
+    assert rows["zed"].endswith("connect")
+    assert rows["vscode-copilot"].endswith("coming soon")
+    assert rows["opencode"].endswith("connect")
 
 
 @pytest.mark.parametrize("flags", ([], ["--yes"]), ids=["terminal", "yes"])
@@ -478,11 +492,23 @@ def test_connect_ends_with_how_to_start_each_tool(subscribed, opencode_config, t
     result = runner.invoke(app, ["connect", "opencode", "cline", "--yes"])
 
     assert result.exit_code == 0, result.output
-    ends_with_next_step(result, "opencode · cline -i")
+    ends_with_next_step(result, "opencode  or  cline -i")
     # One result, not two endings: the test is a secondary line, not a second ✓.
     assert "API test passed in " in result.output
     assert "Test request:" not in result.output
     assert not re.search(r"✓ API test passed", result.output)
+    assert "Add another tool: jl connect" in said(result)
+
+
+def test_under_the_installer_another_tool_needs_a_new_terminal(subscribed, opencode_config, monkeypatch):
+    # curl | sh runs in a child shell: jl isn't on this window's PATH until a new terminal.
+    monkeypatch.setenv("JL_FROM_INSTALLER", "1")
+
+    result = runner.invoke(app, ["connect", "opencode", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "Add another tool later: open a new terminal, then run jl connect" in said(result)
+    ends_with_next_step(result, "opencode")
 
 
 def test_the_picker_ticks_installed_harnesses_and_lists_coming_soon_last(subscribed, opencode_config, terminal):
@@ -502,7 +528,7 @@ def test_the_picker_ticks_installed_harnesses_and_lists_coming_soon_last(subscri
     ]
     assert groups == sorted(groups, key=["installed", "not installed", "coming soon"].index)
     coming_soon = {value: disabled for value, _, disabled in rows if disabled}
-    assert set(coming_soon) >= {"claude-code", "codex", "cursor", "vscode-copilot", "zed"}
+    assert set(coming_soon) >= {"claude-code", "codex", "vscode-copilot", "zed"}
     # The ticked harness is the one connected.
     assert read_json(opencode_config)["model"] == "jarvislabs/deepseek-v4.1-flash-1017"
 
@@ -541,8 +567,7 @@ def test_no_tool_installed_points_to_install_pages(subscribed, terminal, tmp_pat
     assert (
         "! No supported coding tool found Install one, then run jl connect: "
         f"OpenCode {OPENCODE_INSTALL} pi {PI_INSTALL} Kilo {KILO_INSTALL} "
-        "Using Claude Code, Codex, Cursor, VS Code Copilot or Zed? jl doesn't set them up yet: "
-        "https://docs.jarvislabs.ai/models-api/harnesses. "
+        "Every tool jl knows: jl connect --list "
         "Just installed one? Open a new terminal, then run jl connect."
     ) in said(result)
     assert terminal.picker is None
@@ -582,33 +607,6 @@ def test_no_tool_install_rows_show_names_bold_and_urls_accent(subscribed, tmp_pa
     # Accent and underlined; the terminal also gets OSC 8, so it is clickable.
     assert re.search(r"\x1b\[4;36mhttps://opencode\.ai/docs/#install\x1b\[0m", out)
     assert "\x1b]8;" in out
-
-
-def test_no_tool_installed_with_no_coming_soon_tools_skips_the_using_line(subscribed, tmp_path, monkeypatch):
-    monkeypatch.setenv("PATH", str(tmp_path / "nothing-installed"))
-    monkeypatch.setattr(connect, "HARNESSES", [h for h in harnesses.HARNESSES if h.support == "connect"])
-
-    result = runner.invoke(app, ["connect"])
-
-    assert result.exit_code == 0, result.output
-    assert "No supported coding tool found" in said(result)
-    assert "Using " not in said(result)
-
-
-def test_one_coming_soon_tool_is_named_without_an_or(subscribed, tmp_path, monkeypatch):
-    monkeypatch.setenv("PATH", str(tmp_path / "nothing-installed"))
-    coming = next(h for h in harnesses.HARNESSES if h.support == "coming_soon")
-    monkeypatch.setattr(
-        connect,
-        "HARNESSES",
-        [h for h in harnesses.HARNESSES if h.support == "connect"] + [coming],
-    )
-
-    result = runner.invoke(app, ["connect"])
-
-    assert result.exit_code == 0, result.output
-    assert f"Using {coming.name}? jl doesn't set them up yet" in said(result)
-    assert " or " not in said(result).split("Using ", 1)[1]
 
 
 @pytest.mark.parametrize("args", [[], ["--yes"]], ids=["no-terminal", "no-terminal-yes"])
@@ -1053,7 +1051,9 @@ def test_a_coming_soon_row_shows_its_docs_link_in_one_pair_of_brackets(subscribe
 
     assert result.exit_code == 0, result.output
     drawn = _drawn(screen)
-    assert "Coming soon: run the command for its docs" in drawn
+    assert "Coming soon: jl connect <id> links its docs" in drawn
+    assert "- VS Code Copilot (jl connect vscode-copilot)" in drawn
+    # A preview tool is coming soon while its endpoint isn't public.
     assert "- Claude Code (jl connect claude-code)" in drawn
     assert "((" not in drawn
 
@@ -1176,7 +1176,7 @@ def test_several_tools_not_started_get_one_line(
     result = runner.invoke(app, ["connect", "opencode", "cline", *([] if in_terminal else ["--yes"])], input="y\n")
 
     assert result.exit_code == 0, result.output
-    ends_with_next_step(result, "opencode · cline -i")
+    ends_with_next_step(result, "opencode  or  cline -i")
 
 
 def test_a_two_tool_connect_fits_one_screen(subscribed, opencode_config, terminal, tmp_path):
@@ -1277,10 +1277,11 @@ def test_a_changed_config_still_runs_the_flow(subscribed, opencode_config, termi
 @pytest.mark.parametrize(
     ("name", "message"),
     [
-        ("opencod", "Unknown tool opencod. Choose from: opencode"),
-        ("claude-code", "Claude Code is in preview: set JL_PREVIEW_HARNESSES=1 to connect it."),
+        ("opencod", "Unknown tool opencod. See every tool ID: jl connect --list"),
+        ("claude-code", "Claude Code is coming soon: see https://docs.jarvislabs.ai/models-api/harnesses/claude-code"),
+        ("vscode-copilot", "VS Code Copilot is coming soon: see https://"),
     ],
-    ids=["typo", "preview"],
+    ids=["typo", "preview", "coming-soon"],
 )
 def test_a_harness_jl_cant_connect_stops_before_any_server_call(server, name, message):
     result = runner.invoke(app, ["connect", name, "--yes"])
@@ -1330,7 +1331,7 @@ def test_status_lists_connected_tools_first_then_installed_then_the_rest(subscri
     panel = result.output[result.output.index("Coding tools") :]
     rows = [re.split(r"\s{2,}", line.strip("│ ")) for line in panel.splitlines() if line.strip("│ ") and line[0] == "│"]
     states = [row[1] for row in rows]
-    assert states == ["connected", *["installed"] * 10, *["not installed"] * 2]
+    assert states == ["connected", *["installed"] * 10, *["not installed"] * 3]
 
 
 def test_a_partial_connect_table_is_a_clean_error(subscribed):
@@ -1344,6 +1345,18 @@ def test_a_partial_connect_table_is_a_clean_error(subscribed):
     assert isinstance(result.exception, JarvislabsError)
     assert "Can't read this machine's saved connection" in str(result.exception)
     assert "[connect]" in str(result.exception)
+
+
+def test_a_wrong_shaped_connect_table_is_a_clean_error(subscribed):
+    path = config.config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # A string where the harness records belong, as a hand edit might leave it.
+    path.write_text('[connect]\nid = "key_1"\nname = "n"\nkind = "subscription"\ntoken = "t"\nharnesses = "opencode"\n')
+
+    result = runner.invoke(app, ["status"])
+
+    assert isinstance(result.exception, JarvislabsError)
+    assert "Can't read this machine's saved connection" in str(result.exception)
 
 
 def test_status_says_a_connected_tool_was_uninstalled(subscribed, opencode_config, monkeypatch):
@@ -1376,7 +1389,8 @@ def test_status_hides_tools_that_are_not_installed(subscribed, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "OpenCode" not in result.output
-    assert re.search(r"\d+ more tools available: jl status --all", result.output)
+    # Nothing is shown, so the hint says what --all lists rather than "more".
+    assert re.search(r"\d+ tools jl can connect: jl status --all", result.output)
 
     full = runner.invoke(app, ["status", "--all"])
     assert "OpenCode" in full.output
@@ -1476,10 +1490,6 @@ def test_print_shows_the_config_with_the_key_filled_in(subscribed, tmp_path, mon
     # Printing writes no harness file, and records the harness so jl status shows it.
     assert not list(tmp_path.rglob("settings.json"))
     assert config.load_connection().harnesses == {"zed": Replaced()}
-    monkeypatch.setattr(shutil, "which", lambda name, path=None: None)
-    status = runner.invoke(app, ["status"])
-    (line,) = [line for line in status.output.splitlines() if "Zed" in line]
-    assert re.split(r"\s{2,}", line.strip("│ ")) == ["Zed", "config printed"]
 
 
 def test_connect_writes_goose_aider_and_crush_in_their_formats(subscribed, tmp_path):
@@ -1504,9 +1514,24 @@ def test_connect_writes_goose_aider_and_crush_in_their_formats(subscribed, tmp_p
         "display_name": "Jarvislabs",
         "base_url": "https://models.jarvislabs.net/v1/chat/completions",
         "models": [
-            {"name": "deepseek-v4.1-flash-1017", "context_limit": 1048576, "supports_vision": True},
-            {"name": "glm-5.3", "context_limit": 230000, "supports_vision": False},
-            {"name": "gemma-3-1b-it", "context_limit": 32768, "supports_vision": False},
+            {
+                "name": "deepseek-v4.1-flash-1017",
+                "context_limit": 1048576,
+                "supports_vision": True,
+                "request_params": {"max_tokens": 65536},
+            },
+            {
+                "name": "glm-5.3",
+                "context_limit": 230000,
+                "supports_vision": False,
+                "request_params": {"max_tokens": 23000},
+            },
+            {
+                "name": "gemma-3-1b-it",
+                "context_limit": 32768,
+                "supports_vision": False,
+                "request_params": {"max_tokens": 3276},
+            },
         ],
         "dynamic_models": False,
         "supports_streaming": True,
@@ -1530,18 +1555,21 @@ def test_connect_writes_goose_aider_and_crush_in_their_formats(subscribed, tmp_p
             "max_output_tokens": 65536,
             "litellm_provider": "openai",
             "mode": "chat",
+            "supports_vision": True,
         },
         "openai/glm-5.3": {
             "max_input_tokens": 230000,
             "max_output_tokens": 23000,
             "litellm_provider": "openai",
             "mode": "chat",
+            "supports_vision": False,
         },
         "openai/gemma-3-1b-it": {
             "max_input_tokens": 32768,
             "max_output_tokens": 3276,
             "litellm_provider": "openai",
             "mode": "chat",
+            "supports_vision": False,
         },
     }
     assert crushrc.read_text() == (
@@ -1578,7 +1606,10 @@ def test_goose_sends_each_models_default_effort(subscribed, tmp_path):
     subscribed.routes[("GET", "models")] = {
         "object": "list",
         "data": [
-            {**DEEPSEEK, "thinking": {"supported": True, "supported_efforts": ["low", "high", "max"], "default_effort": "high"}},
+            {
+                **DEEPSEEK,
+                "thinking": {"supported": True, "supported_efforts": ["low", "high", "max"], "default_effort": "high"},
+            },
             {**GEMMA, "thinking": {"supported": True, "supported_efforts": []}},
         ],
     }
@@ -1589,40 +1620,58 @@ def test_goose_sends_each_models_default_effort(subscribed, tmp_path):
 
     assert result.exit_code == 0, result.output
     # Goose sends request_params verbatim with every request for the model, whichever of them
-    # the user picks; a model without efforts gets no request_params at all.
+    # the user picks; max_tokens is always there, and the effort joins it where the model has one.
     models = {m["name"]: m for m in read_json(goose / "custom_providers" / "jarvislabs.json")["models"]}
-    assert models["deepseek-v4.1-flash-1017"]["request_params"] == {"reasoning_effort": "high"}
-    assert "request_params" not in models["gemma-3-1b-it"]
+    assert models["deepseek-v4.1-flash-1017"]["request_params"] == {
+        "max_tokens": 65536,
+        "reasoning_effort": "high",
+    }
+    assert models["gemma-3-1b-it"]["request_params"] == {"max_tokens": 3276}
 
 
 def test_aider_pins_each_models_default_effort_beside_the_users_own(subscribed, tmp_path):
     subscribed.routes[("GET", "models")] = {
         "object": "list",
         "data": [
-            {**DEEPSEEK, "thinking": {"supported": True, "supported_efforts": ["low", "high", "max"], "default_effort": "high"}},
+            {
+                **DEEPSEEK,
+                "thinking": {"supported": True, "supported_efforts": ["low", "high", "max"], "default_effort": "high"},
+            },
             {**GLM, "thinking": {"supported": True, "supported_efforts": ["medium"]}},
             {**GEMMA, "thinking": {"supported": True, "supported_efforts": []}},
         ],
     }
     settings = tmp_path / ".aider.model.settings.yml"
-    settings.write_text("# Mine\n- name: openai/gpt-4o\n  extra_params:\n    extra_body:\n      reasoning_effort: high\n")
+    settings.write_text(
+        "# Mine\n- name: openai/gpt-4o\n  extra_params:\n    extra_body:\n      reasoning_effort: high\n"
+    )
 
     result = runner.invoke(app, ["connect", "aider", "--yes"])
 
     assert result.exit_code == 0, result.output
     written = settings.read_text()
-    # The user's own entry stays; jl's sit in a marked block, one per model that offers efforts.
+    # The user's own entry stays; jl's sit in a marked block, one per model, each with its
+    # output limit and the effort where the model has one.
     assert "- name: openai/gpt-4o" in written
-    assert "- name: openai/deepseek-v4.1-flash-1017\n  extra_params:\n    extra_body:\n      reasoning_effort: high" in written
-    assert "- name: openai/glm-5.3\n  extra_params:\n    extra_body:\n      reasoning_effort: medium" in written
-    assert "openai/gemma-3-1b-it" not in written
+    assert (
+        "- name: openai/deepseek-v4.1-flash-1017\n  extra_params:\n    max_tokens: 65536\n"
+        "    extra_body:\n      reasoning_effort: high" in written
+    )
+    assert (
+        "- name: openai/glm-5.3\n  extra_params:\n    max_tokens: 23000\n"
+        "    extra_body:\n      reasoning_effort: medium" in written
+    )
+    assert "- name: openai/gemma-3-1b-it\n  extra_params:\n    max_tokens: 3276" in written
 
 
 def test_crush_carries_the_default_models_effort_on_its_slots(subscribed, tmp_path):
     subscribed.routes[("GET", "models")] = {
         "object": "list",
         "data": [
-            {**DEEPSEEK, "thinking": {"supported": True, "supported_efforts": ["low", "high", "max"], "default_effort": "high"}},
+            {
+                **DEEPSEEK,
+                "thinking": {"supported": True, "supported_efforts": ["low", "high", "max"], "default_effort": "high"},
+            },
             {**GEMMA, "thinking": {"supported": True, "supported_efforts": []}},
         ],
     }
@@ -1635,8 +1684,14 @@ def test_crush_carries_the_default_models_effort_on_its_slots(subscribed, tmp_pa
     written = crushrc.read_text()
     # Only the slot lines carry the effort: model add takes no provider options, and a
     # provider-level one would send a single effort for every model.
-    assert "model large jarvislabs/deepseek-v4.1-flash-1017 --provider-options '{\"reasoning_effort\": \"high\"}'\n" in written
-    assert "model small jarvislabs/deepseek-v4.1-flash-1017 --provider-options '{\"reasoning_effort\": \"high\"}'\n" in written
+    assert (
+        'model large jarvislabs/deepseek-v4.1-flash-1017 --provider-options \'{"reasoning_effort": "high"}\'\n'
+        in written
+    )
+    assert (
+        'model small jarvislabs/deepseek-v4.1-flash-1017 --provider-options \'{"reasoning_effort": "high"}\'\n'
+        in written
+    )
     assert "--provider-options" not in written.split("model large")[0]
 
     # A default model without efforts gets the bare slots.
@@ -1843,7 +1898,9 @@ def test_connect_without_a_subscription_offers_subscribe_or_wallet(unsubscribed,
 
     assert result.exit_code == 0, result.output
     # The fact, then what to do.
-    assert "! No subscription found\n  Just subscribed? Give it a minute, then run jl connect again.\n" in result.output
+    # The state once, before the question; the wallet warning comes only after a wallet choice.
+    assert "No subscription on this account. Just subscribed? It can take a minute to show.\n" in result.output
+    assert "! No subscription found" not in result.output
     assert picker.offered == [["Continue on wallet", "Subscribe now", "Not now"]]
     assert unsubscribed.opened == ["https://jarvislabs.ai/products/coding-plan"]
     assert "Next: jl connect" in result.output
@@ -1879,6 +1936,8 @@ def test_continue_on_wallet_creates_a_wallet_key(unsubscribed, opencode_config, 
     assert ("POST", "users/api_keys", {"name": "jl-devbox-f7a7", "kind": "payg"}) in unsubscribed.calls
     assert config.load_connection().kind == "payg"
     assert read_json(opencode_config)["provider"]["jarvislabs"]["options"]["apiKey"] == "jlsk-wallet-secret"
+    # Said at the choice, not only on the next run.
+    assert "On wallet (no subscription) Requests are charged to your wallet." in " ".join(result.output.split())
 
 
 def test_the_wallet_choice_outlasts_the_last_disconnect(unsubscribed, opencode_config, picker):
@@ -2280,6 +2339,143 @@ def test_the_wallet_flag_creates_a_wallet_key_without_asking(unsubscribed, openc
     assert read_json(opencode_config)["provider"]["jarvislabs"]["options"]["apiKey"] == "jlsk-wallet-secret"
 
 
+# The catalog's USD prices per million tokens: DeepSeek's cache reads are cheaper than its input,
+# GLM has no cached price, and Gemma's row has no price at all.
+PRICED_CATALOG = {
+    "object": "list",
+    "data": [
+        {
+            **DEEPSEEK,
+            "pricing": {
+                "currency": "USD",
+                "input_per_million_tokens": 0.14,
+                "cached_input_per_million_tokens": 0.014,
+                "output_per_million_tokens": 0.28,
+            },
+        },
+        {
+            **GLM,
+            "pricing": {
+                "currency": "USD",
+                "input_per_million_tokens": 0.55,
+                "cached_input_per_million_tokens": None,
+                "output_per_million_tokens": 2.2,
+            },
+        },
+        GEMMA,
+    ],
+}
+
+
+def test_a_wallet_connect_writes_the_usd_prices_opencode_shows(unsubscribed, opencode_config):
+    unsubscribed.routes[("GET", "models")] = PRICED_CATALOG
+    unsubscribed.routes[("POST", "users/api_keys")] = WALLET_KEY
+
+    result = runner.invoke(app, ["connect", "opencode", "--wallet", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    written = read_json(opencode_config)
+    # OpenCode shows a session's spend from the V2 cost, in USD per million tokens.
+    assert {
+        model_id: model.get("cost") for model_id, model in written["providers"]["jarvislabs"]["models"].items()
+    } == {
+        "deepseek-v4.1-flash-1017": {"input": 0.14, "output": 0.28, "cache": {"read": 0.014}},
+        # No cached price, so no cache key.
+        "glm-5.3": {"input": 0.55, "output": 2.2},
+        "gemma-3-1b-it": None,
+    }
+    # The V1 entry, read by OpenCode 1.x, puts the cached rate beside the other two.
+    assert {model_id: model.get("cost") for model_id, model in written["provider"]["jarvislabs"]["models"].items()} == {
+        "deepseek-v4.1-flash-1017": {"input": 0.14, "output": 0.28, "cache_read": 0.014},
+        "glm-5.3": {"input": 0.55, "output": 2.2},
+        "gemma-3-1b-it": None,
+    }
+
+
+def test_a_subscription_connect_writes_no_prices(subscribed, opencode_config):
+    subscribed.routes[("GET", "models")] = PRICED_CATALOG
+
+    result = runner.invoke(app, ["connect", "opencode", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    written = read_json(opencode_config)
+    # The plan pays nothing per token, so a cost readout there would be wrong.
+    models = {**written["providers"]["jarvislabs"]["models"], **written["provider"]["jarvislabs"]["models"]}
+    assert [model_id for model_id, model in models.items() if "cost" in model] == []
+
+
+def test_a_model_priced_in_rupees_uses_its_usd_rates(unsubscribed, opencode_config):
+    unsubscribed.routes[("GET", "models")] = {
+        "object": "list",
+        "data": [
+            {
+                **DEEPSEEK,
+                "pricing": {
+                    "currency": "INR",
+                    "input_per_million_tokens": 12.0,
+                    "cached_input_per_million_tokens": 1.2,
+                    "output_per_million_tokens": 24.0,
+                    "usd": {
+                        "currency": "USD",
+                        "input_per_million_tokens": 0.14,
+                        "cached_input_per_million_tokens": 0.014,
+                        "output_per_million_tokens": 0.28,
+                    },
+                },
+            }
+        ],
+    }
+    unsubscribed.routes[("POST", "users/api_keys")] = WALLET_KEY
+
+    result = runner.invoke(app, ["connect", "opencode", "--wallet", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    models = read_json(opencode_config)["providers"]["jarvislabs"]["models"]
+    assert models["deepseek-v4.1-flash-1017"]["cost"] == {"input": 0.14, "output": 0.28, "cache": {"read": 0.014}}
+
+
+def test_a_model_priced_in_rupees_without_usd_rates_gets_no_prices(unsubscribed, opencode_config):
+    # A row priced in INR without a usd block: jl has no USD rate to write.
+    unsubscribed.routes[("GET", "models")] = {
+        "object": "list",
+        "data": [
+            {
+                **DEEPSEEK,
+                "pricing": {
+                    "currency": "INR",
+                    "input_per_million_tokens": 12.0,
+                    "cached_input_per_million_tokens": 1.2,
+                    "output_per_million_tokens": 24.0,
+                },
+            }
+        ],
+    }
+    unsubscribed.routes[("POST", "users/api_keys")] = WALLET_KEY
+
+    result = runner.invoke(app, ["connect", "opencode", "--wallet", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    written = read_json(opencode_config)
+    assert "cost" not in written["providers"]["jarvislabs"]["models"]["deepseek-v4.1-flash-1017"]
+    assert "cost" not in written["provider"]["jarvislabs"]["models"]["deepseek-v4.1-flash-1017"]
+
+
+def test_switching_to_the_plan_removes_the_prices(unsubscribed, opencode_config):
+    unsubscribed.routes[("GET", "models")] = PRICED_CATALOG
+    unsubscribed.routes[("POST", "users/api_keys")] = WALLET_KEY
+    runner.invoke(app, ["connect", "opencode", "--wallet", "--yes"])
+    assert "cost" in read_json(opencode_config)["providers"]["jarvislabs"]["models"]["deepseek-v4.1-flash-1017"]
+    # The account takes a plan: the switch replaces the wallet key, and the wallet's prices go.
+    unsubscribed.routes[("GET", "subscription/usage")] = USAGE
+    unsubscribed.routes[("DELETE", "users/api_keys/key_1")] = {"success": True}
+    unsubscribed.routes[("POST", "users/api_keys")] = CREATED_KEY
+
+    result = runner.invoke(app, ["connect", "opencode", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "cost" not in opencode_config.read_text()
+
+
 def test_a_failed_write_revokes_the_key_it_just_made(subscribed, opencode_config, monkeypatch):
     subscribed.routes[("DELETE", "users/api_keys/key_1")] = {"success": True}
     failure = PermissionError(13, "Permission denied", str(opencode_config))
@@ -2424,3 +2620,123 @@ def test_a_mixed_preview_says_set_up(subscribed, opencode_config, terminal, tmp_
     result = runner.invoke(app, ["connect", "opencode", "kilo", "--dry-run"])
 
     assert "jl will set up the Jarvislabs provider" in said(result)
+
+
+def zed_installed(tmp_path):
+    """Put Zed's command on PATH, as Zed's "Install CLI" does."""
+    for name in ("zed", "zed.cmd"):
+        (tmp_path / "installed-harnesses" / name).write_text("")
+        (tmp_path / "installed-harnesses" / name).chmod(0o755)
+
+
+def test_zed_connects_and_its_key_goes_to_the_clipboard(subscribed, tmp_path, monkeypatch):
+    zed_installed(tmp_path)
+    copied = []
+    monkeypatch.setattr(connect, "_copy_to_clipboard", lambda text: copied.append(text) or True)
+
+    result = runner.invoke(app, ["connect", "zed", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    provider = read_json(tmp_path / "zed" / "settings.json")["language_models"]["openai_compatible"]["Jarvislabs"]
+    assert provider["api_url"] == "https://models.jarvislabs.net/v1"
+    # Zed keeps the key in the OS keychain: never in its settings file.
+    assert "jlsk-new-secret" not in (tmp_path / "zed" / "settings.json").read_text()
+    assert copied == ["jlsk-new-secret"]
+    text = said(result)
+    # Said before the gate, and the step after it, with the key off the screen.
+    assert "you paste the key into Zed once, after" in text
+    assert "Last step: your key is on the clipboard. Paste it in Zed > Agent settings > Jarvislabs." in text
+    assert "jlsk-new-secret" not in result.output
+
+
+def test_zed_shows_the_key_when_there_is_no_clipboard(subscribed, tmp_path, monkeypatch):
+    zed_installed(tmp_path)
+    monkeypatch.setattr(connect, "_copy_to_clipboard", lambda text: False)
+
+    result = runner.invoke(app, ["connect", "zed", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "Last step: in Zed > Agent settings > Jarvislabs, paste your key: jlsk-new-secret" in said(result)
+
+
+def test_reconnecting_zed_with_the_same_key_asks_for_nothing(subscribed, tmp_path, monkeypatch):
+    zed_installed(tmp_path)
+    monkeypatch.setattr(connect, "_copy_to_clipboard", lambda text: True)
+    runner.invoke(app, ["connect", "zed", "--yes"])
+
+    result = runner.invoke(app, ["connect", "zed", "--yes", "--model", "glm-5.3"])
+
+    assert result.exit_code == 0, result.output
+    # Zed already holds this key.
+    assert "Last step" not in result.output
+    assert "paste the key" not in result.output
+
+
+def test_a_new_key_tells_zed_users_to_paste_it(subscribed, opencode_config, tmp_path, monkeypatch):
+    zed_installed(tmp_path)
+    monkeypatch.setattr(connect, "_copy_to_clipboard", lambda text: True)
+    runner.invoke(app, ["connect", "opencode", "zed", "--yes"])
+    subscribed.routes[("DELETE", "users/api_keys/key_1")] = {"success": True}
+
+    result = runner.invoke(app, ["connect", "--rotate-key", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # The refresh rewrote OpenCode's file; Zed's keychain is the user's to update.
+    assert "Zed still holds the old key" in said(result)
+    assert "Paste it in Zed > Agent settings > Jarvislabs." in said(result)
+
+
+def test_zed_counts_as_installed_from_its_app_alone(subscribed, tmp_path, monkeypatch):
+    app_bundle = tmp_path / "Zed.app"
+    app_bundle.mkdir()
+    zed = next(h for h in harnesses.HARNESSES if h.id == "zed")
+    zed = dataclasses.replace(zed, apps=(str(app_bundle),))
+    monkeypatch.setattr(shutil, "which", lambda name, path=None: None)
+
+    assert harnesses.installed(zed)
+    # No zed command, so the next step is to open the app.
+    assert connect._start_command(zed) == "open Zed"
+
+
+def test_no_clipboard_is_used_over_ssh(monkeypatch):
+    monkeypatch.setenv("SSH_CONNECTION", "10.0.0.1 22 10.0.0.2 22")
+    # Over SSH the clipboard would be the server's, not the user's.
+    assert connect._copy_to_clipboard("key") is False
+
+
+def test_disconnecting_zed_says_the_key_stays_in_zed(subscribed, tmp_path, monkeypatch):
+    zed_installed(tmp_path)
+    monkeypatch.setattr(connect, "_copy_to_clipboard", lambda text: True)
+    runner.invoke(app, ["connect", "zed", "--yes"])
+    subscribed.routes[("DELETE", "users/api_keys/key_1")] = {"success": True}
+
+    result = runner.invoke(app, ["disconnect", "zed", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # jl created the file, so it goes with jl's entries.
+    assert not (tmp_path / "zed" / "settings.json").exists()
+    assert "the key stays in Zed > Agent settings > Jarvislabs until you remove it there" in said(result)
+
+
+def test_a_tool_whose_file_was_removed_reads_added_again(subscribed, opencode_config):
+    runner.invoke(app, ["connect", "opencode", "--yes"])
+    # The user (or a restore) removes the file; jl's record of the connection stays.
+    opencode_config.unlink()
+
+    result = runner.invoke(app, ["connect", "opencode", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # The preview says + add, so the result row says added, not updated.
+    assert "+ OpenCode" in result.output
+    assert "✓ OpenCode  added" in result.output
+
+
+def test_status_counts_one_hidden_tool_in_the_singular(subscribed, monkeypatch):
+    # Every tool installed but Aider: exactly one hidden from the panel.
+    hidden = next(h for h in harnesses.HARNESSES if h.id == "aider")
+    monkeypatch.setattr(commands, "installed", lambda h: h is not hidden)
+
+    result = runner.invoke(app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert "1 more tool: jl status --all" in said(result)

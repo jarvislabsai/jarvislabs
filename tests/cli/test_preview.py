@@ -41,7 +41,8 @@ def test_reconnecting_unchanged_previews_no_replacements(subscribed, harness, na
     heading = " ".join(" ".join(lines[:legend_index]).split())
     assert heading == "jl will update the Jarvislabs provider 3 models, default deepseek-v4.1-flash-1017"
     assert lines[legend_index + 2].startswith(f"~ {name}  ")
-    assert lines[legend_index + 3 :] == []
+    # Nothing after the row but its own wrapped file list (Aider writes three files).
+    assert all(line.startswith(" ") for line in lines[legend_index + 3 :])
 
 
 def test_crush_preview_names_overridden_model_lines(subscribed, tmp_path):

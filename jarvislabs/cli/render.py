@@ -75,7 +75,6 @@ UNICODE_MARKS = {
     "unticked": "○",
     "sep": " · ",
     "bar_full": "█",
-    "bar_empty": "░",
 }
 ASCII_MARKS = {
     "ok": "+",
@@ -84,7 +83,6 @@ ASCII_MARKS = {
     "unticked": "[ ]",
     "sep": " | ",
     "bar_full": "#",
-    "bar_empty": "-",
 }
 # The theme's accent, bold, for the "?" that opens a prompt.
 ACCENT_BOLD = theme.styles["accent"] + Style(bold=True)
@@ -146,17 +144,19 @@ def account_status(info, bal, metrics, sym: str) -> None:
 
     content = Text()
     content.append(f"{info.name}", style="bold")
-    content.append(f"  {info.user_id}\n", style="cyan")
+    content.append(f"  {info.user_id}\n", style="dim")
     content.append("\n")
     content.append("Balance  ", style="dim")
-    content.append(f"{sym}{bal.balance:.2f}", style="bold green")
+    # Values are content, in bold; colour only where the state needs attention (an empty wallet,
+    # paused machines still billing storage). Green is for done marks, yellow for warnings.
+    content.append(f"{sym}{bal.balance:.2f}", "bold yellow" if bal.balance <= 0 else "bold")
     content.append("    Grants  ", style="dim")
-    content.append(f"{sym}{bal.grants:.2f}", style="bold yellow")
+    content.append(f"{sym}{bal.grants:.2f}", "bold")
     content.append("\n")
     content.append("Running  ", style="dim")
-    content.append(f"{metrics.running_instances}", style="bold green")
+    content.append(f"{metrics.running_instances}", "bold")
     content.append("         Paused  ", style="dim")
-    content.append(f"{metrics.paused_instances}", style="bold yellow")
+    content.append(f"{metrics.paused_instances}", "bold yellow" if metrics.paused_instances else "bold")
 
     panel = Panel(
         content,
@@ -1122,11 +1122,16 @@ def next_step(text: str, commands: Sequence[str]) -> None:
 
     Args:
         text: What to do, e.g. "start a tool in this folder:".
-        commands: The commands, shown separated by the mark table's separator.
+        commands: The commands, any one of which is the next step, shown joined by a dim "or".
     """
     if state.json_output:
         return
-    joined = Text(MARKS["sep"].join(commands), ACCENT_BOLD)
+    # "or", not the separator: "opencode · cline -i" read as one command to type.
+    joined = Text()
+    for i, command in enumerate(commands):
+        if i:
+            joined.append("  or  ", "dim")
+        joined.append(command, ACCENT_BOLD)
     console.print()
     _hang(Text("Next: ", "bold"), joined, console)
     _hang(Text("      "), Text(text.rstrip(":"), "dim"), console)

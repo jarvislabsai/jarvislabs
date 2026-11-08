@@ -28,14 +28,26 @@ def logout(
 ) -> None:
     """Log out, and remove jl from your coding tools.
 
-    By default this also removes jl's provider entry from every connected tool and revokes this machine's Models API key. `--keep-tools` leaves them connected; that keeps the key saved, so a later `jl disconnect` can still clean up.
+    By default this also removes jl's provider entry from every connected tool and revokes this machine's Models API key. --keep-tools leaves them connected; that keeps the key saved, so a later jl disconnect can still clean up.
+
+    [bold]Examples:[/bold]
+
+      # Log out, and remove jl from every connected tool
+      [bold cyan]jl logout[/bold cyan]
+
+      # Log out, and leave your tools connected
+      [bold cyan]jl logout --keep-tools[/bold cyan]
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     connection = load_connection()
     connected = [h for h in HARNESSES if connection and h.id in connection.harnesses]
+    disconnected: list[dict[str, object]] = []
     if connected and not keep_tools:
+        names = [harness.name for harness in connected]
+        label = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        # "Also": a no keeps the tools, and the logout itself still happens.
         if not render.confirm(
-            f"Remove jl from {len(connected)} tool{'s' if len(connected) != 1 else ''} and revoke this machine's key?",
+            f"Also remove jl from {label} and revoke this machine's key?",
             skip=state.yes,
             default=True,
         ):
@@ -43,14 +55,10 @@ def logout(
         else:
             from jarvislabs.cli import connect
 
-            # One question for the whole logout; _disconnect asks per tool otherwise.
-            old_yes = state.yes
-            state.yes = True
-            try:
-                for harness in connected:
-                    connect._disconnect(harness, preview=False, spaced=False)
-            finally:
-                state.yes = old_yes
+            # The one question above covers every tool, so each is removed without its own.
+            render.console.print()
+            results = [connect._disconnect(harness, preview=False) for harness in connected]
+            disconnected = [result for result in results if result]
     config = load_config()
     logged_out = "auth" in config and "token" in config["auth"]
     if logged_out:
@@ -61,14 +69,19 @@ def logout(
     had_machine_key = "connect" in config
 
     if state.json_output:
-        render.print_json({"success": True, "logged_out": logged_out})
+        render.print_json({"success": True, "logged_out": logged_out, "disconnected": disconnected})
         return
     if logged_out:
-        render.success("Logged out — token removed from config.")
+        render.success("Logged out")
     else:
-        render.info("No saved token found.")
-    if had_machine_key:
-        render.info("Your coding tools stay connected; run jl disconnect <tool> to remove them.")
+        render.info("You weren't logged in.")
+    if had_machine_key and connection:
+        # The tools still hold a live key: say so, since a logout can look like a full cleanup.
+        render.warning(
+            "Your coding tools stay connected",
+            f"This machine's key {connection.name} stays active in them. "
+            "`jl disconnect <tool>` removes one; the last one revokes the key.",
+        )
 
 
 @app.command(rich_help_panel="Account")
@@ -137,7 +150,10 @@ def status(
         render.info("No coding tools installed.")
     hidden = len(harnesses) - len(shown)
     if hidden:
-        render.hint_line(f"{hidden} more tools available: `jl status --all`")
+        # "more" only makes sense beside a list; with none shown, say what --all lists.
+        tools = "tool" if hidden == 1 else "tools"
+        more = f"more {tools}" if shown else f"{tools} jl can connect"
+        render.hint_line(f"{hidden} {more}: `jl status --all`")
     if switch_available:
         render.warning(
             "These tools pay from your wallet",

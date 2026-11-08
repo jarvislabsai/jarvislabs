@@ -4,12 +4,13 @@ connect checks the account's subscription (without one, it offers to subscribe o
 from the wallet, and remembers the wallet choice), gets this machine's key (named
 "jl-<hostname>-<4 hex digits>", charged to the plan or to the wallet, and kept in config.toml
 for every harness), reads the model catalog, and writes the Jarvislabs provider, every model
-and the default model into each named harness's config. With no harness named, it asks with a
-picker of the installed harnesses; with none installed, it names three with their install pages
-and exits 0. jl never installs a harness. "Not now" at the pay question, or ticking nothing,
-exits 0 and saves nothing; Ctrl-C at any question exits 130. It first prints a preview row per
-harness and asks once; --dry-run stops after the preview, having created or revoked no key. The
-key is created only after the user says yes. Running it again refreshes the models and the
+and the default model into each named harness's config. A machine that pays per token also gets
+each model's USD price, for the tools that show a session's cost. With no harness named, it
+asks with a picker of the installed harnesses; with none installed, it names three with their
+install pages and exits 0. jl never installs a harness. "Not now" at the pay question, or ticking
+nothing, exits 0 and saves nothing; Ctrl-C at any question exits 130. It first prints a preview
+row per harness and asks once; --dry-run stops after the preview, having created or revoked no key.
+The key is created only after the user says yes. Running it again refreshes the models and the
 default.
 
 A harness that can't be connected is skipped, and the others go on: one that isn't installed
@@ -33,6 +34,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import hashlib
+import os
 import re
 import shlex
 import socket
@@ -64,9 +66,7 @@ from jarvislabs.config import (
 from jarvislabs.constants import MODELS_API_URL, RECOMMENDED_MODEL
 from jarvislabs.exceptions import APIError, JarvislabsError, NotFoundError
 from jarvislabs.harnesses import (
-    HARNESS_DOCS_URL,
     HARNESSES,
-    PREVIEW_FLAG,
     Harness,
     Plan,
     Setup,
@@ -75,9 +75,11 @@ from jarvislabs.harnesses import (
     connectable,
     default_model,
     installed,
+    launchable,
     plan_connect,
     plan_disconnect,
     preview_enabled,
+    printable,
     snippet,
     vscode_running,
 )
@@ -104,11 +106,11 @@ VSCODE_RUNNING_HINT = (
 
 @app.command(rich_help_panel="Coding plan")
 def connect(
-    harnesses: Annotated[
+    tools: Annotated[
         list[str] | None,
         typer.Argument(
-            metavar="HARNESS...",
-            help="Harness IDs to connect; run jl connect --list for IDs and names.",
+            metavar="TOOL...",
+            help="Tool IDs to connect; run jl connect --list for IDs and names.",
         ),
     ] = None,
     model: Annotated[
@@ -116,7 +118,7 @@ def connect(
         typer.Option(
             "--model",
             metavar="MODEL",
-            help=f"Default model for the harnesses (default: {RECOMMENDED_MODEL}). IDs: jl models list.",
+            help=f"Default model for the tools (default: {RECOMMENDED_MODEL}). IDs: jl models list.",
         ),
     ] = None,
     dry_run: Annotated[
@@ -129,22 +131,23 @@ def connect(
         typer.Option(
             "--yes",
             "-y",
-            help="Answer yes to every question: write the changes, and move this machine from the wallet to your plan.",
+            help=(
+                "Answer yes to every question: write the changes, and move this machine from the wallet to your "
+                "plan. With no subscription it stops; add --wallet to pay from the wallet."
+            ),
         ),
     ] = False,
     print_harness: Annotated[
         str | None,
         typer.Option(
             "--print",
-            metavar="HARNESS",
-            help="Print a harness's config to paste by hand, key filled in. IDs: jl connect --list.",
+            metavar="TOOL",
+            help="Print a tool's config to paste by hand, key filled in. IDs: jl connect --list.",
         ),
     ] = None,
     rotate_key: Annotated[
         bool,
-        typer.Option(
-            "--rotate-key", help="Revoke this machine's key and write a new one into every connected harness."
-        ),
+        typer.Option("--rotate-key", help="Revoke this machine's key and write a new one into every connected tool."),
     ] = False,
     wallet: Annotated[
         bool, typer.Option("--wallet", help="Pay from the wallet when the account has no subscription, without asking.")
@@ -180,12 +183,12 @@ def connect(
     # --print also takes a coming-soon harness, which _named_harnesses refuses.
     printed = _printable(print_harness) if print_harness else None
     # --rotate-key alone rewrites only the connected harnesses, without the picker.
-    only_rotate = rotate_key and not harnesses
-    if not (printed or only_rotate or harnesses):
+    only_rotate = rotate_key and not tools
+    if not (printed or only_rotate or tools):
         # First, even with no one to ask, and before the subscription check: without a tool there's
         # nothing to connect or pay for yet.
         _stop_without_a_tool()
-    named = [] if printed or only_rotate else _named_harnesses(harnesses)
+    named = [] if printed or only_rotate else _named_harnesses(tools)
     client = get_client()
     kept = load_connection()
     if only_rotate and kept and not kept.harnesses:
@@ -226,7 +229,14 @@ def connect(
         if new_key:
             # Before the printed harness is recorded: printing writes none of its files.
             refresh_connected()
-        setup = Setup(base_url=MODELS_API_URL, api_key=connection.token, models=models, default_model=default)
+        setup = Setup(
+            base_url=MODELS_API_URL,
+            api_key=connection.token,
+            models=models,
+            default_model=default,
+            # A saved wallet key that wasn't switched still pays per token, so its kind decides.
+            costs=connection.kind == "payg",
+        )
         render.stdout_console.print(snippet(printed, setup), end="", markup=False, highlight=False, soft_wrap=True)
         # Recorded, with nothing replaced, so status shows it and the key stays while it's in use.
         connection.harnesses.setdefault(printed.id, Replaced())
@@ -235,7 +245,7 @@ def connect(
     # The preview doesn't show the key, so it's planned with the saved one, or none yet.
     saved = load_connection()
     token = saved.token if saved else ""
-    setup = Setup(base_url=MODELS_API_URL, api_key=token, models=models, default_model=default)
+    setup = Setup(base_url=MODELS_API_URL, api_key=token, models=models, default_model=default, costs=kind == "payg")
     plans = []
     for harness in chosen:
         try:
@@ -248,13 +258,24 @@ def connect(
         verb = "update" if changes == {"update"} else "set up" if "update" in changes else "add"
         many = not all(plan.harness.one_model for plan in plans)
         shared = f"{len(models)} models, default {default}" if many else f"default {default}"
-        render.change_rows([_row(plan) for plan in plans], f"jl will {verb} the Jarvislabs provider", shared)
+        # A tool that keeps its key where jl can't write it says so before the gate, not only after.
+        rows = [_row(plan) for plan in plans]
+        rows = [
+            dataclasses.replace(
+                row, note="\n".join(filter(None, [row.note, f"you paste the key into {plan.harness.name} once, after"]))
+            )
+            if _needs_key_by_hand(plan.harness, saved, rotate_key)
+            else row
+            for row, plan in zip(rows, plans, strict=True)
+        ]
+        render.change_rows(rows, f"jl will {verb} the Jarvislabs provider", shared)
     if dry_run:
         if rotate_key and kept:
             connectable_ids = {h.id for h in HARNESSES if connectable(h)}
-            tools = {h.id for h in chosen} | (set(kept.harnesses) & connectable_ids)
-            s = "" if len(tools) == 1 else "s"
-            render.info(f"Would replace this machine's key {kept.name} and update {len(tools)} tool{s}.")
+            updated = {h.id for h in chosen} | (set(kept.harnesses) & connectable_ids)
+            s = "" if len(updated) == 1 else "s"
+            render.info(f"Would replace this machine's key {kept.name} and update {len(updated)} tool{s}.")
+        render.info("Dry run: nothing was written.")
         return
     # --rotate-key alone has no file change to preview: asking for it is the yes.
     if plans:
@@ -264,8 +285,10 @@ def connect(
 
     # Created only now, so a dry run or a "no" leaves no key behind.
     connection, new_key = _machine_key(client, kind, rotate_key)
-    if connection.token != setup.api_key:
-        setup = dataclasses.replace(setup, api_key=connection.token)
+    # The key's own kind decides: a wallet key whose switch was declined still pays per token.
+    costs = connection.kind == "payg"
+    if connection.token != setup.api_key or costs != setup.costs:
+        setup = dataclasses.replace(setup, api_key=connection.token, costs=costs)
         plans = [plan_connect(plan.harness, setup) for plan in plans]
 
     connected = []
@@ -284,15 +307,23 @@ def connect(
         connection.harnesses[harness.id] = replaced
         save_connection(connection)
         connected.append(harness)
-        label = "added" if previous is None else "updated"
+        # The preview's word, judged by what is in the files: jl's record can outlive a file the
+        # user removed, and "updated" under a "+ add" row reads as a contradiction.
+        label = "added" if plan.preview.change == "add" else "updated"
         backups = [b for b in replaced.backups if not previous or b not in previous.backups]
         notes = [f"your old config is at {', '.join(render.short_path(b) for b in backups)}"] if backups else []
         if harness.note:
             notes.append(harness.note.format(model=default))
+        if harness.key_by_hand and (previous is None or new_key):
+            notes.append(_key_step(harness, connection.token))
         render.change_row(render.Row("ok", harness.name, label, note="\n".join(notes)), width, render.console)
     if new_key:
         # The old key is revoked: every connected harness still holding it gets the new one.
         refreshed = refresh_connected()
+        # A refresh can't reach a key jl doesn't write: the user pastes the new one.
+        for harness in HARNESSES:
+            if harness.key_by_hand and harness.id in connection.harnesses and harness not in connected:
+                render.warning(f"{harness.name} still holds the old key", _key_step(harness, connection.token))
         if rotate_key:
             updated = len(connected) + refreshed
             render.success(f"Replaced this machine's key; updated {updated} tool{'' if updated == 1 else 's'}.")
@@ -303,17 +334,21 @@ def connect(
         raise typer.Exit(1)
     _test_request(connection.token, default)
     if connected:
-        render.hint_line("Add another tool: `jl connect`")
+        # Under curl | sh, this window's PATH predates jl's folder, so jl runs only in a new terminal.
+        if os.environ.get("JL_FROM_INSTALLER"):
+            render.hint_line("Add another tool later: open a new terminal, then run `jl connect`")
+        else:
+            render.hint_line("Add another tool: `jl connect`")
         render.next_step("start a tool in your project folder:", [_start_command(h) for h in connected])
 
 
 @app.command(rich_help_panel="Coding plan")
 def disconnect(
-    harness_id: Annotated[
+    tool: Annotated[
         str | None,
         typer.Argument(
-            metavar="HARNESS",
-            help="The harness ID; with none, jl asks which. IDs: jl connect --list.",
+            metavar="TOOL",
+            help="The tool ID; with none, jl asks which. IDs: jl connect --list.",
         ),
     ] = None,
     yes: cli_options.YesOption = False,
@@ -322,9 +357,17 @@ def disconnect(
     """Remove jl's provider and key from your coding tools.
 
     Your account stays signed in; jl logout also signs you out. With no tool named, jl asks which of the connected ones. Disconnecting the last tool also revokes this machine's key. The backups jl made at connect stay, and their paths are printed.
+
+    [bold]Examples:[/bold]
+
+      # Pick the tools to disconnect from a list
+      [bold cyan]jl disconnect[/bold cyan]
+
+      # Disconnect one tool
+      [bold cyan]jl disconnect opencode[/bold cyan]
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
-    chosen = [_named_harness(harness_id)] if harness_id is not None else _picked_harnesses(load_connection())
+    chosen = [_named_harness(tool)] if tool is not None else _picked_harnesses(load_connection())
     _disconnect_many(chosen, yes=yes)
 
 
@@ -332,7 +375,7 @@ def _named_harness(harness_id: str) -> Harness:
     """Return the harness named on the command line, or stop naming the ones jl knows."""
     harness = next((h for h in HARNESSES if h.id == harness_id), None)
     if harness is None:
-        render.die(f"Unknown tool {harness_id}. Choose from: {', '.join(h.id for h in HARNESSES)}.")
+        render.die(f"Unknown tool {harness_id}. See every tool ID: jl connect --list")
     return harness
 
 
@@ -347,7 +390,7 @@ def _picked_harnesses(connection: Connection | None) -> list[Harness]:
     """
     if not _can_ask():
         # The error of the argument when it was required.
-        raise click.MissingParameter(param_hint="'HARNESS'", param_type="argument")
+        raise click.MissingParameter(param_hint="'TOOL'", param_type="argument")
     connected = [harness for harness in HARNESSES if connection and harness.id in connection.harnesses]
     if not connected:
         render.info("No tools are connected.")
@@ -374,9 +417,10 @@ def _picked_harnesses(connection: Connection | None) -> list[Harness]:
 def _disconnect_many(chosen: list[Harness], *, yes: bool) -> None:
     """Show one removal preview for every chosen tool, confirm once, then remove them."""
     if state.json_output:
-        keep = _files_another_tool_uses(chosen, load_connection())[0]
+        files = _files_another_tool_uses(chosen, load_connection())[0]
         for harness in chosen:
-            _disconnect(harness, preview=False, keep=keep)
+            if result := _disconnect(harness, preview=False, keep=files):
+                render.print_json(result)
         return
     connection = load_connection()
     if connection is not None and not connection.harnesses:
@@ -384,19 +428,20 @@ def _disconnect_many(chosen: list[Harness], *, yes: bool) -> None:
         for harness in chosen:
             _disconnect(harness, preview=False)
         return
-    keep = _files_another_tool_uses(chosen, connection)
+    files, owners = _files_another_tool_uses(chosen, connection)
     plans = []
     for harness in chosen:
         if connection is None or harness.id not in connection.harnesses:
             render.info(f"{harness.name} isn't connected.")
             continue
         record = connection.harnesses[harness.id]
-        plans.append((harness, plan_disconnect(harness, record, keep[0]), record))
+        plans.append((harness, plan_disconnect(harness, record, files), record))
     if not plans:
         return
-    render.change_rows(
-        [_row(plan) for _, plan, _ in plans], "Remove jl's setup", f"{len(plans)} tool{'s' if len(plans) != 1 else ''}"
-    )
+    names = [harness.name for harness, _, _ in plans]
+    label = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    render.console.print()
+    render.change_rows([_row(plan) for _, plan, _ in plans], f"jl will remove the Jarvislabs provider from {label}")
     for harness, _, record in plans:
         if record.untracked:
             render.warning(
@@ -406,19 +451,18 @@ def _disconnect_many(chosen: list[Harness], *, yes: bool) -> None:
     warned = set()
     for _, plan, _ in plans:
         touched = {write.path for write in plan.writes}
-        for other, path in keep[1]:
+        for other, path in owners:
             if path in touched and (other.id, path) not in warned:
                 warned.add((other.id, path))
                 render.warning(
                     f"{other.name} shares {render.short_path(path)} and loses the Jarvislabs provider too. "
                     f"Run jl connect {other.id} afterwards."
                 )
-    names = [harness.name for harness, _, _ in plans]
-    label = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+    render.console.print()
     if not render.confirm(f"Disconnect {label}?", skip=yes):
         return
     for index, (harness, _, _) in enumerate(plans):
-        _disconnect(harness, preview=False, spaced=index == 0, keep=keep[0])
+        _disconnect(harness, preview=False, spaced=index == 0, keep=files)
 
 
 def _config_paths(harness: Harness) -> set[Path]:
@@ -448,7 +492,9 @@ def _files_another_tool_uses(
     return {path for _, path in shared}, shared
 
 
-def _disconnect(harness: Harness, *, spaced: bool = False, preview: bool = True, keep: Collection[Path] = ()) -> None:
+def _disconnect(
+    harness: Harness, *, spaced: bool = False, preview: bool = True, keep: Collection[Path] = ()
+) -> dict[str, object] | None:
     """Remove jl's setup from one harness, revoking this machine's key when it was the last.
 
     Args:
@@ -456,22 +502,23 @@ def _disconnect(harness: Harness, *, spaced: bool = False, preview: bool = True,
         spaced: Put a blank line before the result. The standalone command does; logout's batch does not.
         preview: Show the removal row and ask before writing. False when a combined preview already asked.
         keep: Files another connected tool still writes, which are emptied rather than deleted.
+
+    Returns:
+        In --json, the result for the caller to print, so a batch prints one document; else None.
     """
     connection = load_connection()
     if connection and not connection.harnesses:
         # Kept by a disconnect without a Jarvis key: no harness holds this key any more.
         _revoke_unused_key(get_client(), connection)
         if state.json_output:
-            render.print_json({"harness": harness.id, "connected": False, "key_revoked": True})
-        else:
-            render.success(f"Revoked this machine's key {connection.name}.")
-        return
+            return {"harness": harness.id, "connected": False, "key_revoked": True}
+        render.success(f"Revoked this machine's key {connection.name}.")
+        return None
     if connection is None or harness.id not in connection.harnesses:
         if state.json_output:
-            render.print_json({"harness": harness.id, "connected": False})
-        else:
-            render.info(f"{harness.name} isn't connected.")
-        return
+            return {"harness": harness.id, "connected": False}
+        render.info(f"{harness.name} isn't connected.")
+        return None
     # A printed harness counts too: it may hold the key by hand.
     last = len(connection.harnesses) == 1
     client = None
@@ -489,7 +536,7 @@ def _disconnect(harness: Harness, *, spaced: bool = False, preview: bool = True,
                 "so jl takes out only its own and puts none back."
             )
     if preview and plan.writes and not render.confirm(f"Disconnect {harness.name}?", skip=state.yes):
-        return
+        return None
 
     apply(plan, record)
     del connection.harnesses[harness.id]
@@ -505,10 +552,7 @@ def _disconnect(harness: Harness, *, spaced: bool = False, preview: bool = True,
     revoked = client is not None
     if state.json_output:
         files = [str(w.path) for w in plan.writes]
-        render.print_json(
-            {"harness": harness.id, "files": files, "backups": [str(b) for b in backups], "key_revoked": revoked}
-        )
-        return
+        return {"harness": harness.id, "files": files, "backups": [str(b) for b in backups], "key_revoked": revoked}
     hints = []
     if revoked:
         hints.append(f"revoked this machine's key {connection.name}")
@@ -518,9 +562,13 @@ def _disconnect(harness: Harness, *, spaced: bool = False, preview: bool = True,
             f"or revoke {connection.name} at {API_KEYS_URL}."
         )
     hints += [f"your config from before jl is still at {render.short_path(backup)}" for backup in backups]
+    if harness.key_by_hand:
+        # jl never wrote that key, so it can't take it out; revoked, it no longer works anyway.
+        hints.append(f"the key stays in {harness.key_by_hand} until you remove it there")
     if spaced:
         render.console.print()
     render.success(f"{harness.name} disconnected", "\n".join(hints))
+    return None
 
 
 def _row(plan: Plan) -> render.Row:
@@ -548,26 +596,92 @@ def _test_request(api_key: str, model: str) -> None:
 def _print_harnesses() -> None:
     """List every tool ID, its name, and whether jl can connect it or only print its config."""
     rows = [
-        {"id": harness.id, "name": harness.name, "support": harness.support, "preview": harness.preview}
+        {
+            "id": harness.id,
+            "name": harness.name,
+            "support": harness.support,
+            "preview": harness.preview,
+            "printable": printable(harness),
+        }
         for harness in HARNESSES
     ]
     if state.json_output:
         render.print_json(rows)
         return
     render.heading("Coding tools")
+    shown = set()
     for row in rows:
-        label = "connect" if row["support"] == "connect" or (row["preview"] and preview_enabled()) else "print only"
-        render.stdout_console.print(f"  {row['id']:<16} {row['name']:<22} {label}")
+        connects = row["support"] == "connect" or (row["preview"] and preview_enabled())
+        # "print only" is a promise --print keeps only for a tool with a writer.
+        label = "connect" if connects else "print only" if row["printable"] else "coming soon"
+        shown.add(label)
+        render.stdout_console.print(f"  {row['id']:<16} {row['name']:<22} {label}", highlight=False)
     # On stdout with the rows: --list is data, so piping it must keep the whole list.
-    render.stdout_console.print(
-        f"  connect: jl writes the config{render.MARKS['sep']}print only: jl prints it to paste by hand",
-        style="dim",
-    )
+    render.stdout_console.print()
+    for term, meaning in (
+        ("connect", "jl writes the config"),
+        ("print only", "jl connect --print <id> prints it to paste"),
+        ("coming soon", "jl connect <id> links its docs"),
+    ):
+        # A legend line for a label no row shows would only raise a question.
+        if term in shown:
+            render.stdout_console.print(f"  {term:<12} {meaning}", style="dim", highlight=False)
 
 
 def _start_command(harness: Harness) -> str:
-    """Return how to start a harness here: its command, or for a VS Code extension, open VS Code."""
-    return "open VS Code" if harness.kind == "vscode" else shlex.join(harness.launch)
+    """Return how to start a harness here: its command, or for a VS Code extension, open VS Code.
+
+    An app installed without its command-line launcher (Zed without "Install CLI") is opened by hand.
+    """
+    if harness.kind == "vscode":
+        return "open VS Code"
+    if harness.apps and not launchable(harness):
+        return f"open {harness.name}"
+    return shlex.join(harness.launch)
+
+
+def _needs_key_by_hand(harness: Harness, saved: Connection | None, rotate_key: bool) -> bool:
+    """Return whether this run leaves a harness waiting for its key to be pasted by hand."""
+    if not harness.key_by_hand:
+        return False
+    return rotate_key or saved is None or harness.id not in saved.harnesses
+
+
+def _key_step(harness: Harness, key: str) -> str:
+    """Return the last step for a harness that keeps its key where jl can't write it.
+
+    The key goes to the clipboard, so it never lands in the terminal's scrollback; where there is
+    no clipboard to use (Linux without one, or over SSH), it is shown instead.
+    """
+    if _copy_to_clipboard(key):
+        return f"Last step: your key is on the clipboard. Paste it in {harness.key_by_hand}."
+    return f"Last step: in {harness.key_by_hand}, paste your key: {key}"
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    """Put text on this machine's clipboard; return False when there is none jl can reach.
+
+    Over SSH the clipboard would be the server's, not the user's, so jl doesn't try.
+    """
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return False
+    if sys.platform == "darwin":
+        commands = [["pbcopy"]]
+    elif sys.platform == "win32":
+        commands = [["clip"]]
+    else:
+        commands = []
+        if os.environ.get("WAYLAND_DISPLAY"):
+            commands.append(["wl-copy"])
+        if os.environ.get("DISPLAY"):
+            commands += [["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]]
+    for command in commands:
+        try:
+            subprocess.run(command, input=text.encode(), check=True, timeout=5, capture_output=True)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        return True
+    return False
 
 
 def _named_harnesses(ids: list[str] | None) -> list[Harness]:
@@ -579,11 +693,8 @@ def _named_harnesses(ids: list[str] | None) -> list[Harness]:
     by_id = {h.id: h for h in HARNESSES}
     unknown = [i for i in ids if i not in by_id]
     if unknown:
-        supported = ", ".join(h.id for h in HARNESSES if connectable(h))
-        render.die(f"Unknown tool {', '.join(unknown)}. Choose from: {supported}.")
+        render.die(f"Unknown tool {', '.join(unknown)}. See every tool ID: jl connect --list")
     for harness in (by_id[i] for i in ids):
-        if harness.preview and not preview_enabled():
-            render.die(f"{harness.name} is in preview: set {PREVIEW_FLAG}=1 to connect it.")
         if harness.support == "coming_soon" and not connectable(harness):
             render.die(f"{harness.name} is coming soon: see {harness.docs_url}")
     return [by_id[i] for i in ids]
@@ -592,7 +703,7 @@ def _named_harnesses(ids: list[str] | None) -> list[Harness]:
 def _stop_without_a_tool() -> None:
     """With no supported harness installed, name three with their install pages and exit 0.
 
-    A last line points users of a coming-soon harness to its docs, and to --print where it works.
+    A last line points users of a coming-soon harness to its docs.
 
     Raises:
         typer.Exit: No supported harness is installed.
@@ -603,29 +714,22 @@ def _stop_without_a_tool() -> None:
     # Three popular ones, so the list stays short; --list has the rest.
     offered = [h for i in ("opencode", "pi", "kilo") for h in supported if h.id == i]
     width = max(len(h.name) for h in offered)
-    coming = [h for h in HARNESSES if h.support == "coming_soon" and not connectable(h)]
-
     body = Text()
-    body.append("Install one, then run ", "dim")
+    body.append("Install one, then run ")
     body.append("jl connect", render.ACCENT_BOLD)
-    body.append(":\n", "dim")
+    body.append(":\n")
     for harness in offered:
         body.append(f"{harness.name:<{width}}  ", "bold")
         body.append_text(render.link(harness.install_url))
         body.append("\n")
-    if coming:
-        names = ", ".join(h.name for h in coming[:-1])
-        names = f"{names} or {coming[-1].name}" if names else coming[-1].name
-        body.append(f"\nUsing {names}? jl doesn't set them up yet: ", "dim")
-        body.append_text(render.link(HARNESS_DOCS_URL))
-        body.append(".", "dim")
-    body.append("\n\nJust installed one? Open a new terminal, then run ", "dim")
+    body.append("\nEvery tool jl knows: ")
+    body.append("jl connect --list", render.ACCENT_BOLD)
+    body.append("\n\nJust installed one? Open a new terminal, then run ")
     body.append("jl connect", render.ACCENT_BOLD)
-    body.append(".", "dim")
+    body.append(".")
 
     render.console.print()
     render.warning("No supported coding tool found", body)
-    raise typer.Exit()
     raise typer.Exit()
 
 
@@ -657,7 +761,6 @@ def _stop_if_up_to_date(connection: Connection | None, models: tuple[ModelInfo, 
         return
     names = [harness.name for harness in installed_tools]
     label = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
-    render.console.print()
     render.success(f"{label} {'is' if len(names) == 1 else 'are'} already connected")
     render.next_step("check or change them:", ["jl status", "jl disconnect <tool>"])
     raise typer.Exit()
@@ -681,14 +784,16 @@ def _pick_harnesses(show_all: bool = False) -> list[Harness]:
     supported = [h for h in HARNESSES if connectable(h)]
     ticked = [h for h in supported if installed(h)]
     if len(ticked) == 1 and not show_all:
-        render.info(f"{ticked[0].name} is the only installed tool.")
+        render.hint_line(f"{ticked[0].name} is the only installed tool; `jl connect --all` lists the others.")
+        # The preview follows as a block of its own.
+        render.console.print()
         return ticked
     choices: list[questionary.Choice] = [questionary.Choice(h.name, h.id, checked=True) for h in ticked]
     if show_all:
         groups = (
-            ("Not installed: run the command to see where to get it", [h for h in supported if h not in ticked]),
+            ("Not installed: jl connect <id> says where to get it", [h for h in supported if h not in ticked]),
             (
-                "Coming soon: run the command for its docs",
+                "Coming soon: jl connect <id> links its docs",
                 [h for h in HARNESSES if h.support == "coming_soon" and not connectable(h)],
             ),
         )
@@ -781,9 +886,13 @@ def _summarize(skipped: list[tuple[str, str]], *, connected: bool) -> None:
 
 
 def _printable(harness_id: str) -> Harness:
-    harness = next((h for h in HARNESSES if h.id == harness_id and h.writer), None)
+    harness = next((h for h in HARNESSES if h.id == harness_id and printable(h)), None)
     if harness is None:
-        choices = ", ".join(h.id for h in HARNESSES if h.writer)
+        # A preview tool's endpoint isn't public yet: to a user it is coming soon, like any other.
+        preview = next((h for h in HARNESSES if h.id == harness_id and h.preview), None)
+        if preview:
+            render.die(f"{preview.name} is coming soon: see {preview.docs_url}")
+        choices = ", ".join(h.id for h in HARNESSES if printable(h))
         render.die(f"jl can't print a config for {harness_id}. Choose from: {choices}.")
     return harness
 
@@ -802,19 +911,16 @@ def _continue_on_wallet(wallet: bool, dry_run: bool) -> None:
         dry_run: --dry-run was passed: the choice isn't saved.
     """
     if wallet or wallet_chosen():
-        render.console.print()
-        hint = Text("Requests are charged to your wallet. Run ", "dim")
-        hint.append("jl subscribe", render.ACCENT_BOLD)
-        hint.append(" for a plan.", "dim")
-        render.warning("On wallet (no subscription)", hint)
-        render.console.print()
+        _warn_on_wallet()
         return
     if state.yes or not _can_ask():
         render.die(f"{NO_SUBSCRIPTION_FOUND} To pay from your wallet instead, run jl connect --wallet.")
-    hint = Text("Just subscribed? Give it a minute, then run ", "dim")
-    hint.append("jl connect", render.ACCENT_BOLD)
-    hint.append(" again.", "dim")
-    render.warning("No subscription found", hint)
+    # One warning per screen: the state here, the cost after the choice (_warn_on_wallet).
+    render.console.print(
+        Text.assemble(
+            ("No subscription on this account.", "bold"), (" Just subscribed? It can take a minute to show.", "dim")
+        )
+    )
     render.console.print()
     choice = render.answer(
         questionary.select(
@@ -830,12 +936,20 @@ def _continue_on_wallet(wallet: bool, dry_run: bool) -> None:
     if choice == "Subscribe now":
         subscribe()
         raise typer.Exit()
+    # Said at the choice, not only on the next run: this is where requests start to cost money.
+    _warn_on_wallet()
     if dry_run:
         return
     # Saved now, so the next run doesn't ask again when this one stops before creating the key.
     saved = load_config()
     saved["pays_from_wallet"] = True
     save_config(saved)
+
+
+def _warn_on_wallet() -> None:
+    """Say that this machine's requests are charged to the wallet, and how to get a plan."""
+    render.warning("On wallet (no subscription)", "Requests are charged to your wallet. Run `jl subscribe` for a plan.")
+    render.console.print()
 
 
 def _leave_for_now() -> NoReturn:
@@ -1093,7 +1207,13 @@ def _refresh_plan(
     """Return the plan that refreshes a harness's models, and the default it keeps or falls back to."""
     current = default_model(harness)
     default = RECOMMENDED_MODEL if current and current not in {m.id for m in models} else None
-    setup = Setup(base_url=MODELS_API_URL, api_key=connection.token, models=models, default_model=default)
+    setup = Setup(
+        base_url=MODELS_API_URL,
+        api_key=connection.token,
+        models=models,
+        default_model=default,
+        costs=connection.kind == "payg",
+    )
     return plan_connect(harness, setup), current, default
 
 

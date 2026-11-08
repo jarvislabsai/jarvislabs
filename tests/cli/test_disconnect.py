@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
@@ -130,7 +131,7 @@ def test_disconnect_without_a_tool_keeps_the_error_without_a_terminal(
     result = runner.invoke(app, ["disconnect"])
 
     assert result.exit_code == 2
-    assert "Missing argument 'HARNESS'." in result.output
+    assert "Missing argument 'TOOL'." in result.output
 
 
 def test_ctrl_c_at_the_disconnect_picker_aborts_with_130(subscribed: MagicMock, terminal: SimpleNamespace) -> None:
@@ -226,10 +227,15 @@ def test_disconnect_previews_a_removal_row_and_names_the_tool(subscribed: MagicM
     result = runner.invoke(app, ["disconnect", "opencode"], input="y\n")
 
     assert result.exit_code == 0, result.output
-    # The row of the connect preview, with - for removal; the question names the tool.
+    # The row of the connect preview, with - for removal, under a heading naming the tool; a blank
+    # line before the question, as connect has before its own.
     assert (
+        "jl will remove the Jarvislabs provider from OpenCode\n"
+        "- remove\n"
+        "\n"
         "- OpenCode  ~/opencode/opencode.json\n"
         "            remove the Jarvislabs entries, put back your model\n"
+        "\n"
         "? Disconnect OpenCode? (y/N) "
     ) in result.output
     # The last tool: its key is revoked, and the backup from connect stays.
@@ -424,8 +430,9 @@ def test_logout_keep_tools_keeps_the_machine_key_for_disconnect(subscribed: Magi
     assert connected() == {"opencode"}
     # The server key stays, so the harnesses keep working.
     assert revokes(subscribed) == []
-    assert "Your coding tools stay connected; run jl disconnect <tool> to remove them" in " ".join(
-        result.output.split()
+    assert (
+        "Your coding tools stay connected This machine's key jl-devbox-f7a7 stays active in them. "
+        "jl disconnect <tool> removes one; the last one revokes the key." in " ".join(result.output.split())
     )
 
 
@@ -441,6 +448,34 @@ def test_logout_removes_tools_and_revokes_the_key(subscribed: MagicMock, opencod
     assert config.load_connection() is None
     assert revokes(subscribed) == [(*REVOKE, None)]
     assert not opencode_config.exists()
+    assert "Logged out" in result.output
+
+
+def test_logout_asks_naming_the_tools_and_a_no_still_logs_out(subscribed: MagicMock, opencode_config: Path) -> None:
+    runner.invoke(app, ["connect", "opencode", "--yes"])
+    config.save_config({**config.load_config(), "auth": {"token": "jarvis-key"}})
+
+    result = runner.invoke(app, ["logout"], input="n\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Also remove jl from OpenCode and revoke this machine's key?" in result.output
+    assert "auth" not in config.load_config()
+    assert connected() == {"opencode"}
+    assert revokes(subscribed) == []
+
+
+def test_logout_json_prints_one_document_naming_each_tool(subscribed: MagicMock, opencode_config: Path) -> None:
+    runner.invoke(app, ["connect", "opencode", "aider", "--yes"])
+    config.save_config({**config.load_config(), "auth": {"token": "jarvis-key"}})
+
+    result = runner.invoke(app, ["logout", "--json", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # json.loads refuses a second document after the first, so this also checks there is one.
+    document = json.loads(result.stdout)
+    assert document["logged_out"] is True
+    assert [tool["harness"] for tool in document["disconnected"]] == ["opencode", "aider"]
+    assert document["disconnected"][-1]["key_revoked"] is True
 
 
 def disconnect_logged_out(monkeypatch: pytest.MonkeyPatch) -> Result:
@@ -769,3 +804,29 @@ def test_reconnecting_over_an_old_record_puts_back_none_of_its_values(subscribed
     assert result.exit_code == 0, result.output
     assert conf.read_text() == "# Aider\ndark-mode: true\n"
     assert "Aider was connected by an older jl" in " ".join(result.output.split())
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
+def test_a_dangling_symlinked_config_is_written_through_and_never_deleted(
+    subscribed: MagicMock, tmp_path: Path
+) -> None:
+    # A dotfiles setup: the config path is a link to a file that doesn't exist yet.
+    target = tmp_path / "dotfiles" / "opencode.json"
+    target.parent.mkdir()
+    link = tmp_path / "opencode" / "opencode.json"
+    link.parent.mkdir()
+    link.symlink_to(target)
+
+    connected_run = runner.invoke(app, ["connect", "opencode", "--yes"])
+    assert connected_run.exit_code == 0, connected_run.output
+    # jl wrote through the link, into the dotfiles target.
+    assert link.is_symlink()
+    assert "jarvislabs" in read_json(target)["provider"]
+
+    result = runner.invoke(app, ["disconnect", "opencode", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # The link is the user's: jl takes its entries out and leaves the link and its file in place.
+    assert link.is_symlink()
+    assert target.exists()
+    assert "jarvislabs" not in read_json(target).get("provider", {})

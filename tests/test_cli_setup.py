@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import io
+import re
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from rich.console import Console
 
 from jarvislabs.cli import setup, state
 
@@ -350,6 +353,45 @@ def test_skill_install_flow_invalid_flag_writes_nothing(tmp_path, monkeypatch):
         setup._skill_install_flow(agents_flag="invalid-agent")
 
     assert not universal.exists()
+
+
+def test_skill_install_puts_the_agent_names_on_a_dim_line(tmp_path, monkeypatch):
+    buffer = io.StringIO()
+    console = Console(file=buffer, width=120, force_terminal=True, color_system="standard", theme=setup.render.theme)
+    monkeypatch.setattr(setup.render, "console", console)
+    monkeypatch.setattr(setup, "UNIVERSAL_PATH", tmp_path / "SKILL.md")
+    monkeypatch.setattr(setup, "ADDITIONAL_AGENTS", {})
+    monkeypatch.setattr(state, "yes", True)
+
+    setup._skill_install_flow(agents_flag="universal")
+
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", buffer.getvalue())
+    assert "✓ Agent skills installed" in plain
+    assert "  for Codex, Cursor, OpenCode, Amp, Cline, Gemini CLI, GitHub Copilot, Kimi Code CLI and Warp" in plain
+    assert "  \x1b[2mfor Codex" in buffer.getvalue()
+
+
+# ── _show_next_steps ─────────────────────────────────────────────────────────
+
+
+def test_next_steps_start_with_connect(monkeypatch, capsys):
+    monkeypatch.setattr(state, "json_output", False)
+
+    setup._show_next_steps()
+
+    err = capsys.readouterr().err
+    assert "jl connect" in err
+    assert "add Jarvislabs models to your coding tools" in err
+
+
+def test_next_steps_do_not_say_status_shows_a_plan(monkeypatch, capsys):
+    monkeypatch.setattr(state, "json_output", False)
+
+    setup._show_next_steps()
+
+    err = capsys.readouterr().err
+    assert "balance and connected tools" in err
+    assert "plan, balance and connected tools" not in err
 
 
 # ── Paths ────────────────────────────────────────────────────────────────────

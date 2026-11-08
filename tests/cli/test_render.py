@@ -191,8 +191,9 @@ def test_change_rows_align_mark_name_and_files_with_notes_under_the_files(out):
 def test_next_step_names_the_commands_to_type(out):
     render.next_step("start a tool in this folder:", ["opencode", "cline -i"])
 
-    # The command comes first, the explanation under it, with a blank line before.
-    assert out.getvalue().splitlines() == ["", "Next: opencode · cline -i", "      start a tool in this folder"]
+    # The command comes first, the explanation under it, with a blank line before. "or", not a
+    # separator: either command is the next step, and "a · b" read as one command to type.
+    assert out.getvalue().splitlines() == ["", "Next: opencode  or  cline -i", "      start a tool in this folder"]
 
 
 def test_a_heading_opens_a_phase_after_a_blank_line(out):
@@ -222,14 +223,6 @@ def test_a_long_change_rows_note_wraps_under_the_title(out):
     assert lines[0] == "Connect tools  to the Jarvislabs Models"
     assert lines[1].startswith(" " * len("Connect tools  "))
     assert " ".join(" ".join(lines[0:2]).split()) == "Connect tools to the Jarvislabs Models API, then start one"
-
-
-def test_next_step_uses_the_ascii_separator_when_marks_are_ascii(out, monkeypatch):
-    monkeypatch.setattr(render, "MARKS", render.ASCII_MARKS)
-
-    render.next_step("start a tool in this folder:", ["opencode", "cline -i"])
-
-    assert out.getvalue().splitlines()[-2:] == ["Next: opencode | cline -i", "      start a tool in this folder"]
 
 
 def test_an_empty_wrapped_line_has_no_trailing_spaces(out):
