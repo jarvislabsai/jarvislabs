@@ -1605,11 +1605,12 @@ def _zed(setup: Setup) -> tuple[ConfigEdit, ...]:
             "max_output_tokens": _limits(model)[1],
             # Zed requires all four once capabilities is there: a missing one fails the whole
             # provider, which then never shows in its list (settings_content/src/language_model.rs).
-            # The last two are Zed's own defaults.
+            # The Models API returns several tool calls in one reply for a tool-calling model;
+            # prompt_cache_key is OpenAI's, so it stays at Zed's default.
             "capabilities": {
                 "tools": bool(model.capabilities.tool_calling),
                 "images": "image" in model.input_modalities,
-                "parallel_tool_calls": False,
+                "parallel_tool_calls": bool(model.capabilities.tool_calling),
                 "prompt_cache_key": False,
             },
         }
