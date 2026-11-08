@@ -2655,7 +2655,7 @@ def test_zed_connects_and_its_key_goes_to_the_clipboard(subscribed, tmp_path, mo
     text = said(result)
     # Said before the gate; after it, a "!" row, not a ✓ that reads as done, and the steps come
     # last, after the test and before Next, with the key off the screen.
-    assert "then you add your key in Zed: it keeps keys in the OS keychain" in text
+    assert "the key goes in Zed by hand: it keeps keys in the OS keychain" in text
     assert "! Zed added, needs your key: see below" in text
     assert "✓ Zed" not in result.output
     steps = text[text.index("API test passed") :]
@@ -2713,7 +2713,7 @@ def test_a_new_key_tells_zed_users_to_paste_it(subscribed, opencode_config, tmp_
     assert result.exit_code == 0, result.output
     # The refresh rewrote OpenCode's file; Zed's keychain is the user's to update.
     # The old key is revoked; jl can't see whether Zed ever had it, so it says "if".
-    assert "! Your old key is revoked: if you added it to Zed, replace it" in said(result)
+    assert "! This machine's old key is revoked: if you added it to Zed, replace it" in said(result)
     assert "select Jarvislabs, replace its key with your new one (it's on your clipboard) and press Enter." in said(
         result
     )
@@ -2787,8 +2787,11 @@ def test_zed_next_step_names_zed_as_waiting_for_its_key(subscribed, opencode_con
     assert result.exit_code == 0, result.output
     # Every tool is in the ending, which says which one still waits for its key; the steps come
     # last before it, so a user reading from the bottom finds them.
-    assert "Next: opencode or zed . start a tool in your project folder; Zed once you've added its key" in said(result)
-    assert said(result).index("Add another tool") < said(result).index("! Zed needs your key")
+    assert "Next: opencode or zed . start a tool in your project folder; start Zed once you've added its key" in said(
+        result
+    )
+    # While Zed waits for its key, that is the next thing to do: no "add another tool" before it.
+    assert "Add another tool" not in result.output
 
 
 def test_over_ssh_the_zed_steps_name_both_shortcuts(subscribed, tmp_path, monkeypatch):

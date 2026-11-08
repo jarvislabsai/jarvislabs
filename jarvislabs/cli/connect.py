@@ -268,7 +268,7 @@ def connect(
                         None,
                         [
                             row.warning,
-                            f"then you add your key in {plan.harness.name}: it keeps keys in the OS keychain",
+                            f"the key goes in {plan.harness.name} by hand: it keeps keys in the OS keychain",
                         ],
                     )
                 ),
@@ -354,7 +354,8 @@ def connect(
             _revoke_unused_key(client, connection)
         raise typer.Exit(1)
     _test_request(connection.token, default)
-    if connected:
+    # While a tool waits for its key, that is the next thing to do: no "add another tool" before it.
+    if connected and not pending:
         # Under curl | sh, this window's PATH predates jl's folder, so jl runs only in a new terminal.
         if os.environ.get("JL_FROM_INSTALLER"):
             render.hint_line("Add another tool later: open a new terminal, then run `jl connect`")
@@ -366,18 +367,24 @@ def connect(
         headline = {
             "add": f"{harness.name} needs your key",
             "check": f"{harness.name} may already have your key: jl can't see the OS keychain",
-            "replace": f"Your old key is revoked: if you added it to {harness.name}, replace it",
+            "replace": f"This machine's old key is revoked: if you added it to {harness.name}, replace it",
         }[reason]
         render.console.print()
         render.warning(headline, _key_steps(harness, connection.token, reason))
     if connected:
         waiting = [harness for harness, _ in pending if harness in connected]
         ready = [h for h in connected if h not in waiting]
-        names = " and ".join(h.name for h in waiting)
         text = "start a tool in your project folder"
         if waiting:
-            # In the list, so the ending names every tool; the line says which waits for its key.
-            text = f"{text}; {names} once you've added its key" if ready else f"start {names} once you've added its key"
+            # Worded for what jl knows: a new key to add, one to replace, or one that may be there.
+            after = {
+                "add": "once you've added its key",
+                "check": "once its key is in place",
+                "replace": "once you've replaced its key",
+            }
+            reasons = {harness.id: reason for harness, reason in pending}
+            waits = "; ".join(f"start {h.name} {after[reasons[h.id]]}" for h in waiting)
+            text = f"{text}; {waits}" if ready else waits
         render.next_step(text, [_start_command(h) for h in [*ready, *waiting]])
 
 
