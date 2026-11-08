@@ -17,7 +17,7 @@ except ModuleNotFoundError:  # Python 3.10
 
 from typer.testing import CliRunner
 
-from jarvislabs import config
+from jarvislabs import config, harnesses
 from jarvislabs.cli import connect
 from jarvislabs.cli.app import app
 from jarvislabs.harnesses import HARNESSES, installed
@@ -356,6 +356,73 @@ def test_the_flag_marks_preview_harnesses_connectable_in_the_list(subscribed, mo
     assert row.endswith("connect")
 
 
+def test_codex_catalog_carries_each_models_own_efforts(subscribed, tmp_path, monkeypatch):
+    monkeypatch.setenv("JL_PREVIEW_HARNESSES", "1")
+    monkeypatch.setattr(harnesses, "_codex_instructions", lambda: "You are Codex.")
+    subscribed.routes[("GET", "models")] = EFFORTS_CATALOG
+
+    result = runner.invoke(app, ["connect", "codex", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    written = tomllib.loads((tmp_path / ".codex" / "config.toml").read_text())
+    assert written["model_catalog_json"] == str(tmp_path / ".codex" / "models.json")
+    models = {m["slug"]: m for m in read_json(tmp_path / ".codex" / "models.json")["models"]}
+    # The catalog's entries replace the prompt Codex assembles itself, so they carry its own.
+    assert models["deepseek-v4.1-flash-1017"]["base_instructions"] == "You are Codex."
+    assert models["deepseek-v4.1-flash-1017"]["supported_reasoning_levels"] == [
+        {"effort": "low", "description": "Lighter reasoning"},
+        {"effort": "high", "description": "Deep reasoning"},
+        {"effort": "max", "description": "Maximum reasoning"},
+    ]
+    assert models["deepseek-v4.1-flash-1017"]["default_reasoning_level"] == "high"
+    assert models["glm-5.3"]["default_reasoning_level"] == "medium"
+    # A model that offers no efforts lists none, and defaults to none.
+    assert models["gemma-3-1b-it"]["supported_reasoning_levels"] == []
+    assert "default_reasoning_level" not in models["gemma-3-1b-it"]
+
+
+def test_codex_catalog_merges_into_the_users_own(subscribed, tmp_path, monkeypatch):
+    monkeypatch.setenv("JL_PREVIEW_HARNESSES", "1")
+    monkeypatch.setattr(harnesses, "_codex_instructions", lambda: "You are Codex.")
+    subscribed.routes[("GET", "models")] = EFFORTS_CATALOG
+    catalog = tmp_path / ".codex" / "models.json"
+    catalog.parent.mkdir()
+    catalog.write_text(
+        json.dumps(
+            {
+                "models": [
+                    {"slug": "deepseek-chat", "display_name": "DeepSeek Chat", "description": "The user's own"},
+                    {"slug": "a-model-we-dropped", "display_name": "Old", "description": "Served by Jarvislabs"},
+                ]
+            }
+        )
+    )
+
+    result = runner.invoke(app, ["connect", "codex", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    models = read_json(catalog)["models"]
+    slugs = [model["slug"] for model in models]
+    # The user's own entry stays, jl's stale one goes, and ours are added.
+    assert "deepseek-chat" in slugs
+    assert "a-model-we-dropped" not in slugs
+    assert "deepseek-v4.1-flash-1017" in slugs
+
+
+def test_codex_writes_no_catalog_when_it_cant_read_the_stock_prompt(subscribed, tmp_path, monkeypatch):
+    monkeypatch.setenv("JL_PREVIEW_HARNESSES", "1")
+    monkeypatch.setattr(harnesses, "_codex_instructions", lambda: None)
+    subscribed.routes[("GET", "models")] = EFFORTS_CATALOG
+
+    result = runner.invoke(app, ["connect", "codex", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # No catalog leaves Codex's own default prompt and no efforts, exactly as before.
+    written = tomllib.loads((tmp_path / ".codex" / "config.toml").read_text())
+    assert "model_catalog_json" not in written
+    assert not (tmp_path / ".codex" / "models.json").exists()
+
+
 def test_codex_follows_codex_home_and_keeps_the_users_config(subscribed, tmp_path, monkeypatch):
     monkeypatch.setenv("JL_PREVIEW_HARNESSES", "1")
     elsewhere = tmp_path / "codex-home"
@@ -449,6 +516,126 @@ def test_pi_thinking_levels_map_to_supported_efforts(subscribed, tmp_path):
         "xhigh": None,
         "max": "max",
     }
+
+
+def test_opencode_offers_the_models_real_reasoning_efforts(subscribed, tmp_path):
+    # OpenCode offers low, medium and high when a model carries no efforts, and the Models API
+    # refuses an effort the model doesn't list; the catalog's efforts replace that ladder.
+    subscribed.routes[("GET", "models")] = {
+        "object": "list",
+        "data": [
+            {**DEEPSEEK, "thinking": {"supported": True, "supported_efforts": ["low", "high", "max"]}},
+            {**GLM, "thinking": {"supported": True}},
+        ],
+    }
+
+    result = runner.invoke(app, ["connect", "opencode", "kilo", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    models = read_json(tmp_path / "opencode" / "opencode.json")["providers"]["jarvislabs"]["models"]
+    assert {model_id: m["capabilities"]["reasoning"] for model_id, m in models.items()} == {
+        "deepseek-v4.1-flash-1017": {"supported": True, "effort": ["low", "high", "max"]},
+        # A model that reasons with a toggle only offers no efforts, not the default ladder.
+        "glm-5.3": {"supported": True},
+    }
+    # Kilo reads only the V1 entry, which cannot express efforts; its own writer pins each
+    # model's fixed effort there, OpenCode's copy stays bare.
+    kilo = read_json(tmp_path / "kilo" / "kilo.jsonc")["provider"]["jarvislabs"]["models"]
+    assert "capabilities" not in kilo["deepseek-v4.1-flash-1017"]
+    opencode_v1 = read_json(tmp_path / "opencode" / "opencode.json")["provider"]["jarvislabs"]["models"]
+    assert "options" not in opencode_v1["deepseek-v4.1-flash-1017"]
+
+
+# The catalog for the effort writers: a model with the catalog's default effort, one that offers a
+# single effort (so the default falls to it), and one that reasons with a toggle only.
+EFFORTS_CATALOG = {
+    "object": "list",
+    "data": [
+        {**DEEPSEEK, "thinking": {"supported": True, "supported_efforts": ["low", "high", "max"], "default_effort": "high"}},
+        {**GLM, "thinking": {"supported": True, "supported_efforts": ["medium"]}},
+        {**GEMMA, "thinking": {"supported": True, "supported_efforts": []}},
+    ],
+}
+
+
+def test_qwen_declares_each_models_own_efforts(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = EFFORTS_CATALOG
+
+    result = runner.invoke(app, ["connect", "qwen", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    entries = read_json(tmp_path / ".qwen" / "settings.json")["modelProviders"]["jarvislabs"]
+    # The capabilities name the efforts the /effort picker offers and the one to send without a
+    # choice; generationConfig's reasoning is dropped once samplingParams is set.
+    assert entries[0]["capabilities"] == {
+        "reasoning": {"profile": "openai-effort", "efforts": ["low", "high", "max"], "defaultEffort": "high"}
+    }
+    # A model with a single effort takes it as its default; the API leaves no other choice.
+    assert entries[1]["capabilities"] == {
+        "reasoning": {"profile": "openai-effort", "efforts": ["medium"], "defaultEffort": "medium"}
+    }
+    # A model without efforts gets no capabilities at all: an empty ladder makes Qwen Code
+    # discard the declaration.
+    assert "capabilities" not in entries[2]
+
+
+def test_qwen_never_defaults_to_an_effort_the_model_refuses(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = {
+        "object": "list",
+        "data": [{**DEEPSEEK, "thinking": {"supported": True, "supported_efforts": ["low", "high"], "default_effort": "xhigh"}}],
+    }
+
+    result = runner.invoke(app, ["connect", "qwen", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    (entry,) = read_json(tmp_path / ".qwen" / "settings.json")["modelProviders"]["jarvislabs"]
+    assert entry["capabilities"] == {"reasoning": {"profile": "openai-effort", "efforts": ["low", "high"]}}
+
+
+def test_kimi_offers_each_models_own_efforts(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = EFFORTS_CATALOG
+
+    result = runner.invoke(app, ["connect", "kimi", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    models = tomllib.loads((tmp_path / ".kimi-code" / "config.toml").read_text())["models"]
+    assert models["jarvislabs/deepseek-v4.1-flash-1017"]["support_efforts"] == ["low", "high", "max"]
+    assert models["jarvislabs/deepseek-v4.1-flash-1017"]["default_effort"] == "high"
+    assert models["jarvislabs/glm-5.3"]["support_efforts"] == ["medium"]
+    assert models["jarvislabs/glm-5.3"]["default_effort"] == "medium"
+    # default_effort is ignored without support_efforts beside it, so a toggle-only model
+    # gets neither and sends no effort at all.
+    assert "support_efforts" not in models["jarvislabs/gemma-3-1b-it"]
+    assert "default_effort" not in models["jarvislabs/gemma-3-1b-it"]
+
+
+def test_copilot_offers_each_models_own_efforts(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = EFFORTS_CATALOG
+
+    result = runner.invoke(app, ["connect", "copilot", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    models = {m["id"]: m for m in read_json(tmp_path / ".copilot" / "providers.json")["models"]}
+    # The ladder the picker's Reasoning column cycles through; without it the column is hidden.
+    assert models["deepseek-v4.1-flash-1017"]["capabilities"] == {
+        "supports": {"reasoning_effort": ["low", "high", "max"]}
+    }
+    assert models["glm-5.3"]["capabilities"] == {"supports": {"reasoning_effort": ["medium"]}}
+    assert "capabilities" not in models["gemma-3-1b-it"]
+
+
+def test_kilo_pins_each_models_default_effort(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = EFFORTS_CATALOG
+
+    result = runner.invoke(app, ["connect", "kilo", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # Kilo's V1 entry cannot express a ladder, so each model's effort is pinned as its fixed
+    # default; a toggle-only model gets no options, and sends no effort.
+    models = read_json(tmp_path / "kilo" / "kilo.jsonc")["provider"]["jarvislabs"]["models"]
+    assert models["deepseek-v4.1-flash-1017"]["options"] == {"reasoningEffort": "high"}
+    assert models["glm-5.3"]["options"] == {"reasoningEffort": "medium"}
+    assert "options" not in models["gemma-3-1b-it"]
 
 
 def test_cline_preview_warns_when_its_slot_is_taken(subscribed, tmp_path):

@@ -332,7 +332,9 @@ def test_model_info_drops_thinking_defaults_and_keeps_exact_prices():
     )
     dumped = model.model_dump()
     assert "default_enabled" not in dumped["thinking"]
-    assert "default_effort" not in dumped["thinking"]
+    # The effort the Models API applies by default; the harness writers pin it for tools without
+    # an effort picker, so it is kept rather than dropped.
+    assert dumped["thinking"]["default_effort"] == "high"
     assert dumped["pricing"]["input_per_million_tokens"] == 12.3201
 
 

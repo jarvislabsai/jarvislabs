@@ -488,6 +488,8 @@ class ModelThinking(BaseModel):
     supported: bool = False
     supports_toggle: bool = False
     supported_efforts: list[str] = Field(default_factory=list)
+    # The effort the Models API applies to the model when a request sends none.
+    default_effort: str | None = None
     # Keys to set in chat_template_kwargs: "toggle" and/or "effort" -> the model's parameter name.
     template_parameters: dict[str, str] = Field(default_factory=dict)
 

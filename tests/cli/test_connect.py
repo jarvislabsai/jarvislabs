@@ -122,17 +122,29 @@ def test_connect_writes_the_provider_models_and_default_into_opencode(subscribed
 
     assert result.exit_code == 0, result.output
     written = read_json(opencode_config)
-    provider = written["provider"]["jarvislabs"]
+    provider = written["providers"]["jarvislabs"]
     assert written["theme"] == "tokyonight"
     assert written["model"] == "jarvislabs/deepseek-v4.1-flash-1017"
-    assert provider["npm"] == "@ai-sdk/openai-compatible"
     assert provider["name"] == "Jarvislabs"
-    assert provider["options"] == {"baseURL": "https://models.jarvislabs.net/v1", "apiKey": "jlsk-new-secret"}
+    assert provider["package"] == "@opencode/ai/providers/openai-compatible"
+    assert provider["settings"] == {"baseURL": "https://models.jarvislabs.net/v1", "apiKey": "jlsk-new-secret"}
     # Video isn't offered to OpenCode, and a model the catalog doesn't mark as tool-calling gets no tools.
-    assert {model_id: (m["name"], m["tool_call"], m["modalities"]) for model_id, m in provider["models"].items()} == {
-        "deepseek-v4.1-flash-1017": ("DeepSeek V4.1 Flash", True, {"input": ["text", "image"], "output": ["text"]}),
-        "glm-5.3": ("GLM-5.3", True, {"input": ["text"], "output": ["text"]}),
-        "gemma-3-1b-it": ("Gemma 3 1B IT", False, {"input": ["text"], "output": ["text"]}),
+    assert {model_id: (m["name"], m["capabilities"]) for model_id, m in provider["models"].items()} == {
+        "deepseek-v4.1-flash-1017": (
+            "DeepSeek V4.1 Flash",
+            {"tools": True, "input": ["text", "image"], "output": ["text"], "reasoning": {"supported": False}},
+        ),
+        "glm-5.3": ("GLM-5.3", {"tools": True, "input": ["text"], "output": ["text"], "reasoning": {"supported": False}}),
+        "gemma-3-1b-it": (
+            "Gemma 3 1B IT",
+            {"tools": False, "input": ["text"], "output": ["text"], "reasoning": {"supported": False}},
+        ),
+    }
+    # The V1 entry stays beside it: OpenCode installs that predate the providers one, and Kilo, read it.
+    assert written["provider"]["jarvislabs"]["npm"] == "@ai-sdk/openai-compatible"
+    assert written["provider"]["jarvislabs"]["options"] == {
+        "baseURL": "https://models.jarvislabs.net/v1",
+        "apiKey": "jlsk-new-secret",
     }
 
 
@@ -1560,6 +1572,77 @@ def test_an_unreadable_yaml_config_skips_the_harness_and_writes_nothing(subscrib
     assert "! Aider skipped Can't read" in " ".join(result.output.split())
     assert aider_config.read_text() == "model: [gpt-4o\n"
     assert not (tmp_path / ".aider.model.metadata.json").exists()
+
+
+def test_goose_sends_each_models_default_effort(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = {
+        "object": "list",
+        "data": [
+            {**DEEPSEEK, "thinking": {"supported": True, "supported_efforts": ["low", "high", "max"], "default_effort": "high"}},
+            {**GEMMA, "thinking": {"supported": True, "supported_efforts": []}},
+        ],
+    }
+    goose = goose_dir(tmp_path)
+    goose.mkdir(parents=True)
+
+    result = runner.invoke(app, ["connect", "goose", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # Goose sends request_params verbatim with every request for the model, whichever of them
+    # the user picks; a model without efforts gets no request_params at all.
+    models = {m["name"]: m for m in read_json(goose / "custom_providers" / "jarvislabs.json")["models"]}
+    assert models["deepseek-v4.1-flash-1017"]["request_params"] == {"reasoning_effort": "high"}
+    assert "request_params" not in models["gemma-3-1b-it"]
+
+
+def test_aider_pins_each_models_default_effort_beside_the_users_own(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = {
+        "object": "list",
+        "data": [
+            {**DEEPSEEK, "thinking": {"supported": True, "supported_efforts": ["low", "high", "max"], "default_effort": "high"}},
+            {**GLM, "thinking": {"supported": True, "supported_efforts": ["medium"]}},
+            {**GEMMA, "thinking": {"supported": True, "supported_efforts": []}},
+        ],
+    }
+    settings = tmp_path / ".aider.model.settings.yml"
+    settings.write_text("# Mine\n- name: openai/gpt-4o\n  extra_params:\n    extra_body:\n      reasoning_effort: high\n")
+
+    result = runner.invoke(app, ["connect", "aider", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    written = settings.read_text()
+    # The user's own entry stays; jl's sit in a marked block, one per model that offers efforts.
+    assert "- name: openai/gpt-4o" in written
+    assert "- name: openai/deepseek-v4.1-flash-1017\n  extra_params:\n    extra_body:\n      reasoning_effort: high" in written
+    assert "- name: openai/glm-5.3\n  extra_params:\n    extra_body:\n      reasoning_effort: medium" in written
+    assert "openai/gemma-3-1b-it" not in written
+
+
+def test_crush_carries_the_default_models_effort_on_its_slots(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = {
+        "object": "list",
+        "data": [
+            {**DEEPSEEK, "thinking": {"supported": True, "supported_efforts": ["low", "high", "max"], "default_effort": "high"}},
+            {**GEMMA, "thinking": {"supported": True, "supported_efforts": []}},
+        ],
+    }
+    crushrc = tmp_path / "crush" / "crushrc"
+    crushrc.parent.mkdir()
+
+    result = runner.invoke(app, ["connect", "crush", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    written = crushrc.read_text()
+    # Only the slot lines carry the effort: model add takes no provider options, and a
+    # provider-level one would send a single effort for every model.
+    assert "model large jarvislabs/deepseek-v4.1-flash-1017 --provider-options '{\"reasoning_effort\": \"high\"}'\n" in written
+    assert "model small jarvislabs/deepseek-v4.1-flash-1017 --provider-options '{\"reasoning_effort\": \"high\"}'\n" in written
+    assert "--provider-options" not in written.split("model large")[0]
+
+    # A default model without efforts gets the bare slots.
+    result = runner.invoke(app, ["connect", "crush", "--yes", "--model", "gemma-3-1b-it"])
+    assert result.exit_code == 0, result.output
+    assert "model large jarvislabs/gemma-3-1b-it\n" in crushrc.read_text()
 
 
 def goose_dir(tmp_path):

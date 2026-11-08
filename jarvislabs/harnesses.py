@@ -27,6 +27,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -869,6 +870,21 @@ def _limits(model: ModelInfo) -> tuple[int, int]:
     return context, min(model.max_output_tokens or MODELS_DEFAULT_MAX_TOKENS, context // 10)
 
 
+def _default_effort(model: ModelInfo) -> str | None:
+    """Return the effort a harness that takes one fixed value should pin for the model.
+
+    The catalog's own default, which the Models API applies to a request that sends none anyway,
+    so pinning it changes nothing on the wire while making the effort explicit for harnesses with
+    no effort picker; a model that offers exactly one effort gets it (the API's default for it is
+    unstated); a model that reasons with a toggle only, none. An effort outside the model's own
+    list is never returned: the API refuses it.
+    """
+    efforts = model.thinking.supported_efforts
+    if model.thinking.default_effort in efforts:
+        return model.thinking.default_effort
+    return efforts[0] if len(efforts) == 1 else None
+
+
 def _opencode(setup: Setup) -> tuple[ConfigEdit, ...]:
     # OpenCode reads opencode.jsonc after opencode.json, so a .jsonc file wins when both exist.
     folder = _xdg_config_home() / "opencode"
@@ -879,7 +895,7 @@ def _opencode(setup: Setup) -> tuple[ConfigEdit, ...]:
 def _kilo(setup: Setup) -> tuple[ConfigEdit, ...]:
     # Kilo reads kilo.jsonc after config.json and kilo.json, and keeps a .jsonc file's comments when it
     # rewrites it. Without per-model limits Kilo sets the context to 0 and turns compaction off.
-    return (ConfigEdit(_xdg_config_home() / "kilo" / "kilo.jsonc", "jsonc", _opencode_values(setup)),)
+    return (ConfigEdit(_xdg_config_home() / "kilo" / "kilo.jsonc", "jsonc", _kilo_values(setup)),)
 
 
 def _pi(setup: Setup) -> tuple[ConfigEdit, ...]:
@@ -957,6 +973,12 @@ def _kimi(setup: Setup) -> tuple[ConfigEdit, ...]:
         capabilities = _kimi_capabilities(model)
         if capabilities:
             entry["capabilities"] = capabilities
+        if efforts := model.thinking.supported_efforts:
+            # default_effort is ignored without support_efforts beside it, so the two go together;
+            # a model that offers no efforts gets neither, and sends no effort at all.
+            entry["support_efforts"] = efforts
+            if effort := _default_effort(model):
+                entry["default_effort"] = effort
         values[("models", alias)] = entry
     if setup.default_model:
         # An alias from models above, so Kimi Code finds it at startup.
@@ -1075,8 +1097,9 @@ def _cline_extension(setup: Setup) -> tuple[ConfigEdit, ...]:
 def _qwen(setup: Setup) -> tuple[ConfigEdit, ...]:
     path = Path.home() / ".qwen" / "settings.json"
     key_env = "JARVISLABS_API_KEY"
-    ours = [
-        {
+    ours = []
+    for model in setup.models:
+        entry: dict[str, object] = {
             "id": model.id,
             "name": model.name or model.id,
             # Qwen Code never reads a key from a provider entry, only from the env var it names.
@@ -1089,8 +1112,16 @@ def _qwen(setup: Setup) -> tuple[ConfigEdit, ...]:
                 "modalities": {"image": "image" in model.input_modalities},
             },
         }
-        for model in setup.models
-    ]
+        if efforts := model.thinking.supported_efforts:
+            # The capabilities name the efforts the /effort picker offers and the one to send
+            # without a choice; generationConfig's reasoning is dropped once samplingParams is
+            # set, which jl always sets. A model without efforts gets no capabilities at all:
+            # an empty ladder makes Qwen Code discard the declaration.
+            reasoning: dict[str, object] = {"profile": "openai-effort", "efforts": efforts}
+            if effort := _default_effort(model):
+                reasoning["defaultEffort"] = effort
+            entry["capabilities"] = {"reasoning": reasoning}
+        ours.append(entry)
     # A custom provider loads only once providerProtocol names its protocol; ours speaks OpenAI.
     # security.auth.selectedType stays "openai" though: a custom id there crashes Qwen Code.
     values: dict[KeyPath, object] = {
@@ -1136,16 +1167,20 @@ def _copilot(setup: Setup) -> tuple[ConfigEdit, ...]:
         "baseUrl": setup.base_url,
         "apiKey": setup.api_key,
     }
-    models = [
-        {
+    models = []
+    for model in setup.models:
+        entry: dict[str, object] = {
             "id": model.id,
             "provider": PROVIDER_ID,
             "name": model.name or model.id,
             "maxPromptTokens": _limits(model)[0],
             "maxOutputTokens": _limits(model)[1],
         }
-        for model in setup.models
-    ]
+        if efforts := model.thinking.supported_efforts:
+            # The ladder the picker's Reasoning column cycles through; without it the column is
+            # hidden and no effort is ever sent. Copilot itself never sends a default.
+            entry["capabilities"] = {"supports": {"reasoning_effort": efforts}}
+        models.append(entry)
     # Providers and models are lists shared with the user's own, which are kept.
     values: dict[KeyPath, object] = {
         ("providers",): [*_others(path, ("providers",), "name", PROVIDER_ID), provider],
@@ -1219,11 +1254,57 @@ def _input(model: ModelInfo) -> list[str]:
 
 
 def _opencode_values(setup: Setup) -> dict[KeyPath, object]:
-    # OpenCode's V1 provider entry, which Kilo (an OpenCode fork) reads as well.
+    # OpenCode 2.2.3+ reads the providers entry, whose capabilities carry each model's real
+    # reasoning efforts: OpenCode builds the picker's effort variants from them, and without them
+    # it offers low, medium and high, of which the Models API refuses any the model doesn't list.
+    # The V1 provider entry stays beside it for OpenCode installs that predate this one, and Kilo.
     models = {}
     for model in setup.models:
         context, output = _limits(model)
+        reasoning: dict[str, object] = {"supported": model.thinking.supported}
+        if efforts := model.thinking.supported_efforts:
+            reasoning["effort"] = efforts
         models[model.id] = {
+            "name": model.name or model.id,
+            "capabilities": {
+                "tools": bool(model.capabilities.tool_calling),
+                "input": _input(model),
+                "output": ["text"],
+                "reasoning": reasoning,
+            },
+            "limit": {"context": context, "output": output},
+        }
+    values: dict[KeyPath, object] = {
+        ("providers", PROVIDER_ID): {
+            "name": "Jarvislabs",
+            "package": "@opencode/ai/providers/openai-compatible",
+            "settings": {"baseURL": setup.base_url, "apiKey": setup.api_key},
+            "models": models,
+        },
+        ("provider", PROVIDER_ID): _v1_provider(setup),
+    }
+    if setup.default_model:
+        values["model",] = f"{PROVIDER_ID}/{setup.default_model}"
+    return values
+
+
+def _kilo_values(setup: Setup) -> dict[KeyPath, object]:
+    # Kilo, an OpenCode fork, reads only the V1 provider entry, which cannot express an effort
+    # ladder — but a model's options.reasoningEffort does reach its wire as a fixed effort.
+    values: dict[KeyPath, object] = {("provider", PROVIDER_ID): _v1_provider(setup, fixed_effort=True)}
+    if setup.default_model:
+        values["model",] = f"{PROVIDER_ID}/{setup.default_model}"
+    return values
+
+
+def _v1_provider(setup: Setup, fixed_effort: bool = False) -> dict[str, object]:
+    # The V1 provider entry, without an effort ladder: it predates the capabilities that carry
+    # one. Kilo maps a model's options.reasoningEffort onto the wire, so it gets the model's
+    # default effort pinned there; variants would inject junk into the request body, never those.
+    models = {}
+    for model in setup.models:
+        context, output = _limits(model)
+        entry: dict[str, object] = {
             "name": model.name or model.id,
             "tool_call": bool(model.capabilities.tool_calling),
             "limit": {"context": context, "output": output},
@@ -1232,16 +1313,15 @@ def _opencode_values(setup: Setup) -> dict[KeyPath, object]:
                 "output": ["text"],
             },
         }
-    provider = {
+        if fixed_effort and (effort := _default_effort(model)):
+            entry["options"] = {"reasoningEffort": effort}
+        models[model.id] = entry
+    return {
         "npm": "@ai-sdk/openai-compatible",
         "name": "Jarvislabs",
         "options": {"baseURL": setup.base_url, "apiKey": setup.api_key},
         "models": models,
     }
-    values: dict[KeyPath, object] = {("provider", PROVIDER_ID): provider}
-    if setup.default_model:
-        values["model",] = f"{PROVIDER_ID}/{setup.default_model}"
-    return values
 
 
 def _claude_code(setup: Setup) -> tuple[ConfigEdit, ...]:
@@ -1286,7 +1366,110 @@ def _codex(setup: Setup) -> tuple[ConfigEdit, ...]:
         values[("model",)] = setup.default_model
         if model := next((m for m in setup.models if m.id == setup.default_model), None):
             values[("model_context_window",)] = _limits(model)[0]
-    return (ConfigEdit(folder / "config.toml", "toml", values),)
+    edits = [ConfigEdit(folder / "config.toml", "toml", values)]
+    # The catalog tells Codex each model's own reasoning efforts, for its picker and its
+    # requests; a custom provider's model otherwise gets none. Its entries each need the base
+    # instructions, which replace the prompt Codex assembles itself, so the stock text is read
+    # from the installed binary — and when that fails, no catalog is written, which leaves
+    # Codex's own default prompt and no efforts, exactly as before.
+    if any(model.thinking.supported_efforts for model in setup.models) and (instructions := _codex_instructions()):
+        catalog = folder / "models.json"
+        ours = [_codex_entry(model, instructions) for model in setup.models]
+        # The file is shared — DeepSeek's own setup script writes it too — so only jl's own
+        # earlier entries (marked) and entries for models of ours go; the user's stay.
+        slugs = {model.id for model in setup.models}
+        current = _current(catalog, ("models",))
+        kept = [
+            entry
+            for entry in (current if isinstance(current, list) else ())
+            if not (
+                isinstance(entry, dict)
+                and (entry.get("description") == _CODEX_MARKER or entry.get("slug") in slugs)
+            )
+        ]
+        values[("model_catalog_json",)] = str(catalog)
+        edits.append(ConfigEdit(catalog, "jsonc", {("models",): [*kept, *ours]}, items={("models",): ours}))
+    return tuple(edits)
+
+
+# jl's mark on its entries in Codex's catalog file, which the user's own setup may hold entries
+# in too; it names the model in Codex's picker as well.
+_CODEX_MARKER = "Served by Jarvislabs"
+_CODEX_EFFORT_DESCRIPTIONS = {
+    "low": "Lighter reasoning",
+    "medium": "Balanced reasoning",
+    "high": "Deep reasoning",
+    "xhigh": "Deeper reasoning",
+    "max": "Maximum reasoning",
+}
+
+
+def _codex_entry(model: ModelInfo, instructions: str) -> dict[str, object]:
+    """Return one catalog entry: the fields Codex requires, plus the model's own efforts."""
+    entry: dict[str, object] = {
+        "slug": model.id,
+        "display_name": model.name or model.id,
+        "description": _CODEX_MARKER,
+        "shell_type": "unified_exec",
+        "visibility": "list",
+        "supported_in_api": True,
+        "priority": 1,
+        "support_verbosity": True,
+        "truncation_policy": {"mode": "tokens", "limit": 10000},
+        "experimental_supported_tools": [],
+        # The entry's instructions replace the prompt Codex would assemble, so they carry its own.
+        "base_instructions": instructions,
+        # Without this, Codex asks the Responses API for a reasoning summary the Models API doesn't send.
+        "default_reasoning_summary": "none",
+        # Required even for a model that offers no efforts.
+        "supported_reasoning_levels": [],
+    }
+    if efforts := model.thinking.supported_efforts:
+        entry["supported_reasoning_levels"] = [
+            {"effort": effort, "description": _CODEX_EFFORT_DESCRIPTIONS.get(effort, f"{effort} reasoning")}
+            for effort in efforts
+        ]
+        if effort := _default_effort(model):
+            entry["default_reasoning_level"] = effort
+    return entry
+
+
+def _codex_instructions() -> str | None:
+    """Return the base instructions of Codex's own models, read from the installed binary.
+
+    They change with the version the user runs, so reading them beats shipping a copy: the text
+    always matches. Any failure returns None, and the caller then writes no catalog. The command
+    runs under an empty CODEX_HOME, so it prints the stock catalog rather than the user's.
+    """
+    program = _find("codex")
+    if not program:
+        return None
+    with tempfile.TemporaryDirectory() as scratch:
+        try:
+            run = subprocess.run(
+                [program, "debug", "models"],
+                capture_output=True,
+                timeout=30,
+                env={**(_path_env("codex", program) or os.environ), "CODEX_HOME": scratch},
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+    try:
+        models = json.loads(run.stdout.decode("utf-8", errors="replace")).get("models")
+    except ValueError:
+        return None
+    if not isinstance(models, list):
+        return None
+    entries = [
+        entry
+        for entry in models
+        if isinstance(entry, dict) and isinstance(entry.get("base_instructions"), str) and entry["base_instructions"]
+    ]
+    # DeepSeek's own setup ships this model's text for the same purpose; any built-in's does.
+    for entry in entries:
+        if entry.get("slug") == "gpt-5.6-sol":
+            return entry["base_instructions"]
+    return entries[0]["base_instructions"] if entries else None
 
 
 def _zed(setup: Setup) -> tuple[ConfigEdit, ...]:
@@ -1325,15 +1508,24 @@ def _goose(setup: Setup) -> tuple[ConfigEdit, ...]:
         if sys.platform == "win32"
         else _xdg_config_home() / "goose"
     )
+    provider_models = []
+    for model in setup.models:
+        entry: dict[str, object] = {
+            "name": model.id,
+            "context_limit": _limits(model)[0],
+            "supports_vision": "image" in model.input_modalities,
+        }
+        if effort := _default_effort(model):
+            # Goose sends request_params verbatim with every request for the model, whichever of
+            # them the user picks; a model without efforts gets no request_params at all.
+            entry["request_params"] = {"reasoning_effort": effort}
+        provider_models.append(entry)
     provider = {
         "name": PROVIDER_ID,
         "engine": "openai",
         "display_name": "Jarvislabs",
         "base_url": setup.base_url + "/chat/completions",
-        "models": [
-            {"name": m.id, "context_limit": _limits(m)[0], "supports_vision": "image" in m.input_modalities}
-            for m in setup.models
-        ],
+        "models": provider_models,
         # Use the context limits above, not a model list fetched from /models.
         "dynamic_models": False,
         "supports_streaming": True,
@@ -1370,15 +1562,29 @@ def _aider(setup: Setup) -> tuple[ConfigEdit, ...]:
             "mode": "chat",
         }
     limits = ConfigEdit(Path.home() / ".aider.model.metadata.json", "jsonc", metadata)
+    # Aider reads each model's reasoning effort from .aider.model.settings.yml, a list the user
+    # may hold entries in too, so jl's sit in a marked block that leaves theirs alone. Aider
+    # flattens extra_body onto the request, and takes the entry of whichever model it runs.
+    entries = "\n".join(
+        f"- name: openai/{model.id}\n  extra_params:\n    extra_body:\n      reasoning_effort: {effort}"
+        for model in setup.models
+        if (effort := _default_effort(model))
+    )
+    efforts = ConfigEdit(Path.home() / ".aider.model.settings.yml", "block", {(): entries}) if entries else None
     conf = Path.home() / ".aider.conf.yml"
     settings: dict[KeyPath, object] = {("openai-api-base",): setup.base_url, ("openai-api-key",): setup.api_key}
     if setup.default_model:
         settings["model",] = f"openai/{setup.default_model}"
-    elif _current(conf, ("openai-api-base",), "yaml") != setup.base_url:
+        write_conf = True
+    else:
         # Aider's base URL and key serve every openai/ model, so a refresh (jl update, a key rotation)
         # leaves them alone once the user points Aider elsewhere.
-        return (limits,)
-    return (ConfigEdit(conf, "yaml", settings), limits)
+        write_conf = _current(conf, ("openai-api-base",), "yaml") == setup.base_url
+    edits = [ConfigEdit(conf, "yaml", settings)] if write_conf else []
+    edits.append(limits)
+    if efforts:
+        edits.append(efforts)
+    return tuple(edits)
 
 
 def _crush(setup: Setup) -> tuple[ConfigEdit, ...]:
@@ -1396,7 +1602,15 @@ def _crush(setup: Setup) -> tuple[ConfigEdit, ...]:
     path = _xdg_config_home() / "crush" / "crushrc"
     if setup.default_model:
         default = shlex.quote(setup.default_model)
-        lines += [f"model large {PROVIDER_ID}/{default}", f"model small {PROVIDER_ID}/{default}"]
+        # The slot lines carry the default model's effort: model add takes no provider options,
+        # and a provider-level one would send a single effort for every model, which the Models
+        # API refuses for any model whose own list lacks it. Switching models in Crush drops the
+        # slot's options, and the API's own default then applies.
+        options = ""
+        model = next((m for m in setup.models if m.id == setup.default_model), None)
+        if model and (effort := _default_effort(model)):
+                options = f" --provider-options {shlex.quote(json.dumps({'reasoning_effort': effort}))}"
+        lines += [f"model large {PROVIDER_ID}/{default}{options}", f"model small {PROVIDER_ID}/{default}{options}"]
     else:
         # The block is rewritten whole, so a refresh carries over the default the last connect set.
         block = read_block(path.read_text(encoding="utf-8")) if path.exists() else None
