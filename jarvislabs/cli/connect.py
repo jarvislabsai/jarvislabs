@@ -268,7 +268,7 @@ def connect(
                         None,
                         [
                             row.warning,
-                            f"then you add your key in {plan.harness.name}, which keeps keys in its own keychain",
+                            f"then you add your key in {plan.harness.name}: it keeps keys in the OS keychain",
                         ],
                     )
                 ),
@@ -330,7 +330,7 @@ def connect(
             # already there (it lives in the app's keychain), so every connect says how, below.
             fresh = previous is None or new_key
             pending.append((harness, "add" if fresh else "check"))
-            step = "one step left" if fresh else "check your key"
+            step = "needs your key" if fresh else "check its key"
             row = render.Row("todo", harness.name, f"{label}, {step}: see below", note="\n".join(notes))
             render.change_row(row, width, render.console)
             continue
@@ -365,11 +365,11 @@ def connect(
     for harness, reason in pending:
         headline = {
             "add": f"{harness.name} needs your key",
-            "check": f"{harness.name} may need your key: jl can't see whether you added it",
+            "check": f"{harness.name} may already have your key: jl can't see the OS keychain",
             "replace": f"Your old key is revoked: if you added it to {harness.name}, replace it",
         }[reason]
         render.console.print()
-        render.warning(headline, _key_steps(harness, connection.token, replace=reason == "replace"))
+        render.warning(headline, _key_steps(harness, connection.token, reason))
     if connected:
         waiting = [harness for harness, _ in pending if harness in connected]
         ready = [h for h in connected if h not in waiting]
@@ -377,7 +377,7 @@ def connect(
         text = "start a tool in your project folder"
         if waiting:
             # In the list, so the ending names every tool; the line says which waits for its key.
-            text = f"{text}; {names} once it has your key" if ready else f"start {names} once it has your key"
+            text = f"{text}; {names} once you've added its key" if ready else f"start {names} once you've added its key"
         render.next_step(text, [_start_command(h) for h in [*ready, *waiting]])
 
 
@@ -603,8 +603,8 @@ def _disconnect(
     hints += [f"your config from before jl is still at {render.short_path(backup)}" for backup in backups]
     if harness.key_by_hand:
         # jl never wrote that key and can't see it; say what holds either way.
-        dead = ", and no longer works" if revoked else ""
-        hints.append(f"if you added a key to {harness.name}, it stays in your OS keychain{dead}")
+        dead = " but no longer works" if revoked else ""
+        hints.append(f"if you added a key to {harness.name}, it stays in the OS keychain{dead}")
     if spaced:
         render.console.print()
     render.success(f"{harness.name} disconnected", "\n".join(hints))
@@ -680,25 +680,32 @@ def _start_command(harness: Harness) -> str:
     return shlex.join(harness.launch)
 
 
-def _key_steps(harness: Harness, key: str, *, replace: bool = False) -> str:
+def _key_steps(harness: Harness, key: str, reason: str = "add") -> str:
     """Return the numbered steps that put the key into a harness jl can't write it into, and its guide.
 
     The key goes to the clipboard, so it never lands in the terminal's scrollback; where there is
     no clipboard to use (Linux without one, or over SSH), it is shown on a line of its own, easy
-    to select. ``replace`` words the paste for a revoked key already in the app.
+    to select, right under the step that pastes it. ``reason`` words that step: "add" a first key,
+    "check" one that may already be there, "replace" a revoked one.
     """
     copied = _copy_to_clipboard(key)
-    action = "replace the key there with your new one" if replace else "paste your key"
-    paste = f"{action}; it's on your clipboard." if copied else f"{action}, shown below."
+    action = {
+        "add": "paste your key",
+        "check": "paste your key if none is there",
+        "replace": "replace its key with your new one",
+    }[reason]
+    paste = f"{action} (it's on your clipboard)" if copied else f"{action} (shown here)"
     # Over SSH, this machine's OS isn't the one the user's Zed runs on.
     if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
         palette = "Cmd-Shift-P on a Mac, Ctrl-Shift-P elsewhere"
     else:
         palette = "Cmd-Shift-P" if sys.platform == "darwin" else "Ctrl-Shift-P"
-    steps = [f"{i}. {step.format(palette=palette, paste=paste)}" for i, step in enumerate(harness.key_by_hand, 1)]
-    if not copied:
-        steps.append(f"   {key}")
-        steps.append("   (no clipboard here, so it's shown; it stays in this terminal's scrollback)")
+    steps = []
+    for i, step in enumerate(harness.key_by_hand, 1):
+        steps.append(f"{i}. {step.format(palette=palette, paste=paste)}")
+        if not copied and "{paste}" in step:
+            # Under the step that pastes it, on a line of its own; no clipboard can hold it here.
+            steps.append(f"   {key}")
     if harness.docs_url:
         steps.append(f"{harness.name}'s guide: {harness.docs_url}")
     return "\n".join(steps)

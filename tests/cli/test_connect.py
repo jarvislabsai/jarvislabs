@@ -2655,17 +2655,19 @@ def test_zed_connects_and_its_key_goes_to_the_clipboard(subscribed, tmp_path, mo
     text = said(result)
     # Said before the gate; after it, a "!" row, not a ✓ that reads as done, and the steps come
     # last, after the test and before Next, with the key off the screen.
-    assert "then you add your key in Zed, which keeps keys in its own keychain" in text
-    assert "! Zed added, one step left: see below" in text
+    assert "then you add your key in Zed: it keeps keys in the OS keychain" in text
+    assert "! Zed added, needs your key: see below" in text
     assert "✓ Zed" not in result.output
     steps = text[text.index("API test passed") :]
     assert "! Zed needs your key" in steps
     assert 'run "agent: open settings".' in steps
-    assert "2. Under LLM Providers, find Jarvislabs and paste your key; it's on your clipboard." in steps
+    assert (
+        "2. Under LLM Providers, select Jarvislabs, paste your key (it's on your clipboard) and press Enter." in steps
+    )
     assert "Zed's guide: https://zed.dev/docs/ai/use-api-access#api-keys" in steps
     assert "3. Pick a Jarvislabs model in Zed's agent panel and send a message to check." in steps
     # Zed isn't ready until it has the key, so the ending says so.
-    assert "Next: zed . start Zed once it has your key" in text
+    assert "Next: zed . start Zed once you've added its key" in text
     assert "jlsk-new-secret" not in result.output
 
 
@@ -2676,9 +2678,10 @@ def test_zed_shows_the_key_when_there_is_no_clipboard(subscribed, tmp_path, monk
     result = runner.invoke(app, ["connect", "zed", "--yes"])
 
     assert result.exit_code == 0, result.output
-    assert "2. Under LLM Providers, find Jarvislabs and paste your key, shown below." in said(result)
-    # On a line of its own, easy to select.
-    assert any(line.strip() == "jlsk-new-secret" for line in result.output.splitlines())
+    assert "2. Under LLM Providers, select Jarvislabs, paste your key (shown here) and press Enter." in said(result)
+    # On a line of its own, right under the step that pastes it, easy to select.
+    lines = [line.strip() for line in result.output.splitlines()]
+    assert lines[lines.index("jlsk-new-secret") + 1].startswith("3. ")
 
 
 def test_reconnecting_zed_still_shows_how_to_add_the_key(subscribed, tmp_path, monkeypatch):
@@ -2691,10 +2694,11 @@ def test_reconnecting_zed_still_shows_how_to_add_the_key(subscribed, tmp_path, m
     assert result.exit_code == 0, result.output
     # jl can't see Zed's keychain, so it never assumes the key was pasted: the steps come back,
     # worded for a key that may already be there.
-    assert "! Zed updated, check your key: see below" in said(result)
+    assert "! Zed updated, check its key: see below" in said(result)
     # jl can't see Zed's keychain, so it says so rather than assuming either way.
-    assert "! Zed may need your key: jl can't see whether you added it" in said(result)
-    assert "find Jarvislabs and paste your key" in said(result)
+    assert "! Zed may already have your key: jl can't see the OS keychain" in said(result)
+    # The paste is conditional: the key may already be there.
+    assert "select Jarvislabs, paste your key if none is there" in said(result)
     assert "✓ Zed" not in result.output
 
 
@@ -2710,7 +2714,9 @@ def test_a_new_key_tells_zed_users_to_paste_it(subscribed, opencode_config, tmp_
     # The refresh rewrote OpenCode's file; Zed's keychain is the user's to update.
     # The old key is revoked; jl can't see whether Zed ever had it, so it says "if".
     assert "! Your old key is revoked: if you added it to Zed, replace it" in said(result)
-    assert "find Jarvislabs and replace the key there with your new one; it's on your clipboard." in said(result)
+    assert "select Jarvislabs, replace its key with your new one (it's on your clipboard) and press Enter." in said(
+        result
+    )
     assert "updated 0 tools" not in said(result)
 
 
@@ -2744,7 +2750,7 @@ def test_disconnecting_zed_says_the_key_stays_in_zed(subscribed, tmp_path, monke
     # jl created the file, so it goes with jl's entries.
     assert not (tmp_path / "zed" / "settings.json").exists()
     # jl can't see Zed's keychain, so it says what holds either way.
-    expected = "if you added a key to Zed, it stays in your OS keychain, and no longer works"
+    expected = "if you added a key to Zed, it stays in the OS keychain but no longer works"
     assert expected in said(result)
 
 
@@ -2781,7 +2787,7 @@ def test_zed_next_step_names_zed_as_waiting_for_its_key(subscribed, opencode_con
     assert result.exit_code == 0, result.output
     # Every tool is in the ending, which says which one still waits for its key; the steps come
     # last before it, so a user reading from the bottom finds them.
-    assert "Next: opencode or zed . start a tool in your project folder; Zed once it has your key" in said(result)
+    assert "Next: opencode or zed . start a tool in your project folder; Zed once you've added its key" in said(result)
     assert said(result).index("Add another tool") < said(result).index("! Zed needs your key")
 
 
