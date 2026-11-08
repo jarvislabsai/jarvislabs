@@ -258,18 +258,12 @@ def connect(
         verb = "update" if changes == {"update"} else "set up" if "update" in changes else "add"
         many = not all(plan.harness.one_model for plan in plans)
         shared = f"{len(models)} models, default {default}" if many else f"default {default}"
-        # A tool that keeps its key where jl can't write it says so before the gate, not only after.
-        rows = [_row(plan) for plan in plans]
+        # A tool that keeps its key where jl can't write it says so before the gate, in yellow.
         rows = [
-            dataclasses.replace(
-                row,
-                note="\n".join(
-                    filter(None, [row.note, f"then you add the key in {plan.harness.name} yourself: jl shows how"])
-                ),
-            )
+            dataclasses.replace(row, warning=f"then you add your key in {plan.harness.name}: jl shows how")
             if plan.harness.key_by_hand
             else row
-            for row, plan in zip(rows, plans, strict=True)
+            for row, plan in ((_row(plan), plan) for plan in plans)
         ]
         render.change_rows(rows, f"jl will {verb} the Jarvislabs provider", shared)
     if dry_run:
@@ -295,6 +289,8 @@ def connect(
         plans = [plan_connect(plan.harness, setup) for plan in plans]
 
     connected = []
+    # Tools that still need the user to put the key in by hand, and why: "add", "check" or "replace".
+    pending: list[tuple[Harness, str]] = []
     width = max((len(plan.harness.name) for plan in plans), default=0)
     for plan in plans:
         harness = plan.harness
@@ -318,40 +314,56 @@ def connect(
         if harness.note:
             notes.append(harness.note.format(model=default))
         if harness.key_by_hand:
-            # Not a ✓: the tool works only once the user adds the key, and jl can't see whether the
-            # key is already there (it lives in the app's keychain), so every connect says how.
-            notes.insert(0, _key_steps(harness, connection.token))
-            if previous is None or new_key:
-                detail = f"{label}, one step left: add your key in {harness.name}"
-            else:
-                detail = f"{label}: add your key in {harness.name} if it isn't there yet"
-            row = render.Row("todo", harness.name, detail)
-            render.change_row(dataclasses.replace(row, note="\n".join(notes)), width, render.console)
+            # Not a ✓: the tool works only once the user adds the key. jl can't see whether it is
+            # already there (it lives in the app's keychain), so every connect says how, below.
+            fresh = previous is None or new_key
+            pending.append((harness, "add" if fresh else "check"))
+            step = "one step left" if fresh else "check your key"
+            row = render.Row("todo", harness.name, f"{label}, {step}: see below", note="\n".join(notes))
+            render.change_row(row, width, render.console)
             continue
         render.change_row(render.Row("ok", harness.name, label, note="\n".join(notes)), width, render.console)
     if new_key:
         # The old key is revoked: every connected harness still holding it gets the new one.
         refreshed = refresh_connected()
-        # A refresh can't reach a key jl doesn't write: the user pastes the new one.
-        for harness in HARNESSES:
-            if harness.key_by_hand and harness.id in connection.harnesses and harness not in connected:
-                render.warning(f"{harness.name} still holds the old key", _key_steps(harness, connection.token))
+        # A refresh can't reach a key jl doesn't write: the user replaces the revoked one.
+        pending += [
+            (harness, "replace")
+            for harness in HARNESSES
+            if harness.key_by_hand and harness.id in connection.harnesses and harness not in connected
+        ]
         if rotate_key:
             updated = len(connected) + refreshed
-            render.success(f"Replaced this machine's key; updated {updated} tool{'' if updated == 1 else 's'}.")
+            files = f"; updated {updated} tool{'' if updated == 1 else 's'}" if updated else ""
+            render.success(f"Replaced this machine's key{files}.")
     if plans and not connected:
         if new_key and not connection.harnesses:
             # Made for this run, and no harness holds it.
             _revoke_unused_key(client, connection)
         raise typer.Exit(1)
     _test_request(connection.token, default)
+    # Last before Next, so a user skimming a long connect ends on the one thing left to do.
+    for harness, reason in pending:
+        headline = {
+            "add": f"{harness.name} needs your key",
+            "check": f"{harness.name} needs your key, if it isn't there yet",
+            "replace": f"{harness.name} has the revoked key: its requests fail until you replace it",
+        }[reason]
+        render.console.print()
+        render.warning(headline, _key_steps(harness, connection.token, replace=reason == "replace"))
     if connected:
         # Under curl | sh, this window's PATH predates jl's folder, so jl runs only in a new terminal.
         if os.environ.get("JL_FROM_INSTALLER"):
             render.hint_line("Add another tool later: open a new terminal, then run `jl connect`")
         else:
             render.hint_line("Add another tool: `jl connect`")
-        render.next_step("start a tool in your project folder:", [_start_command(h) for h in connected])
+        # A tool waiting for its key isn't ready to start: it joins Next only when nothing else is.
+        waiting = {harness.id for harness, _ in pending}
+        ready = [h for h in connected if h.id not in waiting]
+        if ready:
+            render.next_step("start a tool in your project folder:", [_start_command(h) for h in ready])
+        else:
+            render.next_step("start it once it has your key:", [_start_command(h) for h in connected])
 
 
 @app.command(rich_help_panel="Coding plan")
@@ -575,8 +587,9 @@ def _disconnect(
         )
     hints += [f"your config from before jl is still at {render.short_path(backup)}" for backup in backups]
     if harness.key_by_hand:
-        # jl never wrote that key, so it can't take it out; revoked, it no longer works anyway.
-        hints.append(f"the key stays in {harness.name}'s LLM Providers settings until you remove it there")
+        # jl never wrote that key and can't see it; say what holds either way.
+        dead = ", though it no longer works" if revoked else ""
+        hints.append(f"a key you pasted into {harness.name} stays in its keychain{dead}: remove it in its settings")
     if spaced:
         render.console.print()
     render.success(f"{harness.name} disconnected", "\n".join(hints))
@@ -652,15 +665,24 @@ def _start_command(harness: Harness) -> str:
     return shlex.join(harness.launch)
 
 
-def _key_steps(harness: Harness, key: str) -> str:
-    """Return the numbered steps that add the key to a harness jl can't write it into, and its guide.
+def _key_steps(harness: Harness, key: str, *, replace: bool = False) -> str:
+    """Return the numbered steps that put the key into a harness jl can't write it into, and its guide.
 
     The key goes to the clipboard, so it never lands in the terminal's scrollback; where there is
-    no clipboard to use (Linux without one, or over SSH), it is shown instead.
+    no clipboard to use (Linux without one, or over SSH), it is shown on a line of its own, easy
+    to select. ``replace`` words the paste for a revoked key already in the app.
     """
-    paste = "paste your key; it's on your clipboard." if _copy_to_clipboard(key) else f"paste your key: {key}"
-    palette = "Cmd-Shift-P" if sys.platform == "darwin" else "Ctrl-Shift-P"
+    copied = _copy_to_clipboard(key)
+    action = "replace the key there with your new one" if replace else "paste your key"
+    paste = f"{action}; it's on your clipboard." if copied else f"{action}, shown below."
+    # Over SSH, this machine's OS isn't the one the user's Zed runs on.
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        palette = "Cmd-Shift-P on a Mac, Ctrl-Shift-P elsewhere"
+    else:
+        palette = "Cmd-Shift-P" if sys.platform == "darwin" else "Ctrl-Shift-P"
     steps = [f"{i}. {step.format(palette=palette, paste=paste)}" for i, step in enumerate(harness.key_by_hand, 1)]
+    if not copied:
+        steps.append(f"   {key}")
     if harness.docs_url:
         steps.append(f"{harness.name}'s guide: {harness.docs_url}")
     return "\n".join(steps)
