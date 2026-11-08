@@ -2664,7 +2664,7 @@ def test_zed_shows_the_key_when_there_is_no_clipboard(subscribed, tmp_path, monk
     assert "2. Under LLM Providers, find Jarvislabs and paste your key: jlsk-new-secret" in said(result)
 
 
-def test_reconnecting_zed_with_the_same_key_asks_for_nothing(subscribed, tmp_path, monkeypatch):
+def test_reconnecting_zed_still_shows_how_to_add_the_key(subscribed, tmp_path, monkeypatch):
     zed_installed(tmp_path)
     monkeypatch.setattr(connect, "_copy_to_clipboard", lambda text: True)
     runner.invoke(app, ["connect", "zed", "--yes"])
@@ -2672,10 +2672,11 @@ def test_reconnecting_zed_with_the_same_key_asks_for_nothing(subscribed, tmp_pat
     result = runner.invoke(app, ["connect", "zed", "--yes", "--model", "glm-5.3"])
 
     assert result.exit_code == 0, result.output
-    # Zed already holds this key.
-    assert "one step left" not in result.output
-    assert "paste your key" not in result.output
-    assert "✓ Zed" in result.output
+    # jl can't see Zed's keychain, so it never assumes the key was pasted: the steps come back,
+    # worded for a key that may already be there.
+    assert "! Zed updated: add your key in Zed if it isn't there yet" in said(result)
+    assert "find Jarvislabs and paste your key" in said(result)
+    assert "✓ Zed" not in result.output
 
 
 def test_a_new_key_tells_zed_users_to_paste_it(subscribed, opencode_config, tmp_path, monkeypatch):

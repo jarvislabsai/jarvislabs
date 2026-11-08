@@ -267,7 +267,7 @@ def connect(
                     filter(None, [row.note, f"then you add the key in {plan.harness.name} yourself: jl shows how"])
                 ),
             )
-            if _needs_key_by_hand(plan.harness, saved, rotate_key)
+            if plan.harness.key_by_hand
             else row
             for row, plan in zip(rows, plans, strict=True)
         ]
@@ -317,10 +317,15 @@ def connect(
         notes = [f"your old config is at {', '.join(render.short_path(b) for b in backups)}"] if backups else []
         if harness.note:
             notes.append(harness.note.format(model=default))
-        if harness.key_by_hand and (previous is None or new_key):
-            # Not a ✓: the tool works only once the user adds the key, so the row says so.
+        if harness.key_by_hand:
+            # Not a ✓: the tool works only once the user adds the key, and jl can't see whether the
+            # key is already there (it lives in the app's keychain), so every connect says how.
             notes.insert(0, _key_steps(harness, connection.token))
-            row = render.Row("todo", harness.name, f"{label}, one step left: add your key in {harness.name}")
+            if previous is None or new_key:
+                detail = f"{label}, one step left: add your key in {harness.name}"
+            else:
+                detail = f"{label}: add your key in {harness.name} if it isn't there yet"
+            row = render.Row("todo", harness.name, detail)
             render.change_row(dataclasses.replace(row, note="\n".join(notes)), width, render.console)
             continue
         render.change_row(render.Row("ok", harness.name, label, note="\n".join(notes)), width, render.console)
@@ -645,13 +650,6 @@ def _start_command(harness: Harness) -> str:
     if harness.apps and not launchable(harness):
         return f"open {harness.name}"
     return shlex.join(harness.launch)
-
-
-def _needs_key_by_hand(harness: Harness, saved: Connection | None, rotate_key: bool) -> bool:
-    """Return whether this run leaves a harness waiting for its key to be pasted by hand."""
-    if not harness.key_by_hand:
-        return False
-    return rotate_key or saved is None or harness.id not in saved.harnesses
 
 
 def _key_steps(harness: Harness, key: str) -> str:
