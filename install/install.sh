@@ -10,6 +10,13 @@
 
 set -eu
 
+# What a new terminal still needs when uv couldn't put jl's folder in the shell profile: the export,
+# and the profile to put it in.
+show_path_warning() {
+    echo "! Add jl's folder to your PATH, then open a new terminal (add it to ~/.zshrc or ~/.bashrc):"
+    echo "    export PATH=\"$bin:\$PATH\""
+}
+
 # Everything runs from main, called on the last line, so a download cut short runs nothing.
 main() {
     spec="${JL_INSTALL_SPEC:-jarvislabs}"
@@ -48,10 +55,11 @@ main() {
     fi
     bin="$resolved"
     if uv tool update-shell >/dev/null 2>&1; then
-        next_step="jl is installed. Open a new terminal, then:"
+        next_step="Open a new terminal, then:"
+        path_warning=""
     else
-        # Say it now: when setup and connect run, this is the only PATH message left before them.
-        echo "Add $bin to your PATH to run jl from a new terminal."
+        # Said once, last, where it can be copied: printed now, setup and connect would scroll it away.
+        path_warning=1
         next_step=""
     fi
     PATH="$bin:$PATH"
@@ -69,18 +77,29 @@ main() {
     if [ "$status" -eq 130 ]; then
         return "$status"
     fi
-    # When setup and connect ran, the product's own Next: is the ending. The closing lines are for a
-    # skipped or failed setup, so the user still knows how to come back.
-    if [ "$setup_done" -eq 0 ]; then
-        case "$start_path" in
-            # Nothing to say about PATH: typing jl in this window already finds it.
-            *":$bin:"*) next_step="jl is installed. Next:" ;;
-        esac
-        if [ -n "$next_step" ]; then
-            echo "$next_step"
+    # With setup and connect done, jl's own Next: is the ending; jl connect says to open a new terminal
+    # itself. When uv couldn't add jl's folder to the shell profile, that export is the one thing a new
+    # terminal still needs, so it goes last, where it can be copied. The closing block below is for a
+    # skipped or failed setup, so the user can come back.
+    if [ "$setup_done" -eq 1 ]; then
+        if [ -n "$path_warning" ]; then
+            echo
+            show_path_warning
         fi
-        echo "  jl setup     sign in and install agent skills"
-        echo "  jl status    see your coding tools"
+        return "$status"
+    fi
+    case "$start_path" in
+        # Nothing to say about PATH: typing jl in this window already finds it.
+        *":$bin:"*) next_step="Next:" ;;
+    esac
+    if [ -n "$next_step" ]; then
+        echo "$next_step"
+    fi
+    echo "  jl setup     sign in and install agent skills"
+    echo "  jl connect   add Jarvislabs models to your coding tools"
+    if [ -n "$path_warning" ]; then
+        echo
+        show_path_warning
     fi
     return "$status"
 }

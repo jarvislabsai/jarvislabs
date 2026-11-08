@@ -11,9 +11,9 @@
 
 # What to run later, printed last so it's what the window ends on.
 function Show-JlNext {
-    Write-Host 'jl is installed. Next:'
+    Write-Host 'Next:'
     Write-Host '  jl setup     sign in and install agent skills'
-    Write-Host '  jl status    see your coding tools'
+    Write-Host '  jl connect   add Jarvislabs models to your coding tools'
 }
 
 function Install-Jl {
@@ -37,7 +37,9 @@ function Install-Jl {
 
     Write-Host 'Installing jl...'
     $installLog = New-TemporaryFile
-    uv tool install --upgrade $spec *> $installLog
+    # Windows PowerShell 5.1 turns a native program's stderr lines into errors, and 'Stop' would end
+    # the install on uv's first progress line; the exit code still reports a real failure.
+    & { $ErrorActionPreference = 'Continue'; uv tool install --upgrade $spec *> $installLog }
     if ($LASTEXITCODE) {
         Get-Content $installLog
         Remove-Item $installLog
@@ -46,9 +48,15 @@ function Install-Jl {
     if ($env:JL_VERBOSE) { Get-Content $installLog }
     Remove-Item $installLog
     Write-Host 'jl installed.'
-    $bin = (Resolve-Path (uv tool dir --bin)).Path
-    uv tool update-shell *> $null
-    if ($LASTEXITCODE) { Write-Host "Add $bin to your PATH." }
+    $bin = uv tool dir --bin
+    if (-not (Test-Path $bin)) {
+        throw "uv reported a bin folder that doesn't exist: $bin. Installing jl failed."
+    }
+    $bin = (Resolve-Path $bin).Path
+    & { $ErrorActionPreference = 'Continue'; uv tool update-shell *> $null }
+    if ($LASTEXITCODE) {
+        Write-Host "! Add $bin to your PATH (Settings > System > About > Advanced system settings > Environment Variables), then open a new terminal."
+    }
     # irm | iex runs in the user's session, so jl also runs in this window, unlike after install.sh.
     $env:Path = "$bin;$env:Path"
     # An older jl earlier on the PATH would run in a new terminal instead of the one just installed.

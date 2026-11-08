@@ -62,9 +62,9 @@ def test_install_ps1_says_what_to_run_next():
 
     assert (
         "function Show-JlNext {\n"
-        "    Write-Host 'jl is installed. Next:'\n"
+        "    Write-Host 'Next:'\n"
         "    Write-Host '  jl setup     sign in and install agent skills'\n"
-        "    Write-Host '  jl status    see your coding tools'\n"
+        "    Write-Host '  jl connect   add Jarvislabs models to your coding tools'\n"
         "}\n"
     ) in ps1
     # On every path that installed jl, including the one that skips setup.
@@ -129,7 +129,18 @@ SHELLS = [shell for shell in ("/bin/dash", "/bin/bash") if Path(shell).exists()]
 posix_only = pytest.mark.skipif(sys.platform == "win32", reason="install.sh is for macOS and Linux")
 
 # What the installer ends on, so a new user knows what jl can do next.
-NEXT_STEPS = ["  jl setup     sign in and install agent skills", "  jl status    see your coding tools"]
+NEXT_STEPS = [
+    "  jl setup     sign in and install agent skills",
+    "  jl connect   add Jarvislabs models to your coding tools",
+]
+
+
+def path_warning(jl_bin: str) -> list[str]:
+    """Return what install.sh prints when uv couldn't add jl's folder to the shell profile."""
+    return [
+        "! Add jl's folder to your PATH, then open a new terminal (add it to ~/.zshrc or ~/.bashrc):",
+        f'    export PATH="{jl_bin}:$PATH"',
+    ]
 
 
 @posix_only
@@ -141,8 +152,30 @@ def test_a_finished_install_does_not_add_a_second_next_step(tmp_path):
     assert code == 0
     # jl connect's own Next: is the ending; the installer does not print another block after it.
     assert output.splitlines()[-1] == "jl connect ran"
-    assert "jl is installed. Next:" not in output
-    assert "jl status    see your coding tools" not in output
+    assert "\nNext:\n" not in output
+    assert "jl connect   add Jarvislabs models to your coding tools" not in output
+
+
+@posix_only
+def test_a_finished_install_ends_on_jl_connects_output(tmp_path):
+    script, env = fake_install(tmp_path, 'echo "jl $1 ran"\n')
+
+    output, code = run_in_a_terminal(["/bin/sh", *script], env)
+
+    assert code == 0
+    # jl connect tells the user to open a new terminal itself, so the installer prints nothing after it.
+    assert output.splitlines()[-1] == "jl connect ran"
+
+
+@posix_only
+def test_a_finished_install_ends_on_jl_connects_output_when_jls_folder_is_already_on_the_path(tmp_path):
+    script, env = fake_install(tmp_path, 'echo "jl $1 ran"\n')
+    env["PATH"] = env["JL_BIN"] + ":" + env["PATH"]
+
+    output, code = run_in_a_terminal(["/bin/sh", *script], env)
+
+    assert code == 0
+    assert output.splitlines()[-1] == "jl connect ran"
 
 
 @posix_only
@@ -180,13 +213,43 @@ def test_install_ps1_warns_about_another_jl_earlier_on_the_path():
 
     # Against the PATH the window started with, before jl's folder goes in front of it.
     assert "$startPath = $env:Path" in ps1
-    assert "(Resolve-Path (uv tool dir --bin)).Path" in ps1
+    assert "$bin = (Resolve-Path $bin).Path" in ps1
     assert "$env:Path = $startPath\n    $earlier = Get-Command jl -ErrorAction SilentlyContinue" in ps1
     assert (
         'Write-Host "Another jl at $($earlier.Source) comes first on your PATH: remove it, or open a new terminal."'
     ) in ps1
     # Before jl runs, so the warning is the first thing the user sees about it.
     assert ps1.index("$earlier = Get-Command jl") < ps1.index("$env:JL_SKIP_SETUP")
+
+
+def test_install_ps1_runs_uvs_native_calls_under_continue():
+    ps1 = (SCRIPTS / "install.ps1").read_text()
+
+    # Windows PowerShell 5.1 turns a native program's stderr into errors, and 'Stop' would end the
+    # install on uv's first progress line; each call lifts it for that call only.
+    assert "& { $ErrorActionPreference = 'Continue'; uv tool install --upgrade $spec *> $installLog }" in ps1
+    assert "& { $ErrorActionPreference = 'Continue'; uv tool update-shell *> $null }" in ps1
+
+
+def test_install_ps1_says_how_to_add_jls_folder_when_uv_cant():
+    ps1 = (SCRIPTS / "install.ps1").read_text()
+
+    # A marked warning naming the Windows dialog, so someone who has never set a PATH can follow it.
+    assert (
+        "if ($LASTEXITCODE) {\n"
+        '        Write-Host "! Add $bin to your PATH (Settings > System > About > Advanced system settings > '
+        'Environment Variables), then open a new terminal."\n'
+        "    }"
+    ) in ps1
+
+
+def test_install_ps1_says_when_uvs_bin_folder_is_missing():
+    ps1 = (SCRIPTS / "install.ps1").read_text()
+
+    # The same words as install.sh, so both installers fail the same way.
+    assert 'throw "uv reported a bin folder that doesn\'t exist: $bin. Installing jl failed."' in ps1
+    # Before resolving it, which throws PowerShell's own error for a missing folder.
+    assert ps1.index("if (-not (Test-Path $bin))") < ps1.index("$bin = (Resolve-Path $bin).Path")
 
 
 @posix_only
@@ -198,7 +261,8 @@ def test_the_installer_says_what_to_run_next_when_setup_is_skipped(tmp_path):
 
     assert code == 0
     assert "jl setup ran" not in output
-    assert output.splitlines()[-3:] == ["jl is installed. Open a new terminal, then:", *NEXT_STEPS]
+    # "✓ jl installed" already said it, so the closing line is only what to do.
+    assert output.splitlines()[-3:] == ["Open a new terminal, then:", *NEXT_STEPS]
 
 
 @posix_only
@@ -213,15 +277,40 @@ def test_the_installer_says_when_uvs_bin_folder_is_missing(tmp_path):
 
 
 @posix_only
-def test_the_installer_says_to_add_jls_folder_when_uv_cant(tmp_path):
+def test_the_installer_says_how_to_add_jls_folder_when_uv_cant(tmp_path):
     script, env = fake_install(tmp_path, 'echo "jl $1 ran"\n', update_shell=1)
 
     output, code = run_in_a_terminal(["/bin/sh", *script], env)
 
     assert code == 0
-    assert f"Add {env['JL_BIN']} to your PATH to run jl from a new terminal." in output
-    assert output.splitlines()[-1] == "jl connect ran"
-    assert "Open a new terminal, then:" not in output
+    # Once, after jl has run: printed before setup, it would scroll away before it could be copied.
+    warning = path_warning(env["JL_BIN"])[0]
+    assert output.count(warning) == 1
+    assert output.index(warning) > output.index("jl connect ran")
+
+
+@posix_only
+def test_a_finished_install_ends_on_the_path_warning_when_uv_cant(tmp_path):
+    script, env = fake_install(tmp_path, 'echo "jl $1 ran"\n', update_shell=1)
+
+    output, code = run_in_a_terminal(["/bin/sh", *script], env)
+
+    assert code == 0
+    # A new terminal reads the shell profile, so the export is the one thing left after jl's Next:.
+    assert output.splitlines()[-2:] == path_warning(env["JL_BIN"])
+
+
+@posix_only
+def test_a_skipped_setup_ends_on_the_path_warning_after_the_next_steps_when_uv_cant(tmp_path):
+    script, env = fake_install(tmp_path, 'echo "jl $1 ran"\n', update_shell=1)
+    env["JL_SKIP_SETUP"] = "1"
+
+    output, code = run_in_a_terminal(["/bin/sh", *script], env)
+
+    assert code == 0
+    lines = output.splitlines()
+    assert lines[-2:] == path_warning(env["JL_BIN"])
+    assert lines[-5:-3] == NEXT_STEPS
 
 
 @posix_only
@@ -264,5 +353,5 @@ def test_ctrl_c_at_a_jl_question_stops_the_installer(tmp_path, shell):
     assert "jl connect ran" not in output
     assert code == 130
     # Like install.ps1: no next steps after the user stopped it.
-    assert "jl is installed. Open a new terminal" not in output
+    assert "Open a new terminal, then:" not in output
     assert "  jl setup     sign in" not in output
