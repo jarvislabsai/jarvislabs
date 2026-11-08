@@ -1153,13 +1153,15 @@ def paths_label(paths: Sequence[Path]) -> str:
     return ", ".join(parts)
 
 
-Change = Literal["add", "update", "change", "remove", "ok"]
+Change = Literal["add", "update", "change", "remove", "ok", "todo"]
 # The mark and style of each kind of row; "ok" (done) takes its mark from MARKS.
 _CHANGES: dict[str, tuple[str, str]] = {
     "add": ("+", "green"),
     "update": ("~", "yellow"),
     "change": ("~", "yellow"),
     "remove": ("-", "red"),
+    # Written, but the user still has a step to take: not the ✓ of a finished row.
+    "todo": ("!", "yellow"),
 }
 _LEGEND = {"add": "+ add", "update": "~ update", "change": "~ change what is already there", "remove": "- remove"}
 
@@ -1212,7 +1214,7 @@ def change_row(row: Row, width: int, out: Console) -> None:
     """
     mark, style = (MARKS["ok"], "green") if row.change == "ok" else _CHANGES[row.change]
     prefix = Text.assemble((mark, style), " ", (row.name.ljust(width), "bold"), "  ")
-    _hang(prefix, Text(row.detail, "hint" if row.change != "ok" else ""), out)
+    _hang(prefix, Text(row.detail, "" if row.change in ("ok", "todo") else "hint"), out)
     indent = Text(" " * prefix.cell_len)
     for line, line_style in ((row.warning, "warning"), (row.note, "hint")):
         if line:

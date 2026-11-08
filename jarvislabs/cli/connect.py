@@ -262,7 +262,10 @@ def connect(
         rows = [_row(plan) for plan in plans]
         rows = [
             dataclasses.replace(
-                row, note="\n".join(filter(None, [row.note, f"you paste the key into {plan.harness.name} once, after"]))
+                row,
+                note="\n".join(
+                    filter(None, [row.note, f"then you add the key in {plan.harness.name} yourself: jl shows how"])
+                ),
             )
             if _needs_key_by_hand(plan.harness, saved, rotate_key)
             else row
@@ -315,7 +318,11 @@ def connect(
         if harness.note:
             notes.append(harness.note.format(model=default))
         if harness.key_by_hand and (previous is None or new_key):
-            notes.append(_key_step(harness, connection.token))
+            # Not a ✓: the tool works only once the user adds the key, so the row says so.
+            notes.insert(0, _key_steps(harness, connection.token))
+            row = render.Row("todo", harness.name, f"{label}, one step left: add your key in {harness.name}")
+            render.change_row(dataclasses.replace(row, note="\n".join(notes)), width, render.console)
+            continue
         render.change_row(render.Row("ok", harness.name, label, note="\n".join(notes)), width, render.console)
     if new_key:
         # The old key is revoked: every connected harness still holding it gets the new one.
@@ -323,7 +330,7 @@ def connect(
         # A refresh can't reach a key jl doesn't write: the user pastes the new one.
         for harness in HARNESSES:
             if harness.key_by_hand and harness.id in connection.harnesses and harness not in connected:
-                render.warning(f"{harness.name} still holds the old key", _key_step(harness, connection.token))
+                render.warning(f"{harness.name} still holds the old key", _key_steps(harness, connection.token))
         if rotate_key:
             updated = len(connected) + refreshed
             render.success(f"Replaced this machine's key; updated {updated} tool{'' if updated == 1 else 's'}.")
@@ -564,7 +571,7 @@ def _disconnect(
     hints += [f"your config from before jl is still at {render.short_path(backup)}" for backup in backups]
     if harness.key_by_hand:
         # jl never wrote that key, so it can't take it out; revoked, it no longer works anyway.
-        hints.append(f"the key stays in {harness.key_by_hand} until you remove it there")
+        hints.append(f"the key stays in {harness.name}'s LLM Providers settings until you remove it there")
     if spaced:
         render.console.print()
     render.success(f"{harness.name} disconnected", "\n".join(hints))
@@ -647,15 +654,18 @@ def _needs_key_by_hand(harness: Harness, saved: Connection | None, rotate_key: b
     return rotate_key or saved is None or harness.id not in saved.harnesses
 
 
-def _key_step(harness: Harness, key: str) -> str:
-    """Return the last step for a harness that keeps its key where jl can't write it.
+def _key_steps(harness: Harness, key: str) -> str:
+    """Return the numbered steps that add the key to a harness jl can't write it into, and its guide.
 
     The key goes to the clipboard, so it never lands in the terminal's scrollback; where there is
     no clipboard to use (Linux without one, or over SSH), it is shown instead.
     """
-    if _copy_to_clipboard(key):
-        return f"Last step: your key is on the clipboard. Paste it in {harness.key_by_hand}."
-    return f"Last step: in {harness.key_by_hand}, paste your key: {key}"
+    paste = "paste your key; it's on your clipboard." if _copy_to_clipboard(key) else f"paste your key: {key}"
+    palette = "Cmd-Shift-P" if sys.platform == "darwin" else "Ctrl-Shift-P"
+    steps = [f"{i}. {step.format(palette=palette, paste=paste)}" for i, step in enumerate(harness.key_by_hand, 1)]
+    if harness.docs_url:
+        steps.append(f"{harness.name}'s guide: {harness.docs_url}")
+    return "\n".join(steps)
 
 
 def _copy_to_clipboard(text: str) -> bool:

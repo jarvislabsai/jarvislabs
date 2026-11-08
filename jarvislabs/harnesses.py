@@ -139,8 +139,9 @@ class Harness:
             ``JL_PREVIEW_HARNESSES=1``; otherwise it is listed as coming soon.
         apps: Where the app lives when it has no command on PATH, such as a macOS app bundle;
             "~" and environment variables are expanded. Any one existing counts as installed.
-        key_by_hand: Where the user pastes the key, for a harness that keeps it in a store jl
-            doesn't write (Zed's keychain); None when jl writes the key with the config.
+        key_by_hand: The steps to add the key by hand, for a harness that keeps it in a store jl
+            doesn't write (Zed's keychain): "{palette}" stands for the OS's command-palette
+            shortcut and "{paste}" for how to paste the key. Empty when jl writes the key.
     """
 
     id: str
@@ -157,7 +158,7 @@ class Harness:
     min_version: str | None = None
     preview: bool = False
     apps: tuple[str, ...] = ()
-    key_by_hand: str | None = None
+    key_by_hand: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1902,8 +1903,13 @@ HARNESSES: tuple[Harness, ...] = (
             "~/.local/zed.app",
             "%LOCALAPPDATA%/Programs/Zed/Zed.exe",
         ),
-        # Zed keeps provider keys in the OS keychain, written by its own Agent settings.
-        key_by_hand="Zed > Agent settings > Jarvislabs",
+        # Zed keeps provider keys in the OS keychain, which only its own settings page writes.
+        # The steps follow Zed's guide, linked beside them.
+        key_by_hand=(
+            'In Zed, open the command palette ({palette}) and run "agent: open settings".',
+            "Under LLM Providers, find Jarvislabs and {paste}",
+        ),
+        docs_url="https://zed.dev/docs/ai/use-api-access#api-keys",
     ),
 )
 
