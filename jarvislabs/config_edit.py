@@ -146,9 +146,16 @@ def _edit_jsonc(text: str, set_values: Mapping[KeyPath, object], delete: Iterabl
     match = re.search(r"^([ \t]+)\S", text, re.MULTILINE)
     unit = match[1] if match else "  "
     for path, value in set_values.items():
-        _jsonc_set(model.value, path, value, unit)
+        if path:
+            _jsonc_set(model.value, path, value, unit)
+        else:
+            # The empty path is the whole file, for a file that is one list (VS Code's chatLanguageModels.json).
+            model.value = _jsonc_node(value, unit, 0)
     for path in delete:
-        _jsonc_delete(model.value, path)
+        if path:
+            _jsonc_delete(model.value, path)
+        else:
+            model.value = _jsonc_node([], unit, 0)
     return dumps(model, dumper=ModelDumper())  # type: ignore[arg-type]  # the stubs name only the plain dumper
 
 

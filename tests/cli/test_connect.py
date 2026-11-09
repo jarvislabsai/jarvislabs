@@ -454,9 +454,7 @@ def test_connect_list_says_print_only_only_where_print_works(server):
     result = runner.invoke(app, ["connect", "--list"])
 
     rows = {line.split()[0]: line for line in result.stdout.splitlines() if line.startswith("  ") and ":" not in line}
-    # VS Code Copilot has no writer, so --print would refuse it: coming soon, not print only.
     assert rows["zed"].endswith("connect")
-    assert rows["vscode-copilot"].endswith("coming soon")
     assert rows["opencode"].endswith("connect")
 
 
@@ -1279,9 +1277,8 @@ def test_a_changed_config_still_runs_the_flow(subscribed, opencode_config, termi
     [
         ("opencod", "Unknown tool opencod. See every tool ID: jl connect --list"),
         ("claude-code", "Claude Code is coming soon: see https://docs.jarvislabs.ai/models-api/harnesses/claude-code"),
-        ("vscode-copilot", "VS Code Copilot is coming soon: see https://"),
     ],
-    ids=["typo", "preview", "coming-soon"],
+    ids=["typo", "preview"],
 )
 def test_a_harness_jl_cant_connect_stops_before_any_server_call(server, name, message):
     result = runner.invoke(app, ["connect", name, "--yes"])
@@ -1323,7 +1320,8 @@ def test_status_lists_harnesses_and_their_connection(
 
 def test_status_lists_connected_tools_first_then_installed_then_the_rest(subscribed, opencode_config):
     runner.invoke(app, ["connect", "pi", "--yes"])
-    # Every CLI tool is on PATH (the server fixture); no VS Code extension is installed.
+    # Every CLI tool is on PATH (the server fixture), but not Zed or VS Code; no VS Code extension
+    # is installed.
 
     result = runner.invoke(app, ["status", "--all"])
 
@@ -1331,7 +1329,7 @@ def test_status_lists_connected_tools_first_then_installed_then_the_rest(subscri
     panel = result.output[result.output.index("Coding tools") :]
     rows = [re.split(r"\s{2,}", line.strip("│ ")) for line in panel.splitlines() if line.strip("│ ") and line[0] == "│"]
     states = [row[1] for row in rows]
-    assert states == ["connected", *["installed"] * 10, *["not installed"] * 3]
+    assert states == ["connected", *["installed"] * 10, *["not installed"] * 4]
 
 
 def test_a_partial_connect_table_is_a_clean_error(subscribed):

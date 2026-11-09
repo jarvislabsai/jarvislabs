@@ -8,6 +8,7 @@ import re
 import shutil
 import sys
 
+import json5
 import pytest
 
 try:
@@ -764,6 +765,129 @@ def test_zed_sets_each_models_output_limit(subscribed):
     # max_tokens is the context window; without max_output_tokens Zed sends no output ceiling
     # and the Models API cuts replies at 1024 tokens.
     assert [model["max_output_tokens"] for model in models] == [65536, 23000, 3276]
+
+
+def vscode_models_file(tmp_path):
+    """Put VS Code's code command on PATH, and return where Copilot reads Custom Endpoint models."""
+    for name in ("code", "code.cmd"):
+        (tmp_path / "installed-harnesses" / name).write_text("")
+        (tmp_path / "installed-harnesses" / name).chmod(0o755)
+    # HOME, APPDATA and XDG_CONFIG_HOME are all tmp_path (the server fixture).
+    if sys.platform == "darwin":
+        return tmp_path / "Library" / "Application Support" / "Code" / "User" / "chatLanguageModels.json"
+    return tmp_path / "Code" / "User" / "chatLanguageModels.json"
+
+
+# A group of the user's own, as VS Code writes it once they add Ollama.
+OLLAMA_GROUP = {"name": "Ollama", "vendor": "ollama", "url": "http://localhost:11434"}
+
+
+def test_vscode_copilot_gets_a_custom_endpoint_group_with_the_key_in_its_header(subscribed, tmp_path):
+    models_file = vscode_models_file(tmp_path)
+
+    result = runner.invoke(app, ["connect", "vscode-copilot", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    (group,) = read_json(models_file)
+    assert (group["name"], group["vendor"]) == ("Jarvislabs", "customendpoint")
+    # VS Code reads a group's apiKey only from its secret store, so the key rides in the header.
+    assert "apiKey" not in group
+    # A file that wasn't there is added, not "changed".
+    assert "+ VS Code Copilot" in result.output
+    deepseek, glm, gemma = group["models"]
+    assert deepseek == {
+        "id": "deepseek-v4.1-flash-1017",
+        "name": "DeepSeek V4.1 Flash",
+        "url": "https://models.jarvislabs.net/v1/chat/completions",
+        "toolCalling": True,
+        "vision": True,
+        # 1048576 window - 65536 output = 983040 for the prompt.
+        "maxInputTokens": 983040,
+        "maxOutputTokens": 65536,
+        # Without it the output limit isn't sent and the Models API cuts replies at 1024 tokens.
+        "thinking": True,
+        "requestHeaders": {"Authorization": "Bearer jlsk-new-secret"},
+    }
+    # GLM's catalog has no output limit: a tenth of its 230000 window.
+    assert (glm["maxInputTokens"], glm["maxOutputTokens"], glm["vision"]) == (207000, 23000, False)
+    assert gemma["toolCalling"] is False
+
+
+def test_vscode_copilot_keeps_the_users_other_model_groups(subscribed, tmp_path):
+    models_file = vscode_models_file(tmp_path)
+    models_file.parent.mkdir(parents=True)
+    models_file.write_text(json.dumps([OLLAMA_GROUP], indent="\t"))
+
+    result = runner.invoke(app, ["connect", "vscode-copilot", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert [(g["name"], g["vendor"]) for g in read_json(models_file)] == [
+        ("Ollama", "ollama"),
+        ("Jarvislabs", "customendpoint"),
+    ]
+
+
+def test_vscode_copilot_offers_each_models_own_efforts(subscribed, tmp_path):
+    subscribed.routes[("GET", "models")] = EFFORTS_CATALOG
+    models_file = vscode_models_file(tmp_path)
+
+    result = runner.invoke(app, ["connect", "vscode-copilot", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    deepseek, glm, gemma = read_json(models_file)[0]["models"]
+    # VS Code sends reasoning_effort only from this list; the Models API refuses any other.
+    assert deepseek["supportsReasoningEffort"] == ["low", "high", "max"]
+    assert glm["supportsReasoningEffort"] == ["medium"]
+    # No efforts: no effort picker, and no reasoning_effort sent.
+    assert "supportsReasoningEffort" not in gemma
+
+
+def test_vscode_copilot_starts_new_agents_window_sessions_on_the_chosen_model(subscribed, tmp_path):
+    settings = vscode_models_file(tmp_path).with_name("settings.json")
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{\n  // mine\n  "editor.fontSize": 14\n}\n')
+
+    result = runner.invoke(app, ["connect", "vscode-copilot", "--yes", "--model", "glm-5.3"])
+
+    assert result.exit_code == 0, result.output
+    text = settings.read_text()
+    # The Agents window names a Custom Endpoint model <vendor>/<group>/<id>.
+    assert json5.loads(text) == {"editor.fontSize": 14, "chat.defaultModel": "customendpoint/Jarvislabs/glm-5.3"}
+    assert "// mine" in text
+
+
+def test_status_reads_vscode_copilots_default_model_back(subscribed, tmp_path):
+    vscode_models_file(tmp_path)
+    runner.invoke(app, ["connect", "vscode-copilot", "--yes", "--model", "glm-5.3"])
+
+    assert harnesses.default_model(next(h for h in HARNESSES if h.id == "vscode-copilot")) == "glm-5.3"
+
+
+def test_disconnecting_vscode_copilot_leaves_the_users_other_groups(subscribed, tmp_path):
+    models_file = vscode_models_file(tmp_path)
+    models_file.parent.mkdir(parents=True)
+    models_file.write_text(json.dumps([OLLAMA_GROUP], indent="\t"))
+    subscribed.routes[("DELETE", "users/api_keys/key_1")] = {"success": True}
+    runner.invoke(app, ["connect", "vscode-copilot", "--yes"])
+
+    result = runner.invoke(app, ["disconnect", "vscode-copilot", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert read_json(models_file) == [OLLAMA_GROUP]
+
+
+def test_disconnecting_vscode_copilot_leaves_an_empty_list_in_a_file_it_found(subscribed, tmp_path):
+    models_file = vscode_models_file(tmp_path)
+    models_file.parent.mkdir(parents=True)
+    # VS Code creates the file as an empty list the first time its models editor opens.
+    models_file.write_text("[]")
+    subscribed.routes[("DELETE", "users/api_keys/key_1")] = {"success": True}
+    runner.invoke(app, ["connect", "vscode-copilot", "--yes"])
+
+    result = runner.invoke(app, ["disconnect", "vscode-copilot", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert read_json(models_file) == []
 
 
 def test_opencode_and_kilo_take_video_when_the_catalog_lists_it(subscribed, tmp_path):

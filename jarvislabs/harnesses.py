@@ -370,7 +370,9 @@ def plan_connect(harness: Harness, setup: Setup) -> Plan:
         except CONFIG_ERRORS as e:
             raise _unreadable(edit.path, e, "connect") from e
         writes.append(FileWrite(edit.path, new_text))
-        old = {path: value for path in edit.values if (value := _lookup(current, path)) is not _MISSING}
+        # The whole file (the empty path) is never a value of the user's that jl replaces: a missing
+        # file reads as {}, and jl keeps the user's entries in a file that is one list.
+        old = {path: value for path in edit.values if path and (value := _lookup(current, path)) is not _MISSING}
         hashes = {path: _hash(value) for path, value in edit.values.items() if path not in (*edit.keep, *edit.items)}
         parents = {_holder(current, path) for path in edit.values if path not in old} - {()}
         items = {path: tuple(_hash(item) for item in ours) for path, ours in edit.items.items()}
@@ -1625,6 +1627,54 @@ def _zed(setup: Setup) -> tuple[ConfigEdit, ...]:
     return (ConfigEdit(folder / "settings.json", "jsonc", values),)
 
 
+def _vscode_copilot(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Add a Jarvislabs Custom Endpoint group to the models file of Copilot in VS Code.
+
+    The file, chatLanguageModels.json in the default profile's folder, is a list of provider
+    groups; the user's other groups are kept. VS Code reads a group's apiKey only from its own
+    secret store, so the key goes in each model's Authorization header, which Custom Endpoint
+    sends in place of its own.
+    """
+    if sys.platform == "win32":
+        folder = Path(os.environ["APPDATA"]) / "Code" / "User"
+    elif sys.platform == "darwin":
+        folder = Path.home() / "Library" / "Application Support" / "Code" / "User"
+    else:
+        folder = _xdg_config_home() / "Code" / "User"
+    path = folder / "chatLanguageModels.json"
+    models = []
+    for model in setup.models:
+        context, output = _limits(model)
+        entry: dict[str, object] = {
+            "id": model.id,
+            "name": model.name or model.id,
+            "url": f"{setup.base_url}/chat/completions",
+            "toolCalling": bool(model.capabilities.tool_calling),
+            "vision": "image" in model.input_modalities,
+            # VS Code keeps the prompt under maxInputTokens, and the Models API refuses a prompt plus
+            # output limit over the window.
+            "maxInputTokens": context - output,
+            "maxOutputTokens": output,
+            # Without it, Custom Endpoint drops the output limit from the request and the Models API
+            # cuts replies at 1024 tokens; with it, the limit goes as max_completion_tokens.
+            "thinking": True,
+            "requestHeaders": {"Authorization": f"Bearer {setup.api_key}"},
+        }
+        if model.thinking.supported_efforts:
+            # VS Code shows these in its effort picker and sends only one of them.
+            entry["supportsReasoningEffort"] = model.thinking.supported_efforts
+        models.append(entry)
+    group = {"name": "Jarvislabs", "vendor": "customendpoint", "models": models}
+    edits = (ConfigEdit(path, "jsonc", {(): [*_others(path, (), "name", "Jarvislabs"), group]}, items={(): [group]}),)
+    if not setup.default_model:
+        return edits
+    # New conversations start on this model. The Agents window names our models
+    # customendpoint/Jarvislabs/<id>; the Chat view, which names them <id>, ignores a value it
+    # doesn't list and keeps its own pick.
+    default = {("chat.defaultModel",): f"customendpoint/Jarvislabs/{setup.default_model}"}
+    return (*edits, ConfigEdit(folder / "settings.json", "jsonc", default))
+
+
 def _goose(setup: Setup) -> tuple[ConfigEdit, ...]:
     folder = (
         Path(os.environ["APPDATA"]) / "Block" / "goose" / "config"
@@ -1918,6 +1968,23 @@ HARNESSES: tuple[Harness, ...] = (
         ),
         docs_url="https://zed.dev/docs/ai/use-api-access#api-keys",
     ),
+    Harness(
+        id="vscode-copilot",
+        name="VS Code Copilot",
+        kind="cli",
+        support="connect",
+        launch=("code", "."),
+        writer=_vscode_copilot,
+        install_url="https://code.visualstudio.com/download",
+        # Custom Endpoint, the provider jl writes, reached VS Code's stable builds in 1.122.0.
+        min_version="1.122.0",
+        # VS Code's code command is optional on macOS: the app alone is VS Code installed.
+        apps=(
+            "/Applications/Visual Studio Code.app",
+            "~/Applications/Visual Studio Code.app",
+            "%LOCALAPPDATA%/Programs/Microsoft VS Code/Code.exe",
+        ),
+    ),
 )
 
 # Each coming-soon harness's manual setup page is <HARNESS_DOCS_URL>/<id>.
@@ -1948,13 +2015,11 @@ def _coming_soon(
 
 
 # Claude Code and Codex wait for the Models API's Anthropic and Responses endpoints, so they are
-# preview-only until those are public. VS Code Copilot keeps the key in an app database (phase 2). Cursor isn't listed: its own key works only for its built-in
-# providers' standard, non-reasoning chat models, routed through Cursor's servers, with no base URL
-# setting to point it at another API.
+# preview-only until those are public. Cursor isn't listed: picking another provider's model needs
+# its Premium plan, and its Agent has sent an edit tool the Models API refuses.
 HARNESSES += (
     # Behind JL_PREVIEW_HARNESSES until /v1/messages and /v1/responses are public. Both hold one
     # model: the gateway name is passed as the model, not picked from a catalog in the file.
     _coming_soon("claude-code", "Claude Code", "cli", ("claude",), writer=_claude_code, preview=True, one_model=True),
     _coming_soon("codex", "Codex", "cli", ("codex",), writer=_codex, preview=True, one_model=True),
-    _coming_soon("vscode-copilot", "VS Code Copilot", "vscode", ("code", ".")),
 )
