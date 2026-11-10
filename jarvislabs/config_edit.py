@@ -56,6 +56,10 @@ def edit_config(
 
     Returns:
         The edited text.
+
+    Raises:
+        ValueError: For TOML text that sets a dotted key such as ``a.b = 1``, which
+            can't be edited without corrupting the file.
     """
     if fmt == "jsonc":
         return _edit_jsonc(text, set_values, delete)
@@ -100,6 +104,15 @@ def read_block(text: str) -> str | None:
 
 
 def _nest(path: KeyPath, value: object) -> object:
+    """Return value wrapped in one object per key of path, outermost key first.
+
+    Args:
+        path: The keys to wrap the value in.
+        value: The innermost value.
+
+    Returns:
+        A dict nested as path says holding value, or value itself for an empty path.
+    """
     for key in reversed(path):
         value = {key: value}
     return value
@@ -109,6 +122,15 @@ def _set_target(root: Any, path: KeyPath, value: object) -> tuple[Any, str, obje
     """Return the mapping, key and value to assign so that path holds value.
 
     The value is wrapped in objects for the parents the path is missing.
+
+    Args:
+        root: The parsed document, as a mapping.
+        path: The key path to set. Must not be empty.
+        value: The value the path should hold.
+
+    Returns:
+        A tuple of the mapping to assign into, the key to assign, and the value to assign
+        there: the value itself, or the value wrapped for the missing parents.
     """
     node = root
     for i, key in enumerate(path[:-1]):
@@ -123,6 +145,14 @@ def _delete_target(root: Any, path: KeyPath) -> tuple[Any, str] | None:
 
     Climbs to the highest parent that holds nothing but path, so parents the deletion
     would leave empty go with it.
+
+    Args:
+        root: The parsed document, as a mapping.
+        path: The key path to delete.
+
+    Returns:
+        A tuple of the mapping and the key to delete, or None when any key of the path
+        is missing.
     """
     chain = []
     node = root
@@ -142,6 +172,20 @@ def _delete_target(root: Any, path: KeyPath) -> tuple[Any, str] | None:
 
 
 def _edit_jsonc(text: str, set_values: Mapping[KeyPath, object], delete: Iterable[KeyPath]) -> str:
+    """Return the JSONC text with values set and deleted at key paths.
+
+    New lines are indented with the first indentation found in the text, or two spaces.
+    The empty key path is the whole file: setting it replaces the top-level value, and
+    deleting it replaces the top-level value with an empty list.
+
+    Args:
+        text: The file's current text; empty text is read as an empty object.
+        set_values: The value to write at each key path.
+        delete: The key paths to remove, applied after the sets.
+
+    Returns:
+        The edited text.
+    """
     model = loads(text if text.strip() else "{}\n", loader=ModelLoader())
     match = re.search(r"^([ \t]+)\S", text, re.MULTILINE)
     unit = match[1] if match else "  "
@@ -160,6 +204,12 @@ def _edit_jsonc(text: str, set_values: Mapping[KeyPath, object], delete: Iterabl
 
 
 def _jsonc_index(obj: JSONObject, key: str) -> int | None:
+    """Return the position of key among obj's keys, or None when obj has no such key.
+
+    Args:
+        obj: The JSON object node to search.
+        key: The key to find, whether the file quotes it or not.
+    """
     for i, k in enumerate(obj.keys):
         if getattr(k, "characters", getattr(k, "name", None)) == key:
             return i
@@ -167,19 +217,48 @@ def _jsonc_index(obj: JSONObject, key: str) -> int | None:
 
 
 def _jsonc_node(value: object, unit: str, depth: int) -> Any:
+    """Return a JSON model node holding value, laid out to sit depth levels deep.
+
+    Args:
+        value: The value to turn into a node.
+        unit: One level of indentation.
+        depth: How many levels deep the node sits in the file.
+
+    Returns:
+        The node, with double-quoted strings.
+    """
     # json-five's own value-to-node conversion writes single-quoted strings, which JSONC rejects.
     text = json.dumps(value, indent=unit).replace("\n", "\n" + unit * depth)
     return loads(text, loader=ModelLoader()).value
 
 
 def _split_closing(wsc: list[Any]) -> tuple[list[Any], list[Any]]:
-    """Split whitespace and comments into the comments and the whitespace that ends them."""
+    """Split whitespace and comments into the comments and the whitespace that ends them.
+
+    Args:
+        wsc: The whitespace strings and comment nodes that follow a node.
+
+    Returns:
+        A tuple of the comments, and a list holding the last item when it is whitespace
+        (empty otherwise).
+    """
     if wsc and isinstance(wsc[-1], str):
         return wsc[:-1], wsc[-1:]
     return wsc, []
 
 
 def _jsonc_set(obj: Any, path: KeyPath, value: object, unit: str) -> None:
+    """Set the value at path in a JSON object node, in place.
+
+    A missing key, with the objects nested under it, is appended to its parent. A value
+    that exists is replaced and keeps the whitespace and comments around it.
+
+    Args:
+        obj: The top-level object node.
+        path: The key path to set. Must not be empty.
+        value: The value to write there.
+        unit: One level of indentation.
+    """
     for depth, key in enumerate(path, start=1):
         j = _jsonc_index(obj, key)
         if j is None:
@@ -198,6 +277,13 @@ def _jsonc_insert(obj: JSONObject, key: str, value: object, unit: str, depth: in
 
     Comments after the old last pair stay where they were, so the new comma goes before
     them: '"a": 1 // note' becomes '"a": 1, // note' followed by the new pair.
+
+    Args:
+        obj: The object node to add to, changed in place.
+        key: The new key.
+        value: The new value.
+        unit: One level of indentation.
+        depth: How many levels deep obj's keys sit; 1 for the top-level object.
     """
     k = DoubleQuotedString(key, raw_value=json.dumps(key))
     new = _jsonc_node(value, unit, depth)
@@ -217,6 +303,15 @@ def _jsonc_insert(obj: JSONObject, key: str, value: object, unit: str, depth: in
 
 
 def _jsonc_delete(root: JSONObject, path: KeyPath) -> None:
+    """Delete the pair at path from a JSON object node, in place.
+
+    A parent object that the deletion leaves empty is removed with it. A missing path
+    does nothing. Comments next to the removed pair stay.
+
+    Args:
+        root: The top-level object node.
+        path: The key path to delete.
+    """
     chain = []
     obj: Any = root
     for key in path:
@@ -249,6 +344,19 @@ def _jsonc_delete(root: JSONObject, path: KeyPath) -> None:
 
 
 def _edit_toml(text: str, set_values: Mapping[KeyPath, object], delete: Iterable[KeyPath]) -> str:
+    """Return the TOML text with values set and deleted at key paths.
+
+    Args:
+        text: The file's current text.
+        set_values: The value to write at each key path.
+        delete: The key paths to remove, applied after the sets.
+
+    Returns:
+        The edited text.
+
+    Raises:
+        ValueError: When the text sets a dotted key such as ``a.b = 1``.
+    """
     doc = tomlkit.parse(text)
     # A dotted key (providers.jl.type = "x") makes tomlkit render later keys under the wrong
     # table once jl adds one. Refuse instead of corrupting the user's file.
@@ -268,6 +376,12 @@ def _toml_has_dotted_keys(text: str) -> bool:
 
     Read from the text, not the parsed document: tomlkit turns dotted keys into ordinary tables.
     A quoted key may hold a dot without being dotted, and a table header is not a key.
+
+    Args:
+        text: The TOML text.
+
+    Returns:
+        True when some line sets a dotted key.
     """
     in_multiline = False
     for line in text.splitlines():
@@ -286,11 +400,23 @@ def _toml_has_dotted_keys(text: str) -> bool:
 
 
 def _toml_body(item: Container | Table) -> list[tuple[Any, Any]]:
+    """Return the list of (key, item) entries that make up a TOML container or table.
+
+    Args:
+        item: The document, or a table.
+    """
     return item.body if isinstance(item, Container) else item.value.body
 
 
 def _toml_tail(table: Table) -> list[tuple[Any, Any]]:
-    """Return the body of the last table nested in table, which holds its trailing lines."""
+    """Return the body of the last table nested in table, which holds its trailing lines.
+
+    Args:
+        table: The table to look inside.
+
+    Returns:
+        The body of the innermost last table, or table's own body when it nests none.
+    """
     body = table.value.body
     items = [item for _, item in body if not isinstance(item, Null)]
     while items and isinstance(items[-1], Table):
@@ -300,6 +426,14 @@ def _toml_tail(table: Table) -> list[tuple[Any, Any]]:
 
 
 def _toml_pop_trailing(body: list[tuple[Any, Any]]) -> list[tuple[Any, Any]]:
+    """Remove the blank lines and comments that end a table body, and return them.
+
+    Args:
+        body: The body entries of a table, changed in place.
+
+    Returns:
+        The removed entries, in file order.
+    """
     trailing: list[tuple[Any, Any]] = []
     while body and body[-1][0] is None and isinstance(body[-1][1], (Whitespace, TomlComment, Null)):
         trailing.insert(0, body.pop())
@@ -307,6 +441,15 @@ def _toml_pop_trailing(body: list[tuple[Any, Any]]) -> list[tuple[Any, Any]]:
 
 
 def _toml_previous(container: Container | Table, key: str) -> Any:
+    """Return the item that comes just before key in the container's body.
+
+    Args:
+        container: The document, or a table.
+        key: The key to look for.
+
+    Returns:
+        The previous item, or None when key comes first.
+    """
     previous = None
     for k, item in _toml_body(container):
         if k is not None and k.key == key:
@@ -317,6 +460,17 @@ def _toml_previous(container: Container | Table, key: str) -> Any:
 
 
 def _toml_assign(container: Container | Table, key: str, value: object) -> None:
+    """Set key to value in the container, in place.
+
+    A new plain value goes after the last top-level key-value pair, above any tables.
+    A table that replaces another, or is added after one, takes over the blank lines and
+    comments that trailed the table before it, so they stay above the next header.
+
+    Args:
+        container: The document, or a table.
+        key: The key to set.
+        value: The value to write; a mapping becomes a table.
+    """
     old = container.get(key)
     if not isinstance(value, Mapping):
         last_pair = [k for k, item in _toml_body(container) if k is not None and not isinstance(item, (Table, AoT))]
@@ -346,6 +500,15 @@ def _toml_assign(container: Container | Table, key: str, value: object) -> None:
 
 
 def _toml_delete(container: Container | Table, key: str) -> None:
+    """Delete key from the container, in place.
+
+    When a table is deleted, the blank lines and comments that trailed it go to the table
+    before it, and a blank line left at the end of the file is dropped.
+
+    Args:
+        container: The document, or a table.
+        key: The key to delete; it must exist.
+    """
     item = container[key]
     previous = _toml_previous(container, key)
     if isinstance(item, Table) and isinstance(previous, Table):
@@ -380,6 +543,16 @@ def _toml_delete(container: Container | Table, key: str) -> None:
 
 
 def _edit_yaml(text: str, set_values: Mapping[KeyPath, object], delete: Iterable[KeyPath]) -> str:
+    """Return the YAML text with values set and deleted at key paths.
+
+    Args:
+        text: The file's current text; empty text is read as an empty mapping.
+        set_values: The value to write at each key path.
+        delete: The key paths to remove, applied after the sets.
+
+    Returns:
+        The edited text, indented as the file was.
+    """
     yaml = YAML()
     yaml.preserve_quotes = True
     doc, sequence, offset = load_yaml_guess_indent(text, yaml=yaml)
@@ -404,6 +577,14 @@ def _edit_yaml(text: str, set_values: Mapping[KeyPath, object], delete: Iterable
 
 
 def _yaml_mapping_indent(text: str) -> int:
+    """Return how many spaces the text indents a mapping inside a mapping.
+
+    Args:
+        text: The YAML text.
+
+    Returns:
+        The indent of the first nested mapping key, or 2 when there is none.
+    """
     parent = None
     for line in text.splitlines():
         content = line.lstrip(" ")
@@ -420,6 +601,14 @@ def _yaml_keep_comment_gap(yaml: YAML, lines: list[str], node: Any, key: str, va
     """Move the comment after key's value so its gap from the value stays the same.
 
     ruamel keeps the comment's column instead, which shifts it when the value's length changes.
+    Does nothing for a key with no end-of-line comment, a new key, or a mapping or list value.
+
+    Args:
+        yaml: The YAML instance that will dump the document.
+        lines: The original text's lines.
+        node: The mapping that holds key.
+        key: The key about to be set.
+        value: The value about to be set.
     """
     comment = node.ca.items.get(key, [None] * 3)[2] if isinstance(node, CommentedMap) else None
     if comment is None or key not in node or isinstance(value, (Mapping, list)):

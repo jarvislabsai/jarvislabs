@@ -82,7 +82,10 @@ class SubscriptionPlan(BaseModel):
 
 
 class SubscriptionPeriod(BaseModel):
-    """The paid period: its start, and when it renews, or ends when ``cancel_at_period_end``."""
+    """The paid period's start and when it renews.
+
+    ``renews_at`` is when the period ends instead when ``cancel_at_period_end`` is true.
+    """
 
     start: datetime
     renews_at: datetime
@@ -116,7 +119,7 @@ class UsageSlots(BaseModel):
 
 
 class SubscriptionUsage(BaseModel):
-    """The account's subscription and its usage, for the whole account whatever key asks.
+    """The account's subscription and usage, the same whichever key asks.
 
     ``use_balance`` is true when requests the plan doesn't cover are paid from the wallet.
     ``renewal_pending`` is true once ``renews_at`` has passed and the renewal payment hasn't arrived.
@@ -492,6 +495,17 @@ class ModelPricing(BaseModel):
 
 
 class ModelThinking(BaseModel):
+    """How a model's thinking is controlled.
+
+    Attributes:
+        supported: Whether the model can think.
+        supports_toggle: Whether a request can switch thinking on and off.
+        supported_efforts: The effort levels a request can choose.
+        default_effort: The effort applied when a request sends none, or None.
+        template_parameters: Keys to set in ``chat_template_kwargs``: "toggle" and/or
+            "effort", mapped to the model's parameter name.
+    """
+
     supported: bool = False
     supports_toggle: bool = False
     supported_efforts: list[str] = Field(default_factory=list)
@@ -508,6 +522,17 @@ class ModelCapabilities(BaseModel):
 
 
 class ModelInfo(BaseModel):
+    """One model in the Models API catalog.
+
+    Null fields in the API response take their defaults.
+
+    Attributes:
+        context_length: The model's context window in tokens, or None.
+        max_output_tokens: The most tokens the model writes in one reply, or None.
+        capabilities: What the model supports beyond plain chat.
+        pricing: The model's prices, or None when the API sends none.
+    """
+
     id: str
     name: str | None = None
     description: str | None = None

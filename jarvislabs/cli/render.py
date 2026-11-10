@@ -92,17 +92,28 @@ ACCENT_BOLD = theme.styles["accent"] + Style(bold=True)
 def link(url: str, text: str | None = None) -> Text:
     """Return a URL as a clickable, underlined accent link.
 
-    The underline is the signal where the terminal doesn't support OSC 8 links; where it does,
-    the whole thing is also clickable.
+    The underline shows where the terminal doesn't support OSC 8 links (clickable terminal
+    links); where it does, the text is also clickable.
+
+    Args:
+        url: The address the link points to.
+        text: The words to show instead of the URL. Defaults to the URL itself.
+
+    Returns:
+        The styled text.
     """
     return Text(text or url, style=theme.styles["accent"] + Style(underline=True, link=url))
 
 
 def choose_marks() -> dict[str, str]:
-    """Return the marks this console can draw: ASCII ones on a legacy Windows console or a non-UTF-8 stream.
+    """Return the set of marks (tick, cross, separator, bar block) this console can draw.
 
-    On Windows, only Windows Terminal (WT_SESSION) and VS Code (TERM_PROGRAM) count as drawing Unicode:
-    PowerShell's own console window has no font fallback.
+    The ASCII set is returned on a legacy Windows console or when stdout or stderr is not
+    UTF-8. On Windows, only Windows Terminal (WT_SESSION) and VS Code (TERM_PROGRAM) count as
+    drawing Unicode: PowerShell's own console window has no font fallback.
+
+    Returns:
+        UNICODE_MARKS or ASCII_MARKS.
     """
     legacy = sys.platform == "win32" and not (os.environ.get("WT_SESSION") or os.environ.get("TERM_PROGRAM"))
     encodings = [getattr(stream, "encoding", None) or "utf-8" for stream in (sys.stdout, sys.stderr)]
@@ -140,6 +151,16 @@ def print_json(data: list[BaseModel] | BaseModel | dict) -> None:
 
 
 def account_status(info, bal, metrics, sym: str) -> None:
+    """Print a panel with the account's name, ID, balance, grants and instance counts.
+
+    The balance is yellow when it is zero or less, and the paused count when it is above zero.
+
+    Args:
+        info: The user's info, with name and user_id.
+        bal: The account's balance, with balance and grants.
+        metrics: The account's resource metrics, with running_instances and paused_instances.
+        sym: The currency symbol put before each amount.
+    """
     from rich.panel import Panel
     from rich.text import Text
 
@@ -177,10 +198,16 @@ USAGE_BAR_WIDTH = 32
 
 
 def usage_bar(percent: float) -> Text:
-    """Return a bar like Claude Code's: blocks to the percentage, then blank space, no frame.
+    """Return a 32-character bar of blocks filled to a percentage, with no frame.
 
-    The percentage is printed at the bar's right edge by the caller, so an empty bar reads as
-    "nothing used" rather than as a track.
+    The rest of the bar is blank space. The bar turns yellow from 80 percent and red from 100.
+    The caller prints the percentage after it.
+
+    Args:
+        percent: The share used, 0 to 100. Values outside that range are clamped when drawing.
+
+    Returns:
+        The bar as styled text.
     """
     filled = max(0, min(USAGE_BAR_WIDTH, round(percent / 100 * USAGE_BAR_WIDTH)))
     style = "error" if percent >= 100 else "warning" if percent >= 80 else "default"
@@ -190,7 +217,10 @@ def usage_bar(percent: float) -> Text:
 
 
 def subscription_usage(usage: SubscriptionUsage | None) -> None:
-    """Print the plan, its renewal, each window's share used, and the plan-paid requests running now.
+    """Print a panel with the plan, its renewal and each window's share used.
+
+    The panel also shows the 5-hour, weekly and monthly windows with when each resets, the
+    requests running now against the limit, and whether the balance is used.
 
     Args:
         usage: The account's usage, or None to print "No subscription" with the subscribe link.
@@ -220,11 +250,12 @@ def subscription_usage(usage: SubscriptionUsage | None) -> None:
 
 
 def harness_status(rows: list[dict[str, Any]]) -> None:
-    """Print each harness's state: connected with its default model, config printed, installed, or not installed.
+    """Print a panel listing each coding tool and its state.
 
-    Connected harnesses come first, with a mark (a warning and the command that disconnects it when
-    it has been uninstalled since); an installed one gets the command that connects it, and one not
-    installed is dim, with the command that names where to get it.
+    A state is connected (with its default model), config printed, installed, or not installed.
+    Connected tools come first, with a mark; a connected tool that has since been uninstalled
+    gets a warning and the command that disconnects it. An installed tool gets the command that
+    connects it, and one not installed is dim, with the same command.
 
     Args:
         rows: One dict per harness, with the keys id, name, installed, connected, printed and default_model.
@@ -262,6 +293,11 @@ def harness_status(rows: list[dict[str, Any]]) -> None:
 
 
 def _utc(moment: datetime) -> str:
+    """Return a moment as "YYYY-MM-DD HH:MM UTC".
+
+    Args:
+        moment: A timezone-aware time, which is converted to UTC.
+    """
     return f"{moment.astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC"
 
 
@@ -755,6 +791,13 @@ def _prices(pricing) -> dict[str, str]:
 
 
 def models_table(models: list) -> None:
+    """Print a table of models with context length and prices per million tokens.
+
+    Ends with a "Next:" line pointing to `jl models get`.
+
+    Args:
+        models: The models to list.
+    """
     table = _table("Models · price per 1M tokens", show_lines=True)
     # Name above the ID in one column: a separate Name column gets squeezed out on narrow terminals.
     table.add_column("Model · ID", no_wrap=True)
@@ -1067,35 +1110,79 @@ def jsonable_cpu_meta(cpu_meta: dict) -> dict:
 
 
 def success(msg: str | Text, hint: str | None = None) -> None:
-    """Print a line that something is done, with an optional hint under it."""
+    """Print a line that something is done, with an optional hint under it.
+
+    Prints nothing in --json mode.
+
+    Args:
+        msg: The line. A plain string is shown in bold; a Text is shown as given.
+        hint: A line under it. Each `command` in backticks is shown in the accent, and each
+            line of a numbered list hangs under its text.
+    """
     _status(MARKS["ok"], "success", msg, hint)
 
 
 def error(msg: str | Text, hint: str | None = None) -> None:
-    """Print a line that something failed, with an optional hint under it saying what to do."""
+    """Print a line that something failed, with an optional hint under it.
+
+    Prints nothing in --json mode. To print an error and exit, use die().
+
+    Args:
+        msg: The line. A plain string is shown in red; a Text is shown as given.
+        hint: A line under it saying what to do. Each `command` in backticks is shown in the
+            accent, and each line of a numbered list hangs under its text.
+    """
     _status(MARKS["bad"], "error", msg, hint)
 
 
 def info(msg: str | Text) -> None:
+    """Print a plain line of information.
+
+    Prints nothing in --json mode.
+
+    Args:
+        msg: The line. A plain string is shown in the default colour; a Text is shown as given.
+    """
     if state.json_output:
         return
     console.print(msg if isinstance(msg, Text) else Text(msg, style="info"), highlight=False)
 
 
 def warning(msg: str | Text, hint: str | Text | None = None) -> None:
-    """Print a line that needs the user's attention, with an optional hint under it saying what to do."""
+    """Print a line that needs the user's attention, with an optional hint under it.
+
+    Prints nothing in --json mode.
+
+    Args:
+        msg: The line. A plain string is shown in yellow; a Text is shown as given.
+        hint: A line under it saying what to do. Text is shown as given; a string gets each
+            `command` in backticks in the accent, and each line of a numbered list hangs
+            under its text.
+    """
     _status("!", "warning", msg, hint)
 
 
 def hint_line(msg: str) -> None:
-    """Print a hint, indented two spaces, each `command` in it in the accent."""
+    """Print a hint, indented two spaces, with each `command` in backticks in the accent.
+
+    Prints nothing in --json mode. A long hint wraps under its first character.
+
+    Args:
+        msg: The hint. URLs in it are shown as links.
+    """
     if state.json_output:
         return
     _hang(Text("  "), _hint(msg), console)
 
 
 def rule(title: str = "") -> None:
-    """Print a blank line and a dim divider that opens a phase, with a bold title."""
+    """Print a blank line and a dim divider line with a bold title that opens a phase.
+
+    Prints nothing in --json mode.
+
+    Args:
+        title: The title at the left of the divider. With none, the divider has no title.
+    """
     if state.json_output:
         return
     console.print()
@@ -1103,7 +1190,14 @@ def rule(title: str = "") -> None:
 
 
 def heading(title: str, note: str = "") -> None:
-    """Print a blank line, then a bold heading that opens a phase, with an optional note after it."""
+    """Print a blank line, then a bold heading that opens a phase.
+
+    Prints nothing in --json mode.
+
+    Args:
+        title: The heading.
+        note: Text after the heading. It wraps under itself, not at the left edge.
+    """
     if state.json_output:
         return
     console.print()
@@ -1111,6 +1205,13 @@ def heading(title: str, note: str = "") -> None:
 
 
 def _headline(title: str, note: str, out: Console) -> None:
+    """Print a bold title, with the note after it on the same line when there is one.
+
+    Args:
+        title: The heading.
+        note: Text after the heading; empty for none.
+        out: The console to print to.
+    """
     # A note wraps under the title, not at the left edge.
     if note:
         _hang(Text.assemble((title, "bold"), "  "), Text(note, "hint"), out)
@@ -1119,7 +1220,10 @@ def _headline(title: str, note: str, out: Console) -> None:
 
 
 def next_step(text: str, commands: Sequence[str]) -> None:
-    """Print the line that ends a run: "Next:", what to do, then each command to type in the accent.
+    """Print the closing "Next:" line with the commands to type.
+
+    Prints a blank line, then "Next:" followed by the commands in the accent, then what to do in
+    dim text under them. Prints nothing in --json mode.
 
     Args:
         text: What to do, e.g. "start a tool in this folder:".
@@ -1139,7 +1243,14 @@ def next_step(text: str, commands: Sequence[str]) -> None:
 
 
 def short_path(path: Path) -> str:
-    """Return a path with the home folder shown as ~, with POSIX separators."""
+    """Return a path with the home folder shown as ~, with POSIX separators.
+
+    Args:
+        path: The path to show.
+
+    Returns:
+        "~/" and the path below the home folder, or the whole path when it isn't under it.
+    """
     try:
         return "~/" + path.relative_to(Path.home()).as_posix()
     except ValueError:
@@ -1147,7 +1258,17 @@ def short_path(path: Path) -> str:
 
 
 def paths_label(paths: Sequence[Path]) -> str:
-    """Return paths for a row: the first in full, and each next one by its name alone when in the same folder."""
+    """Return paths as one comma-separated label for a row.
+
+    The first path is shown with short_path(). Each later path is shown by its file name alone
+    when it is in the same folder as the path before it.
+
+    Args:
+        paths: The paths, in the order to show them.
+
+    Returns:
+        The label.
+    """
     parts = [
         path.name if i and path.parent == paths[i - 1].parent else short_path(path) for i, path in enumerate(paths)
     ]
@@ -1172,8 +1293,8 @@ class Row:
     """One tool's row in a list of changes: a mark, the tool, and what happens.
 
     Attributes:
-        change: "add", "update" (of jl's own entries), "change" (of the user's settings), "remove", or
-            "ok" for a change done.
+        change: "add", "update" (of jl's own entries), "change" (of the user's settings), "remove",
+            "ok" for a change done, or "todo" for a step the user still has to finish.
         name: The tool.
         detail: What the row says after the tool, such as the files it changes.
         warning: A yellow line under the detail: what the change replaces of the user's.
@@ -1188,7 +1309,9 @@ class Row:
 
 
 def change_rows(rows: Sequence[Row], title: str = "", note: str = "") -> None:
-    """Print rows of changes to stdout, aligned, after an optional heading and a legend of their marks.
+    """Print rows of changes to stdout, aligned, after an optional heading and legend.
+
+    The legend lists the marks the rows use.
 
     Args:
         rows: The rows.
@@ -1206,7 +1329,9 @@ def change_rows(rows: Sequence[Row], title: str = "", note: str = "") -> None:
 
 
 def change_row(row: Row, width: int, out: Console) -> None:
-    """Print one row of changes, its tool in a column ``width`` wide, and its lines under the detail.
+    """Print one row of changes: a mark, the tool name padded to a width, and the detail.
+
+    The row's warning and note, when set, print under the detail, indented to line up with it.
 
     Args:
         row: The row.
@@ -1223,6 +1348,18 @@ def change_row(row: Row, width: int, out: Console) -> None:
 
 
 def _status(mark: str, style: str, msg: str | Text, hint: str | Text | None) -> None:
+    """Print a mark and a message, then an optional hint under it.
+
+    Prints nothing in --json mode.
+
+    Args:
+        mark: The symbol that opens the line.
+        style: The theme style of the mark and, for a plain-string message, of the message.
+            A "success" message is shown in bold, not in the style.
+        msg: The message. A Text is shown as given.
+        hint: Lines under the message. A Text is shown as given; a string is split into
+            lines, each with its `command` parts in the accent.
+    """
     if state.json_output:
         return
     # Success is frequent and can be long: green belongs on the mark, not the paragraph. Warnings and
@@ -1241,6 +1378,14 @@ def _status(mark: str, style: str, msg: str | Text, hint: str | Text | None) -> 
 
 
 def _hint(text: str | Text) -> Text:
+    """Return hint text, with each `command` in backticks shown in the accent.
+
+    Args:
+        text: A string, or a Text, which is returned unchanged. The backticks are removed.
+
+    Returns:
+        The styled text, with URLs in it shown as links.
+    """
     if isinstance(text, Text):
         return text
     # Backticks mark a command to type: shown in the accent, without them.
@@ -1251,13 +1396,27 @@ def _hint(text: str | Text) -> Text:
 
 
 def _linked(text: Text) -> Text:
-    """Return text with each URL in it styled as a link, like every other URL jl prints."""
+    """Return text with each URL in it styled as a link, like every other URL jl prints.
+
+    Args:
+        text: The text. It is changed in place.
+
+    Returns:
+        The same text.
+    """
     for match in re.finditer(r"https?://\S+", text.plain):
         text.stylize(theme.styles["accent"] + Style(underline=True, link=match.group(0)), *match.span())
     return text
 
 
 def _hang(prefix: Text, body: Text, out: Console) -> None:
+    """Print a prefix and a body, wrapping the body under its own first character.
+
+    Args:
+        prefix: What opens the first line.
+        body: The text to wrap to the console's width.
+        out: The console to print to.
+    """
     # Wrapped lines of body hang under its first character, never under the prefix.
     indent = prefix.cell_len
     for i, line in enumerate(body.wrap(out, max(out.width - indent, 20))):
@@ -1270,12 +1429,25 @@ def _hang(prefix: Text, body: Text, out: Console) -> None:
 
 
 def confirm(msg: str, *, skip: bool = False, default: bool = False, optional: bool = False) -> bool:
-    """Ask for confirmation. Returns True if confirmed or skip=True (--yes flag).
+    """Ask a yes or no question on the terminal.
 
-    An empty answer gives ``default``. Ctrl-C exits with 130. In --json mode, or with no answer to
-    read (no terminal, and nothing left on stdin), a missing --yes is a hard error — never a silent
-    decline a script would read as success — except that an ``optional`` question, one whose
-    default leaves the command's own work done, then gives ``default``.
+    An empty answer gives ``default``. Ctrl-C exits with 130. In --json mode, or when there is
+    no answer to read (no terminal, and nothing left on stdin), a missing --yes is a hard
+    error rather than a silent decline that a script would read as success. An ``optional``
+    question gives ``default`` instead of the error when there is no answer to read.
+
+    Args:
+        msg: The question.
+        skip: True when --yes was given: nothing is asked, and the answer is yes.
+        default: The answer for an empty reply, shown as the capital letter in "Y/n".
+        optional: True when ``default`` is safe to use with no answer to read.
+
+    Returns:
+        True for yes, False for no.
+
+    Raises:
+        typer.Exit: With 130, on Ctrl-C.
+        SystemExit: Nothing can be asked and --yes wasn't given.
     """
     if skip:
         return True
@@ -1351,7 +1523,17 @@ def _status_style(status: str) -> str:
 
 
 def die(msg: str | Text, code: int = 1) -> NoReturn:
-    """Print error and exit. Emits JSON to stdout when --json is active."""
+    """Print an error and exit.
+
+    With --json, prints {"error": message} as JSON to stdout instead.
+
+    Args:
+        msg: The error. A Text is reduced to its plain string in JSON.
+        code: The exit status.
+
+    Raises:
+        SystemExit: Always, with ``code``.
+    """
     if state.json_output:
         print_json({"error": msg.plain if isinstance(msg, Text) else msg})
     else:
@@ -1500,9 +1682,24 @@ def answer(question: questionary.Question) -> Any:
 
 
 def select_row(message: str, headings: tuple[str, ...], rows: list, values: list) -> Any:
-    """Arrow-key picker shown as an aligned table; returns the chosen row's value. Ctrl+C exits with 130.
+    """Ask the user to pick one row of an aligned table with the arrow keys.
 
-    Rows are plain text: questionary highlights the row under the cursor only for plain-text titles.
+    Once a row is picked, the table is replaced by the question and the row's cells, one per
+    line. A row whose cells after the first are all empty is shown on the question's line.
+    Rows are plain text: questionary highlights the row under the cursor only for plain-text
+    titles. Dies when there are no rows.
+
+    Args:
+        message: The question.
+        headings: The column headings.
+        rows: One tuple of cell strings per choice, as many cells as headings.
+        values: The value to return for each row, in the same order as rows.
+
+    Returns:
+        The value of the chosen row.
+
+    Raises:
+        typer.Exit: With 130, on Ctrl-C.
     """
     if not rows:
         die("There is nothing to choose from.")

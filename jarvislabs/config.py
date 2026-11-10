@@ -86,13 +86,19 @@ def write_private(path: Path, data: bytes) -> None:
 
 
 def save_config(config: dict) -> None:
-    """Atomically write config dict to config.toml with 0o600 permissions."""
+    """Write the config dict to config.toml, readable only by its owner.
+
+    Replaces the whole file, through write_private.
+
+    Args:
+        config: The config's tables and values.
+    """
     write_private(config_path(), tomli_w.dumps(config).encode())
 
 
 @dataclass(frozen=True)
 class Written:
-    """What `jl connect` wrote to one config file, so `jl disconnect` can take out only that.
+    """What `jl connect` wrote to one config file, so `jl disconnect` removes only that.
 
     Attributes:
         fmt: The file's format: "jsonc", "toml", "yaml", or "block" for a file whose jl block
@@ -117,7 +123,7 @@ class Written:
 
 @dataclass(frozen=True)
 class Replaced:
-    """The values `jl connect` overwrote in one harness's config files, and their backups.
+    """The values `jl connect` overwrote in one harness's config files, and backups.
 
     Attributes:
         values: Per config file, each key path jl set that already held a value, and
@@ -157,10 +163,15 @@ class Connection:
 
 
 def load_connection() -> Connection | None:
-    """Return this machine's key and connected harnesses, from config.toml's [connect] table.
+    """Return this machine's saved key and connected harnesses.
+
+    Reads config.toml's [connect] table.
 
     Returns:
         The connection, or None when no key is saved.
+
+    Raises:
+        JarvislabsError: When the [connect] table is incomplete or malformed.
     """
     table = load_config().get("connect")
     if not table:
@@ -175,7 +186,20 @@ def load_connection() -> Connection | None:
 
 
 def _connection_from(table: dict) -> Connection:
-    """Build the connection from config.toml's [connect] table, or raise when the table is incomplete."""
+    """Build the connection from config.toml's [connect] table.
+
+    Args:
+        table: The [connect] table as loaded from config.toml.
+
+    Returns:
+        The connection, with each harness's record as a Replaced.
+
+    Raises:
+        KeyError: When the table or a record lacks a required key.
+        TypeError: When a value has the wrong type.
+        ValueError: When a value can't be parsed, or a record's paths and hashes differ in count.
+        AttributeError: When a value that should be a table is not one.
+    """
     harnesses = {}
     for harness_id, record in table.get("harnesses", {}).items():
         values: dict[Path, dict[tuple[str, ...], object]] = {}
@@ -206,7 +230,11 @@ def _connection_from(table: dict) -> Connection:
 
 
 def wallet_chosen() -> bool:
-    """Return whether this machine pays from the wallet: by its saved key, the last one it had, or the user's choice."""
+    """Return whether this machine pays for requests from the wallet.
+
+    True when the saved key is a "payg" key, when the last key it had was one, or when
+    the user chose the wallet.
+    """
     config = load_config()
     return config.get("connect", {}).get("kind") == "payg" or bool(config.get("pays_from_wallet"))
 

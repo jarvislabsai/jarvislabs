@@ -419,7 +419,17 @@ def disconnect(
 
 
 def _named_harness(harness_id: str) -> Harness:
-    """Return the harness named on the command line, or stop naming the ones jl knows."""
+    """Return the harness with the given ID, or stop with an error.
+
+    Args:
+        harness_id: A tool ID given on the command line.
+
+    Returns:
+        The harness with that ID.
+
+    Raises:
+        SystemExit: No harness has that ID. The error points to `jl connect --list`.
+    """
     harness = next((h for h in HARNESSES if h.id == harness_id), None)
     if harness is None:
         render.die(f"Unknown tool {harness_id}. See every tool ID: jl connect --list")
@@ -431,6 +441,12 @@ def _picked_harnesses(connection: Connection | None) -> list[Harness]:
 
     With no terminal, or in --json, jl stops with the error it gives when no tool is named. With no
     tool connected it says so and exits 0.
+
+    Args:
+        connection: This machine's saved key and connected tools, or None when nothing is saved.
+
+    Returns:
+        The harnesses to disconnect.
 
     Raises:
         typer.Exit: No tool connected, nothing ticked, or Ctrl-C at the picker (130).
@@ -462,7 +478,16 @@ def _picked_harnesses(connection: Connection | None) -> list[Harness]:
 
 
 def _disconnect_many(chosen: list[Harness], *, yes: bool) -> None:
-    """Show one removal preview for every chosen tool, confirm once, then remove them."""
+    """Show one removal preview for every chosen tool, confirm once, then remove them.
+
+    Removing a tool edits its config files, and removing the last connected tool also revokes this
+    machine's key. In --json, nothing is previewed or asked: each tool's result is printed as JSON.
+    A tool that isn't connected is reported and skipped.
+
+    Args:
+        chosen: The tools to disconnect.
+        yes: Skip the confirmation.
+    """
     if state.json_output:
         files = _files_another_tool_uses(chosen, load_connection())[0]
         for harness in chosen:
@@ -513,7 +538,16 @@ def _disconnect_many(chosen: list[Harness], *, yes: bool) -> None:
 
 
 def _config_paths(harness: Harness) -> set[Path]:
-    """Return the files a harness's writer edits, without a key or catalog; empty when it has no writer."""
+    """Return the files a harness's writer edits; empty when it has no writer.
+
+    The writer is run with an empty key and no models, so nothing is written.
+
+    Args:
+        harness: The tool to look up.
+
+    Returns:
+        The paths of the files the harness's config lives in.
+    """
     if harness.writer is None:
         return set()
     setup = Setup(base_url=MODELS_API_URL, api_key="", models=(), default_model=None)
@@ -527,6 +561,14 @@ def _files_another_tool_uses(
 
     Kilo's CLI and VS Code extension share one config: disconnecting one must empty the file, not
     delete it or the other's settings with it. The pairs are for the warning naming the tool.
+
+    Args:
+        chosen: The tools being disconnected.
+        connection: This machine's saved key and connected tools, or None when nothing is saved.
+
+    Returns:
+        A tuple of the files another connected tool writes, and a pair of that tool and the file
+        for each one. Both are empty when nothing is saved.
     """
     if connection is None:
         return set(), []
@@ -620,7 +662,14 @@ def _disconnect(
 
 
 def _row(plan: Plan) -> render.Row:
-    """Return a plan's row in the preview: its change, the files it writes, and what it replaces."""
+    """Return a plan's row in the preview: its change, the files it writes, and what it replaces.
+
+    Args:
+        plan: The planned connect or disconnect of one tool.
+
+    Returns:
+        The row to show in the change table.
+    """
     preview = plan.preview
     files = render.paths_label([write.path for write in plan.writes])
     note = preview.detail if files else ""
@@ -628,7 +677,18 @@ def _row(plan: Plan) -> render.Row:
 
 
 def _test_request(api_key: str, model: str) -> None:
-    """Send one tiny request with this machine's key and show how long the reply took, or the server's error."""
+    """Send one tiny request with this machine's key and show how long it took.
+
+    Makes a real chat request of at most 16 tokens.
+    On failure it shows the server's error.
+
+    Args:
+        api_key: The key to send the request with.
+        model: The ID of the model to ask.
+
+    Raises:
+        typer.Exit: The request failed (exit code 1).
+    """
     started = time.monotonic()
     try:
         with render.spinner(f"Testing {model}..."):
@@ -680,6 +740,12 @@ def _start_command(harness: Harness) -> str:
     """Return how to start a harness here: its command, or for a VS Code extension, open VS Code.
 
     An app installed without its command-line launcher (Zed without "Install CLI") is opened by hand.
+
+    Args:
+        harness: The tool to start.
+
+    Returns:
+        The command line to run, or an instruction to open the app.
     """
     if harness.kind == "vscode":
         return "open VS Code"
@@ -695,6 +761,14 @@ def _key_steps(harness: Harness, key: str, reason: str = "add") -> str:
     no clipboard to use (Linux without one, or over SSH), it is shown on a line of its own, easy
     to select, right under the step that pastes it. ``reason`` words that step: "add" a first key,
     "check" one that may already be there, "replace" a revoked one.
+
+    Args:
+        harness: The tool whose steps to write.
+        key: The API key to paste.
+        reason: Which paste step to word: "add", "check" or "replace".
+
+    Returns:
+        The steps, one per line, followed by a line with the tool's guide when it has one.
     """
     copied = _copy_to_clipboard(key)
     action = {
@@ -723,6 +797,12 @@ def _copy_to_clipboard(text: str) -> bool:
     """Put text on this machine's clipboard; return False when there is none jl can reach.
 
     Over SSH the clipboard would be the server's, not the user's, so jl doesn't try.
+
+    Args:
+        text: What to copy.
+
+    Returns:
+        True when a clipboard command accepted the text, False when none did.
     """
     if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
         return False
@@ -746,7 +826,18 @@ def _copy_to_clipboard(text: str) -> bool:
 
 
 def _named_harnesses(ids: list[str] | None) -> list[Harness]:
-    """Return the harnesses named on the command line, or [] to ask with the picker."""
+    """Return the harnesses named on the command line, or [] to ask with the picker.
+
+    Args:
+        ids: The tool IDs given on the command line, or None or empty when none were.
+
+    Returns:
+        The named harnesses in the order given; [] when no ID was given and a picker can be shown.
+
+    Raises:
+        SystemExit: No ID was given and there is no terminal or --json is set, an ID is unknown,
+            or a named tool is coming soon.
+    """
     if not ids:
         if state.json_output or not render.can_prompt():
             render.die("Name the tools to connect, e.g. jl connect opencode.")
@@ -881,7 +972,14 @@ def _pick_harnesses(show_all: bool = False) -> list[Harness]:
 
 
 def _install_hint(harness: Harness) -> str:
-    """Return where to get a harness: its install page, or for a VS Code extension the command that installs it."""
+    """Return where to get a harness: its install page, or the command for a VS Code extension.
+
+    Args:
+        harness: The tool to look up.
+
+    Returns:
+        The install page's URL, or "code --install-extension <extension>"; empty when it has no page.
+    """
     if harness.kind == "vscode":
         return " ".join(("code", "--install-extension", *harness.extension))
     return harness.install_url or ""
@@ -947,6 +1045,18 @@ def _summarize(skipped: list[tuple[str, str]], *, connected: bool) -> None:
 
 
 def _printable(harness_id: str) -> Harness:
+    """Return the harness with the given ID, if jl can print a config for it.
+
+    Args:
+        harness_id: A tool ID given on the command line.
+
+    Returns:
+        The matching harness.
+
+    Raises:
+        SystemExit: The tool is coming soon, or jl can't print a config for it. The error lists
+            the tools it can.
+    """
     harness = next((h for h in HARNESSES if h.id == harness_id and printable(h)), None)
     if harness is None:
         # A preview tool's endpoint isn't public yet: to a user it is coming soon, like any other.
@@ -970,6 +1080,10 @@ def _continue_on_wallet(wallet: bool, dry_run: bool) -> None:
     Args:
         wallet: --wallet was passed.
         dry_run: --dry-run was passed: the choice isn't saved.
+
+    Raises:
+        typer.Exit: The user chose to subscribe, or "Not now" (exit code 0).
+        SystemExit: With --yes or no one to ask, and no wallet chosen before (exit code 1).
     """
     if wallet or wallet_chosen():
         _warn_on_wallet()
@@ -1037,6 +1151,13 @@ def _machine_key(client: Client, kind: Literal["payg", "subscription"], rotate: 
         client: The client holding the API key.
         kind: The kind the account can use now: "subscription" with a plan, else "payg".
         rotate: Replace the saved key even when its kind is right.
+
+    Returns:
+        The saved connection holding the key, and True when the key was created by this call.
+
+    Raises:
+        JarvislabsError: The new key couldn't be created. When the old key had already been
+            revoked, the message says the connected tools hold a dead key.
     """
     connection = load_connection()
     replaced_key = None
@@ -1069,6 +1190,9 @@ def _agrees_to_switch() -> bool:
     """Return whether the user agrees to switch to the plan: asked in a terminal, or by --yes.
 
     With no one to ask and no --yes, prints how to switch and returns False.
+
+    Returns:
+        True with --yes or when the user confirms, False otherwise.
     """
     if state.yes:
         render.info("You have a subscription now, so jl switches this machine's tools to your plan.")
@@ -1084,6 +1208,17 @@ def _create_key(client: Client, kind: Literal["payg", "subscription"]) -> Create
 
     At the cap on active keys, offers to revoke one of jl's keys first. A key of another kind
     is revoked at once, and connect stops.
+
+    Args:
+        client: The client holding the API key.
+        kind: The kind of key to create: "subscription" or "payg" (wallet).
+
+    Returns:
+        The new key, including its secret.
+
+    Raises:
+        SystemExit: The server made a key of another kind (after revoking it), or that key
+            couldn't be revoked.
     """
     key = _create_making_room(client, kind)
     if key.kind != kind:
@@ -1107,6 +1242,21 @@ def _create_key(client: Client, kind: Literal["payg", "subscription"]) -> Create
 
 
 def _create_making_room(client: Client, kind: Literal["payg", "subscription"]) -> CreatedApiKey:
+    """Create this machine's key, making room for it when the account refuses.
+
+    When a key with this machine's name already exists (409), it is revoked. When the account is at
+    its cap on active keys (429), a key is freed by _free_a_key_slot. Each is retried once.
+
+    Args:
+        client: The client holding the API key.
+        kind: The kind of key to create: "subscription" or "payg" (wallet).
+
+    Returns:
+        The new key, including its secret.
+
+    Raises:
+        APIError: The server refused for any other reason, or refused again on the last try.
+    """
     name = _key_name()
     # A full account can need both: a free slot (429), then the name freed (409).
     for _ in range(2):
@@ -1125,7 +1275,14 @@ def _create_making_room(client: Client, kind: Literal["payg", "subscription"]) -
 
 
 def _revoke_lost_key(client: Client, name: str) -> None:
-    """Revoke the account's key named ``name``, whose secret this machine lost."""
+    """Revoke the account's key named ``name``, whose secret this machine lost.
+
+    Prints a line for each key revoked.
+
+    Args:
+        client: The client holding the API key.
+        name: The name of the key to revoke.
+    """
     for key in client.account.list_api_keys():
         if key.name == name:
             _revoke(client, key.id)
@@ -1142,6 +1299,14 @@ def _free_a_key_slot(client: Client, cap_message: str) -> None:
     A key with this machine's name is revoked without asking. Otherwise this stops with the
     account's keys listed when there's no jl key to offer, with --yes or no one to ask (which key
     to revoke isn't a plain yes), or when the user picks none.
+
+    Args:
+        client: The client holding the API key.
+        cap_message: The server's message about the cap, shown to the user.
+
+    Raises:
+        SystemExit: There is no key to free: none of jl's, --yes or no one to ask, or the user
+            kept every key.
     """
     keys = client.account.list_api_keys()
     if any(key.name == _key_name() for key in keys):
@@ -1195,7 +1360,15 @@ def _key_machine(name: str) -> str:
 
 
 def _revoke_unused_key(client: Client, connection: Connection) -> None:
-    """Revoke this machine's key, which no harness holds any more, and forget it."""
+    """Revoke this machine's key, which no harness holds any more, and forget it.
+
+    Args:
+        client: The client holding the API key.
+        connection: This machine's saved key. The saved connection is cleared once it is revoked.
+
+    Raises:
+        SystemExit: The key couldn't be revoked. It stays saved.
+    """
     try:
         _revoke(client, connection.key_id)
     except JarvislabsError as e:
@@ -1212,7 +1385,15 @@ def _can_ask() -> bool:
 
 
 def _revoke(client: Client, key_id: str) -> None:
-    """Revoke an API key on the account; one already gone counts as revoked."""
+    """Revoke an API key on the account; one already gone counts as revoked.
+
+    Args:
+        client: The client holding the API key.
+        key_id: The ID of the key to revoke.
+
+    Raises:
+        JarvislabsError: The revoke failed for any reason other than the key not existing.
+    """
     with contextlib.suppress(NotFoundError):
         client.account.revoke_api_key(key_id)
 
@@ -1222,6 +1403,10 @@ def _key_name() -> str:
 
     The digits come from a hash of the machine ID: they tell apart machines with the same
     hostname, and stay the same when jl's config is lost.
+
+    Returns:
+        The key name, with the hostname's characters outside letters, digits, "-" and "_" replaced
+        by "-".
     """
     # Key names allow letters, digits, spaces, "-" and "_"; macOS hostnames end in ".local".
     host = re.sub(r"[^A-Za-z0-9_-]", "-", socket.gethostname().split(".")[0])
@@ -1229,7 +1414,14 @@ def _key_name() -> str:
 
 
 def _machine_id() -> str:
-    """Return the OS's ID for this machine, or a random ID saved in config.toml."""
+    """Return the OS's ID for this machine, or a random ID saved in config.toml.
+
+    When the OS gives none, a random ID is made and saved in config.toml on the first call, and
+    read back from there afterwards.
+
+    Returns:
+        The machine ID.
+    """
     machine_id = _os_machine_id()
     if machine_id:
         return machine_id
@@ -1265,7 +1457,19 @@ def _os_machine_id() -> str | None:
 def _refresh_plan(
     harness: Harness, connection: Connection, models: tuple[ModelInfo, ...]
 ) -> tuple[Plan, str | None, str | None]:
-    """Return the plan that refreshes a harness's models, and the default it keeps or falls back to."""
+    """Return the plan that refreshes a harness's models, and the default it keeps or falls back to.
+
+    Writes nothing: the plan is only built.
+
+    Args:
+        harness: The tool to refresh.
+        connection: This machine's saved key, which the plan writes into the tool's config.
+        models: The current catalog.
+
+    Returns:
+        A tuple of the plan, the harness's current default model (None when it has none), and the
+        recommended model that replaces it (None when the current default stays).
+    """
     current = default_model(harness)
     default = RECOMMENDED_MODEL if current and current not in {m.id for m in models} else None
     setup = Setup(
@@ -1279,12 +1483,31 @@ def _refresh_plan(
 
 
 def _unchanged(plan: Plan) -> bool:
-    """Return whether writing a plan would change no file."""
+    """Return whether writing a plan would change no file.
+
+    Args:
+        plan: The planned writes.
+
+    Returns:
+        True when every file exists with exactly the text the plan would write.
+    """
     return all(write.path.exists() and write.path.read_text(encoding="utf-8") == write.text for write in plan.writes)
 
 
 def _refreshes_to_nothing(harness: Harness, connection: Connection, models: tuple[ModelInfo, ...]) -> bool:
-    """Return whether refreshing a harness's models would change no file."""
+    """Return whether refreshing a harness's models would change no file.
+
+    Args:
+        harness: The tool to refresh.
+        connection: This machine's saved key.
+        models: The current catalog.
+
+    Returns:
+        True when the tool's config already matches the catalog.
+
+    Raises:
+        JarvislabsError: The tool's config can't be read.
+    """
     return _unchanged(_refresh_plan(harness, connection, models)[0])
 
 

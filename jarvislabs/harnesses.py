@@ -229,7 +229,17 @@ def installed(harness: Harness) -> bool:
 
 
 def _obsolete_extensions(folder: Path) -> set[str]:
-    """Return the extension folders VS Code lists in .obsolete, which it removes at its next start."""
+    """Return the extension folders VS Code has uninstalled but not yet removed.
+
+    VS Code lists them in the ".obsolete" file of its extensions folder and removes them at its
+    next start.
+
+    Args:
+        folder: VS Code's extensions folder.
+
+    Returns:
+        The folder names listed in ".obsolete"; empty when the file is missing or unreadable.
+    """
     try:
         data = json.loads((folder / ".obsolete").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -274,31 +284,59 @@ def check_version(harness: Harness) -> None:
 
 
 def preview_enabled() -> bool:
-    """Return whether the preview endpoints are switched on: ``JL_PREVIEW_HARNESSES=1``."""
+    """Return whether the preview endpoints are switched on.
+
+    Reads the JL_PREVIEW_HARNESSES environment variable on every call.
+
+    Returns:
+        True unless the variable is unset, empty, or "0", "false" or "no".
+    """
     return os.environ.get(PREVIEW_FLAG, "").strip().lower() not in ("", "0", "false", "no")
 
 
 def connectable(harness: Harness) -> bool:
-    """Return whether jl can connect this harness now, counting a preview one with the flag on."""
+    """Return whether jl can connect a harness now.
+
+    Args:
+        harness: The harness to check.
+
+    Returns:
+        True when its support is "connect", or when it is a preview harness and the preview
+        flag is on.
+    """
     return harness.support == "connect" or (harness.preview and preview_enabled())
 
 
 def printable(harness: Harness) -> bool:
-    """Return whether jl connect --print can print this harness's config now.
+    """Return whether jl connect --print can print a harness's config now.
 
     A preview harness's config points at an endpoint that isn't public yet, so it prints only with
     ``JL_PREVIEW_HARNESSES=1``, the same as it connects.
+
+    Args:
+        harness: The harness to check.
+
+    Returns:
+        True when the harness has a writer and, if it is a preview harness, the preview flag is on.
     """
     return harness.writer is not None and (not harness.preview or preview_enabled())
 
 
 def anthropic_base_url() -> str:
-    """Return the Anthropic Messages base URL: the preview override, else the Models API host."""
+    """Return the Anthropic Messages base URL, without a trailing slash.
+
+    Returns:
+        The JL_ANTHROPIC_URL environment variable when set, else the Models API host.
+    """
     return os.environ.get(ANTHROPIC_URL_VAR, ANTHROPIC_API_URL).rstrip("/")
 
 
 def responses_base_url() -> str:
-    """Return the OpenAI Responses base URL: the preview override, else the Models API host."""
+    """Return the OpenAI Responses base URL, without a trailing slash.
+
+    Returns:
+        The JL_RESPONSES_URL environment variable when set, else the Models API's /v1 URL.
+    """
     return os.environ.get(RESPONSES_URL_VAR, RESPONSES_API_URL).rstrip("/")
 
 
@@ -327,10 +365,18 @@ def vscode_running() -> bool:
 
 
 def _unreadable(path: Path, error: Exception, command: str) -> JarvislabsError:
-    """Return the error for a config file jl can't read, naming the file and what to do.
+    """Return the error for a config file jl can't read.
 
     A parse error's own message is useful; the internals of a wrong shape are not, so those keep
     only the fact that the file doesn't look the way jl expects.
+
+    Args:
+        path: The config file.
+        error: What reading it raised.
+        command: The jl command to run again once the file is fixed, "connect" or "disconnect".
+
+    Returns:
+        A JarvislabsError for the caller to raise.
     """
     detail = str(error) if isinstance(error, (ValueError, YAMLError)) else "jl expected a different shape there"
     return JarvislabsError(f"Can't read {path}: {detail}. Fix the file, then run jl {command} again.")
@@ -582,10 +628,14 @@ def usd_rates(model: ModelInfo) -> tuple[float, float | None, float] | None:
 
 
 def _windows_path() -> str | None:
-    """Return the Path Windows' registry gives a new terminal, or None off Windows or when unreadable.
+    """Return the Path Windows' registry gives a new terminal.
 
     A terminal keeps the PATH it started with, and an installer such as Node.js's adds its folders
     to the registry only, so a terminal opened before the install sees neither the tool nor node.
+
+    Returns:
+        The user and machine Path values from the registry, joined with the OS path separator;
+        None off Windows or when neither can be read.
     """
     if sys.platform != "win32":
         return None
@@ -608,9 +658,25 @@ def _windows_path() -> str | None:
 
 
 def _expand_windows_vars(value: str) -> str:
-    """Expand the %VARS% in a registry Path, as Windows does, from this process's environment."""
+    """Expand the %VARS% in a registry Path from this process's environment.
+
+    Args:
+        value: A Path value from the registry.
+
+    Returns:
+        The value with each %NAME% replaced by that environment variable, matched without regard to
+        case. A name this process doesn't have is left as written.
+    """
 
     def replace(match: re.Match[str]) -> str:
+        """Return the environment value a %NAME% match stands for.
+
+        Args:
+            match: A match of the pattern %NAME%.
+
+        Returns:
+            The value of the environment variable NAME, or the matched text when there is none.
+        """
         name = match.group(1).upper()
         return next((env_value for env, env_value in os.environ.items() if env.upper() == name), match.group(0))
 
@@ -618,10 +684,18 @@ def _expand_windows_vars(value: str) -> str:
 
 
 def _path_env(name: str, program: str) -> dict[str, str] | None:
-    """Return the environment a program needs when it was found off this process's PATH, else None.
+    """Return the environment for a program found off this process's PATH.
 
     On Windows, the registry's Path is put first too: a terminal keeps the PATH it started with, so a
     tool installed since then (and the node its launcher needs) is missing from this one.
+
+    Args:
+        name: The command name that was looked up.
+        program: What _find returned for it: a full path, or the name itself.
+
+    Returns:
+        A copy of the environment with the extra PATH folders added, or None when this process's own
+        environment is enough.
     """
     registry_path = _windows_path()
     if shutil.which(name) is None and os.path.isabs(program):
@@ -638,6 +712,17 @@ _MISSING = object()
 
 
 def _output(argv: list[str]) -> str:
+    """Run a program and return what it prints.
+
+    Looks the program up with _find, runs it with a 30-second timeout, and decodes its standard
+    output as UTF-8, which Go programs (Crush) print, rather than in Windows' ANSI code page.
+
+    Args:
+        argv: The command and its arguments.
+
+    Returns:
+        The program's standard output; empty when it can't run or times out.
+    """
     # What a program prints, for jl to read; "" when it can't run. Decoded as UTF-8, which Go programs
     # (Crush) print, rather than in Windows' ANSI code page.
     program = _find(argv[0]) or argv[0]
@@ -651,13 +736,19 @@ def _output(argv: list[str]) -> str:
 
 
 def _find(program: str) -> str | None:
-    """Return the full path of a program: on PATH, or in a folder a tool's own installer uses.
+    """Return a program's full path, from PATH or a tool installer's folder.
 
-    The installers add these folders to the shell profile, so a terminal opened before the install
-    doesn't have them on PATH yet: OpenCode's and Kilo's scripts install into ~/.opencode/bin and
+    Looks on PATH first, then in the folders that tools' own installers add to the shell profile,
+    which a terminal opened before the install doesn't have on PATH yet: OpenCode's and Kilo's scripts install into ~/.opencode/bin and
     ~/.kilo/bin, pi's into ~/.pi/agent/bin when no folder it prefers is on PATH, Kimi Code's into
     ~/.kimi-code/bin, and npm under nvm into the Node.js version's own bin folder, newest first. On
     Windows, the registry's Path (the one a new terminal gets) is searched too, before those folders.
+
+    Args:
+        program: The command name to look for.
+
+    Returns:
+        The program's full path, or None when it isn't found.
     """
     found = shutil.which(program)
     if found:
@@ -687,7 +778,15 @@ def _find(program: str) -> str | None:
 
 
 def _holder(data: object, path: KeyPath) -> KeyPath:
-    """Return the deepest object data already has on the way to path; () for the top."""
+    """Return the deepest object that data already has on the way to a key path.
+
+    Args:
+        data: The parsed config.
+        path: A key path from the top of data.
+
+    Returns:
+        The key path of that object, which is a prefix of ``path``; () for the top.
+    """
     parent = path[:-1]
     while parent and not isinstance(_lookup(data, parent), dict):
         parent = parent[:-1]
@@ -697,10 +796,18 @@ def _holder(data: object, path: KeyPath) -> KeyPath:
 def _untracked(harness: Harness, replaced: Replaced) -> dict[Path, Written]:
     """Return what jl wrote for a record from an older jl, which didn't record it.
 
-    Every key path jl's writer sets now, where a value counts as jl's only when it names Jarvislabs,
-    or sits beside one that does in the same object (Aider's key and model, beside its base URL).
-    In a shared list, the entries naming Jarvislabs; and a file the older jl created that is named
-    for Jarvislabs (Junie's model files) is jl's whole.
+    Covers every key path jl's writer sets now, where a value counts as jl's only when it names
+    Jarvislabs, or sits beside one that does in the same object (Aider's key and model, beside its
+    base URL). In a shared list, it covers the entries naming Jarvislabs; and a file the older jl
+    created that is named for Jarvislabs (Junie's model files) is jl's whole.
+
+    Args:
+        harness: The connected harness.
+        replaced: The harness's record, whose created files are checked.
+
+    Returns:
+        Per config file, a Written built from the files' current contents; empty when the harness
+        has no writer. A key path jl will decide by its name alone has the empty string as its hash.
     """
     if harness.writer is None:
         return {}
@@ -730,15 +837,33 @@ def _untracked(harness: Harness, replaced: Replaced) -> dict[Path, Written]:
 
 
 def _hash(value: object) -> str:
+    """Return a short fingerprint of a config value.
+
+    Args:
+        value: A value that json can write, or that str can turn into text.
+
+    Returns:
+        The first 16 hex digits of the SHA-256 of the value's JSON, written with sorted keys.
+    """
     return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
 def _is_jl_value(written: Written | None, path: Path, key_path: KeyPath, value: object) -> bool:
-    """Return whether a config value is jl's: what jl last wrote there, or anything naming Jarvislabs.
+    """Return whether a config value is jl's.
 
-    A value naming Jarvislabs (its provider, base URL or key path, or a file named for it) is
+    A value is jl's when it is what jl last wrote there, or anything naming Jarvislabs. A value naming Jarvislabs (its provider, base URL or key path, or a file named for it) is
     jl's even when the user edited it, so disconnect never leaves jl's provider behind. So is a
     value inside one jl wrote whole, such as the key a refresh sets in Cline's slot.
+
+    Args:
+        written: What jl recorded for the file; None to judge by name alone.
+        path: The config file.
+        key_path: The value's key path.
+        value: The value now in the file.
+
+    Returns:
+        True when the value matches its recorded hash, sits inside a value jl wrote whole, or names
+        Jarvislabs (case aside) in the file name, key path or value.
     """
     if written and written.hashes.get(key_path) == _hash(value):
         return True
@@ -748,12 +873,19 @@ def _is_jl_value(written: Written | None, path: Path, key_path: KeyPath, value: 
 
 
 def _merged(previous: Replaced, now: Replaced) -> Replaced:
-    """Return a harness's record after a reconnect: ``previous`` updated by ``now``, the new connect's.
+    """Return a harness's record after a reconnect.
 
-    A value the new connect overwrote that isn't jl's was set by the user since the last
+    ``previous`` is updated by ``now``. A value the new connect overwrote that isn't jl's was set by the user since the last
     connect, so it's the one to put back; one the user removed has nothing to put back. Every
     path jl has written stays recorded, so disconnect also takes out entries a later connect
     stopped writing, such as a model the catalog dropped.
+
+    Args:
+        previous: The record from the earlier connects.
+        now: The record from the connect that just ran.
+
+    Returns:
+        The combined record.
     """
     values = {path: dict(paths) for path, paths in previous.values.items()}
     written = dict(previous.written)
@@ -784,10 +916,28 @@ def _merged(previous: Replaced, now: Replaced) -> Replaced:
 def _without_jl(
     text: str, path: Path, written: Written, values: Mapping[KeyPath, object], restored: list[str], kept: list[str]
 ) -> str:
-    """Return a config file's text with jl's values taken out and the ones they overwrote put back.
+    """Return a config file's text without jl's values.
+
+    The values jl overwrote are put back.
 
     Appends the key path of each value put back to ``restored``, and of each value jl wrote that the
     user changed since, which stays, to ``kept``.
+
+    Args:
+        text: The file's current text.
+        path: The config file.
+        written: What jl recorded writing to it.
+        values: The values jl overwrote there, by key path.
+        restored: A list that receives the dotted key path of each value put back.
+        kept: A list that receives the dotted key path of each jl value left because the user
+            changed it.
+
+    Returns:
+        The new text.
+
+    Raises:
+        ValueError: The text isn't valid in its format.
+        YAMLError: The text isn't valid YAML.
     """
     fmt = cast("Literal['jsonc', 'toml', 'yaml']", written.fmt)
     data = _parse(text, fmt)
@@ -829,6 +979,19 @@ def _without_jl(
 
 
 def _parse(text: str, fmt: Literal["jsonc", "toml", "yaml"]) -> object:
+    """Return a config file's text as Python data.
+
+    Args:
+        text: The file's text.
+        fmt: The file's format.
+
+    Returns:
+        The parsed contents; an empty dict for empty or blank text.
+
+    Raises:
+        ValueError: The text isn't valid JSON, JSONC or TOML.
+        YAMLError: The text isn't valid YAML.
+    """
     if not text.strip():
         return {}
     if fmt == "jsonc":
@@ -839,6 +1002,16 @@ def _parse(text: str, fmt: Literal["jsonc", "toml", "yaml"]) -> object:
 
 
 def _lookup(data: object, path: KeyPath) -> object:
+    """Return the value at a key path in parsed config data.
+
+    Args:
+        data: The parsed config.
+        path: A key path from the top of data.
+
+    Returns:
+        The value, or the module's _MISSING marker when a key on the way is absent or not inside
+        an object.
+    """
     for key in path:
         if not isinstance(data, dict) or key not in data:
             return _MISSING
@@ -847,6 +1020,16 @@ def _lookup(data: object, path: KeyPath) -> object:
 
 
 def _leaves(values: Mapping[KeyPath, object]) -> dict[KeyPath, object]:
+    """Return each value that isn't an object, at its full key path.
+
+    For example, {("a",): {"b": 1}} gives {("a", "b"): 1}.
+
+    Args:
+        values: The value at each key path.
+
+    Returns:
+        The flattened values, keyed by their full key paths.
+    """
     # Each value that isn't an object, at its full key path: {("a",): {"b": 1}} gives {("a", "b"): 1}.
     leaves: dict[KeyPath, object] = {}
     for path, value in values.items():
@@ -858,16 +1041,35 @@ def _leaves(values: Mapping[KeyPath, object]) -> dict[KeyPath, object]:
 
 
 def _edited(text: str, edit: ConfigEdit) -> str:
+    """Return a config file's text with an edit's changes made.
+
+    Args:
+        text: The file's current text.
+        edit: The values to set, and the key paths to delete, in the file.
+
+    Returns:
+        The new text: for a "block" file, with jl's block replaced; otherwise with the values set and
+        the delete paths removed, keeping the rest.
+    """
     if edit.fmt == "block":
         return replace_block(text, str(edit.values[()]))
     return edit_config(text, edit.fmt, edit.values, edit.delete)
 
 
 def _block_word(block: str, text: str, marker: str) -> tuple[str, str | None]:
-    """Return the shell word holding marker in block, and the word in its place in text.
+    """Return the shell word holding marker in block, and its match in text.
 
     Lines are compared as shell words, so quoting doesn't matter: the word comes from the first
     line of text whose other words match the marker's line.
+
+    Args:
+        block: The block jl would write, with ``marker`` in one word of one line.
+        text: The block's lines as they are in the file now.
+        marker: The text that stands in for the unknown word.
+
+    Returns:
+        The block's word containing the marker, and the matching word in the file, or None when no
+        line of the file matches.
     """
     want = next(shlex.split(line) for line in block.splitlines() if marker in line)
     i = next(i for i, word in enumerate(want) if marker in word)
@@ -886,6 +1088,20 @@ def _preview(
     block_found: bool,
     overridden: list[str],
 ) -> Preview:
+    """Return the preview row for connecting a harness.
+
+    Args:
+        harness: The harness being connected.
+        setup: What is being written.
+        replaced: The values the writes overwrite, by file and key path.
+        new: The values the writes set, by file and key path.
+        block_found: Whether a jl block was already in a "block" file.
+        overridden: The user's own lines that jl's block overrides.
+
+    Returns:
+        "update" when jl's own entries from an earlier connect are there, else "add"; "change" instead
+        when the writes replace or override the user's settings, with those named.
+    """
     # A jl block already in the file is an earlier connect's.
     verb: Literal["add", "update"] = "update" if block_found else "add"
     old = []
@@ -911,6 +1127,19 @@ def _preview(
 
 
 def _overridden_lines(text: str, block: str) -> list[str]:
+    """Return the user's own lines that set what jl's block sets too.
+
+    Looks at Crush's "model large" and "model small" lines. The block overrides them, assuming the
+    user's lines come before the block, where jl adds it; a line after it would win over the block
+    instead.
+
+    Args:
+        text: The file's current text.
+        block: The block jl would write.
+
+    Returns:
+        Each such line outside the block, as "model large <model>", without a trailing comment.
+    """
     # The user's own lines setting what jl's block sets too (Crush's "model large" and "model small"),
     # which the block overrides. Assumes the user's lines come before the block, where jl adds it; a line
     # after it would win over the block instead.
@@ -921,6 +1150,20 @@ def _overridden_lines(text: str, block: str) -> list[str]:
 
 
 def _jl_own(file: Path, path: KeyPath, value: object, setup: Setup) -> bool:
+    """Return whether a value is one an earlier connect wrote.
+
+    Such a value is updated by a new connect, not counted as replaced.
+
+    Args:
+        file: The config file.
+        path: The value's key path.
+        value: The value now in the file.
+        setup: What is being written, whose base URL a jl value points at.
+
+    Returns:
+        True when the key path or file name names Jarvislabs, or the value contains the Models API
+        base URL (Cline's slot, an entry list jl is in).
+    """
     # What an earlier connect wrote is updated, not replaced: a provider entry or file named for jl, or
     # a value pointing at the Models API (Cline's slot, an entry list jl is in).
     text = value if isinstance(value, str) else json.dumps(value, default=str)
@@ -928,10 +1171,28 @@ def _jl_own(file: Path, path: KeyPath, value: object, setup: Setup) -> bool:
 
 
 def _xdg_config_home() -> Path:
+    """Return the user's config folder on Linux and macOS.
+
+    Returns:
+        The XDG_CONFIG_HOME folder when set, else ~/.config.
+    """
     return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
 
 
 def _limits(model: ModelInfo) -> tuple[int, int]:
+    """Return a model's context window and the output cap to give a harness, in tokens.
+
+    The output cap is the model's maximum output, or the default when it lists none, but never more
+    than a tenth of the context window: a harness that compacts sends the whole conversation plus the
+    output cap, and the Models API refuses a request whose prompt and output together exceed the
+    context window. A model with no context length gets the default for it.
+
+    Args:
+        model: A model from the catalog.
+
+    Returns:
+        The context window and the output cap.
+    """
     # The catalog always has a context length; the fallback only keeps such a model usable.
     context = model.context_length or MODELS_DEFAULT_MAX_TOKENS
     # A harness that compacts (OpenCode) sends the whole conversation plus the model's full
@@ -947,9 +1208,14 @@ def _default_effort(model: ModelInfo) -> str | None:
 
     The catalog's own default, which the Models API applies to a request that sends none anyway,
     so pinning it changes nothing on the wire while making the effort explicit for harnesses with
-    no effort picker; a model that offers exactly one effort gets it (the API's default for it is
-    unstated); a model that reasons with a toggle only, none. An effort outside the model's own
-    list is never returned: the API refuses it.
+    no effort picker; a model that offers exactly one effort gets it; a model that reasons with a
+    toggle only, none. An effort outside the model's own list is never returned: the API refuses it.
+
+    Args:
+        model: A model from the catalog.
+
+    Returns:
+        The effort name, or None when there is nothing to pin.
     """
     efforts = model.thinking.supported_efforts
     if model.thinking.default_effort in efforts:
@@ -958,6 +1224,20 @@ def _default_effort(model: ModelInfo) -> str | None:
 
 
 def _opencode(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the OpenCode config edit.
+
+    OpenCode reads opencode.jsonc, else opencode.json, in the "opencode" folder of the user's config
+    folder; an existing .jsonc file is the one edited. jl sets the "providers.jarvislabs" entry
+    (base URL, key and every model with its limits and reasoning efforts), the older-format
+    "provider.jarvislabs" entry, and, when there is a default model, "model" as
+    "jarvislabs/<model>". The key is written into the file.
+
+    Args:
+        setup: The base URL, key, models and default model to write.
+
+    Returns:
+        The one file to edit.
+    """
     # OpenCode reads opencode.jsonc after opencode.json, so a .jsonc file wins when both exist.
     folder = _xdg_config_home() / "opencode"
     path = folder / "opencode.jsonc" if (folder / "opencode.jsonc").exists() else folder / "opencode.json"
@@ -965,12 +1245,37 @@ def _opencode(setup: Setup) -> tuple[ConfigEdit, ...]:
 
 
 def _kilo(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the Kilo config edit, which Kilo's VS Code extension reads too.
+
+    Kilo reads kilo.jsonc in the "kilo" folder of the user's config folder. jl sets the
+    "provider.jarvislabs" entry (base URL, key and every model with its limits, with each model's
+    default reasoning effort pinned) and, when there is a default model, "model" as
+    "jarvislabs/<model>". The key is written into the file.
+
+    Args:
+        setup: The base URL, key, models and default model to write.
+
+    Returns:
+        The one file to edit.
+    """
     # Kilo reads kilo.jsonc after config.json and kilo.json, and keeps a .jsonc file's comments when it
     # rewrites it. Without per-model limits Kilo sets the context to 0 and turns compaction off.
     return (ConfigEdit(_xdg_config_home() / "kilo" / "kilo.jsonc", "jsonc", _kilo_values(setup)),)
 
 
 def _pi(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the pi config edits.
+
+    jl sets providers.jarvislabs in ~/.pi/agent/models.json (base URL, key and every model). When
+    there is a default model, it also sets defaultProvider, defaultModel and each model's starting
+    thinking level in ~/.pi/agent/settings.json. The key is written into models.json.
+
+    Args:
+        setup: The base URL, key, models and default model to write.
+
+    Returns:
+        The files to edit: models.json, then settings.json when there is a default model.
+    """
     folder = Path.home() / ".pi" / "agent"
     provider = {
         "name": "Jarvislabs",
@@ -996,6 +1301,20 @@ def _pi(setup: Setup) -> tuple[ConfigEdit, ...]:
 
 
 def _pi_model(model: ModelInfo, costs: bool = False) -> dict[str, object]:
+    """Return pi's models.json entry for one catalog model.
+
+    The entry has the model's ID, name, whether it reasons, input kinds, context window and output
+    cap. When ``costs`` is set and the model has USD input, cached input and output prices, it also
+    has a cost. A model that reasons and lists efforts has a thinkingLevelMap that keeps each of
+    pi's levels the model lists and takes out the rest.
+
+    Args:
+        model: A model from the catalog.
+        costs: Whether to add the model's prices.
+
+    Returns:
+        The entry.
+    """
     entry: dict[str, object] = {
         "id": model.id,
         "name": model.name or model.id,
@@ -1021,7 +1340,14 @@ def _pi_model(model: ModelInfo, costs: bool = False) -> dict[str, object]:
 
 
 def _pi_starting_level(model: ModelInfo) -> str | None:
-    """Return pi's level that sends a model's default effort, or None when no level carries it."""
+    """Return pi's level that sends a model's default effort.
+
+    Args:
+        model: A model from the catalog.
+
+    Returns:
+        The level name, or None when the model has no default effort or no level carries it.
+    """
     effort = _default_effort(model)
     levels = _pi_model(model).get("thinkingLevelMap")
     if effort is None or not isinstance(levels, dict):
@@ -1030,7 +1356,11 @@ def _pi_starting_level(model: ModelInfo) -> str | None:
 
 
 def _cline_data_dir() -> Path:
-    """Return Cline's data folder, as Cline resolves it: CLINE_DATA_DIR, then CLINE_DIR/data, then ~/.cline/data."""
+    """Return Cline's data folder, as Cline resolves it.
+
+    Returns:
+        CLINE_DATA_DIR when set, else CLINE_DIR/data, else ~/.cline/data.
+    """
     if data_dir := os.environ.get("CLINE_DATA_DIR", "").strip():
         return Path(data_dir).expanduser()
     cline_dir = os.environ.get("CLINE_DIR", "").strip()
@@ -1038,6 +1368,19 @@ def _cline_data_dir() -> Path:
 
 
 def _kimi(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the Kimi Code config edit.
+
+    Kimi Code reads config.toml in ~/.kimi-code, or in the folder KIMI_CODE_HOME names. jl sets
+    providers.jarvislabs (base URL and key), a "models.jarvislabs/<model>" table for each model,
+    and, when there is a default model, default_model. It deletes the tables of models jl wrote
+    earlier that the catalog no longer lists. The key is written into the file.
+
+    Args:
+        setup: The base URL, key, models and default model to write.
+
+    Returns:
+        The one file to edit.
+    """
     # Kimi Code reads ~/.kimi-code/config.toml, or the same file under KIMI_CODE_HOME.
     folder = Path(os.environ.get("KIMI_CODE_HOME") or Path.home() / ".kimi-code").expanduser()
     path = folder / "config.toml"
@@ -1086,7 +1429,15 @@ def _kimi(setup: Setup) -> tuple[ConfigEdit, ...]:
 
 
 def _kimi_aliases(path: Path) -> list[str]:
-    """Return the model aliases jl's provider holds now; empty for a missing or unreadable file."""
+    """Return the model aliases that Kimi Code's config assigns to jl's provider.
+
+    Args:
+        path: Kimi Code's config.toml.
+
+    Returns:
+        The names of the "models" tables whose provider is jarvislabs; empty for a missing or
+        unreadable file.
+    """
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -1104,6 +1455,13 @@ def _kimi_capabilities(model: ModelInfo) -> list[str]:
 
     Kimi Code infers some capabilities from the model name; these add what the catalog knows for
     models it doesn't recognise, and never remove anything.
+
+    Args:
+        model: A model from the catalog.
+
+    Returns:
+        The tags, from "tool_use", "thinking" or "always_thinking", "image_in", "video_in" and
+        "audio_in".
     """
     tags = []
     if model.capabilities.tool_calling:
@@ -1118,6 +1476,21 @@ def _kimi_capabilities(model: ModelInfo) -> list[str]:
 
 
 def _cline(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the Cline config edit.
+
+    Cline reads providers.json in the "settings" folder of its data folder, where it has one
+    OpenAI-compatible provider that jl takes over. With a default model, jl sets that provider's
+    base URL, key, model, limits and capabilities, "lastUsedProvider", and the schema "version" when
+    the file has none. Cline holds only that one model. Without a default model (a refresh), it sets
+    just the key, and only while the provider's base URL is still the Models API's. The key is
+    written into the file.
+
+    Args:
+        setup: The base URL, key, models and default model to write.
+
+    Returns:
+        The one file to edit; none for a refresh when the provider isn't jl's.
+    """
     path = _cline_data_dir() / "settings" / "providers.json"
     settings = (*_CLINE_SLOT, "settings")
     if not setup.default_model:
@@ -1157,10 +1530,20 @@ def _cline(setup: Setup) -> tuple[ConfigEdit, ...]:
 
 
 def _cline_extension(setup: Setup) -> tuple[ConfigEdit, ...]:
-    """Cline's VS Code extension keeps its provider in globalState.json and its key in secrets.json.
+    """Return the config edits for Cline's VS Code extension.
 
-    It reads providers.json only while none of its own settings names a provider, so jl writes its
-    state too. Both are flat JSON files shared with Cline's other keys, which are kept.
+    Cline's extension keeps its provider in globalState.json and its key in secrets.json, both in
+    Cline's data folder and shared with Cline's other keys, which are kept. It reads providers.json
+    only while none of its own settings names a provider, so jl writes the CLI's providers.json
+    edit too. With a default model, jl sets the provider, base URL, model and model info in the
+    state file; the key goes in the secrets file. Without one (a refresh), it sets just the key,
+    and only while the state file's base URL is still the Models API's.
+
+    Args:
+        setup: The base URL, key, models and default model to write.
+
+    Returns:
+        The files to edit: the CLI's providers.json, then globalState.json and secrets.json.
     """
     edits = _cline(setup)
     data = _cline_data_dir()
@@ -1206,6 +1589,22 @@ def _cline_extension(setup: Setup) -> tuple[ConfigEdit, ...]:
 
 
 def _qwen(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the Qwen Code config edit.
+
+    Qwen Code reads ~/.qwen/settings.json. It reads a key only from the environment variable a
+    model entry names, so jl sets env.JARVISLABS_API_KEY with the key. It also sets
+    providerProtocol.jarvislabs to "openai" and the list modelProviders.jarvislabs, which keeps the
+    user's entries and holds one entry per model (base URL, limits, reasoning efforts). It takes
+    out of modelProviders.openai the entries an earlier jl wrote there, keeping the user's own, and
+    drops that list when nothing of the user's is left. With a default model, it sets
+    security.auth.selectedType and model.name too. The key is written into the file.
+
+    Args:
+        setup: The base URL, key, models and default model to write.
+
+    Returns:
+        The one file to edit.
+    """
     path = Path.home() / ".qwen" / "settings.json"
     key_env = "JARVISLABS_API_KEY"
     ours = []
@@ -1271,6 +1670,19 @@ def _qwen(setup: Setup) -> tuple[ConfigEdit, ...]:
 
 
 def _copilot(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the Copilot CLI config edits.
+
+    jl sets the lists "providers" and "models" in ~/.copilot/providers.json, adding its provider
+    (base URL and key) and one entry per model to the user's own entries. With a default model, it
+    also sets "model" to "jarvislabs/<model>" in ~/.copilot/settings.json. The key is written into
+    providers.json.
+
+    Args:
+        setup: The base URL, key, models and default model to write.
+
+    Returns:
+        The files to edit: providers.json, then settings.json when there is a default model.
+    """
     folder = Path.home() / ".copilot"
     path = folder / "providers.json"
     # Copilot CLI takes "$VAR" in this file literally, so the key goes in as is.
@@ -1316,6 +1728,20 @@ def _copilot(setup: Setup) -> tuple[ConfigEdit, ...]:
 
 
 def _junie(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the Junie CLI config edits.
+
+    Junie reads one file per model from ~/.junie/models. jl writes jarvislabs-<model>.json for each
+    model, with the model's ID, name, chat completions URL, key and limits. With a default model, it
+    also sets modelForLaunch in ~/.junie/settings.json and model in ~/.junie/config.json to
+    "custom:jarvislabs-<model>". The key is written into each model file.
+
+    Args:
+        setup: The base URL, key, models and default model to write.
+
+    Returns:
+        The files to edit: one per model, then settings.json and config.json when there is a
+        default model.
+    """
     folder = Path.home() / ".junie"
     edits = [
         ConfigEdit(
@@ -1346,6 +1772,18 @@ def _junie(setup: Setup) -> tuple[ConfigEdit, ...]:
 
 
 def _others(path: Path, key: KeyPath, field: str, ours: str) -> list[object]:
+    """Return the entries of a config list that aren't jl's.
+
+    Args:
+        path: The config file.
+        key: The key path of the list.
+        field: The entry field that tells whose entry it is.
+        ours: The value that field has in jl's entries.
+
+    Returns:
+        The list's entries whose field isn't ``ours``, including any that aren't objects; empty when
+        the file or the list is missing or unreadable.
+    """
     # The entries of a JSON config's list that aren't jl's: those whose field isn't ours.
     current = _current(path, key)
     if not isinstance(current, list):
@@ -1354,6 +1792,17 @@ def _others(path: Path, key: KeyPath, field: str, ours: str) -> list[object]:
 
 
 def _current(path: Path, key: KeyPath, fmt: Literal["jsonc", "toml", "yaml"] = "jsonc") -> object:
+    """Return the value at a key path in a config file as it is now.
+
+    Args:
+        path: The config file.
+        key: The key path to read.
+        fmt: The file's format.
+
+    Returns:
+        The value, or None when it or the file is missing, or the file is unreadable, which
+        plan_connect then reports.
+    """
     # The value at a key path in a config now; None when it or the file is missing, or the file is
     # unreadable, which plan_connect then reports.
     try:
@@ -1364,11 +1813,33 @@ def _current(path: Path, key: KeyPath, fmt: Literal["jsonc", "toml", "yaml"] = "
 
 
 def _model(setup: Setup, model_id: str) -> ModelInfo:
+    """Return a model from the setup's catalog.
+
+    Args:
+        setup: The setup whose models to search.
+        model_id: The model's ID.
+
+    Returns:
+        The model; a bare one with the fallback limits when the catalog doesn't list it, such as
+        default_model's marker.
+    """
     # A model the catalog doesn't list, such as default_model's marker, gets the fallback limits.
     return next((model for model in setup.models if model.id == model_id), ModelInfo(id=model_id))
 
 
 def _input(model: ModelInfo, video: bool = False) -> list[str]:
+    """Return the input kinds of a model that a harness takes.
+
+    The catalog also lists kinds some harnesses don't take. OpenCode and Kilo accept video, while
+    pi and the rest only take text and images.
+
+    Args:
+        model: A model from the catalog.
+        video: Whether the harness takes video.
+
+    Returns:
+        The model's kinds among "text", "image" and, with ``video``, "video".
+    """
     # The input kinds harnesses take; the catalog also lists ones some don't. OpenCode and Kilo
     # accept video, while pi and the rest only take text and images.
     kinds = ("text", "image", "video") if video else ("text", "image")
@@ -1376,6 +1847,18 @@ def _input(model: ModelInfo, video: bool = False) -> list[str]:
 
 
 def _opencode_values(setup: Setup) -> dict[KeyPath, object]:
+    """Return the values jl sets in OpenCode's config.
+
+    Sets providers.jarvislabs, the entry OpenCode 2.2.3 and later reads, whose model capabilities
+    carry each model's real reasoning efforts; provider.jarvislabs, the older-format entry; and,
+    with a default model, "model". With setup.costs, each model gets its USD prices.
+
+    Args:
+        setup: The base URL, key, models and default model to write.
+
+    Returns:
+        The value to set at each key path.
+    """
     # OpenCode 2.2.3+ reads the providers entry, whose capabilities carry each model's real
     # reasoning efforts: OpenCode builds the picker's effort variants from them, and without them
     # it offers low, medium and high, of which the Models API refuses any the model doesn't list.
@@ -1418,6 +1901,18 @@ def _opencode_values(setup: Setup) -> dict[KeyPath, object]:
 
 
 def _kilo_values(setup: Setup) -> dict[KeyPath, object]:
+    """Return the values jl sets in Kilo's config.
+
+    Kilo reads only the older-format provider entry, which cannot list a model's efforts, so each
+    model's default effort is pinned instead. Sets provider.jarvislabs and, with a default model,
+    "model".
+
+    Args:
+        setup: The base URL, key, models and default model to write.
+
+    Returns:
+        The value to set at each key path.
+    """
     # Kilo, an OpenCode fork, reads only the V1 provider entry, which cannot express an effort
     # ladder — but a model's options.reasoningEffort does reach its wire as a fixed effort.
     values: dict[KeyPath, object] = {("provider", PROVIDER_ID): _v1_provider(setup, fixed_effort=True)}
@@ -1427,6 +1922,18 @@ def _kilo_values(setup: Setup) -> dict[KeyPath, object]:
 
 
 def _v1_provider(setup: Setup, fixed_effort: bool = False) -> dict[str, object]:
+    """Return the older-format OpenCode provider entry, which Kilo reads too.
+
+    It has the base URL, key and, per model, name, tool-calling flag, limits, input kinds and, with
+    setup.costs, USD prices. It has no list of reasoning efforts.
+
+    Args:
+        setup: The base URL, key, models and costs flag to write.
+        fixed_effort: Whether to pin each model's default effort in its options.
+
+    Returns:
+        The provider entry.
+    """
     # The V1 provider entry, without an effort ladder: it predates the capabilities that carry
     # one. Kilo maps a model's options.reasoningEffort onto the wire, so it gets the model's
     # default effort pinned there; variants would inject junk into the request body, never those.
@@ -1460,6 +1967,20 @@ def _v1_provider(setup: Setup, fixed_effort: bool = False) -> dict[str, object]:
 
 
 def _claude_code(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the Claude Code config edit.
+
+    Claude Code keeps a custom gateway in the "env" block of ~/.claude/settings.json. jl sets
+    ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN (the key). With a default model, it also sets that
+    model for every model variable Claude Code reads (the main, small and subagent models and the
+    Opus, Sonnet, Haiku and Fable aliases), and adds a row to the /model picker named after it.
+
+    Args:
+        setup: The key, models and default model to write; the base URL is the Anthropic
+            Messages one.
+
+    Returns:
+        The one file to edit.
+    """
     # Claude Code keeps a custom gateway in settings.json's env block, the same file on every OS.
     # The tiers are Claude names; pointing all of them at our default keeps /model on our models.
     values: dict[KeyPath, object] = {
@@ -1485,6 +2006,21 @@ def _claude_code(setup: Setup) -> tuple[ConfigEdit, ...]:
 
 
 def _codex(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the Codex config edits.
+
+    Codex reads config.toml in $CODEX_HOME, else ~/.codex, and speaks only the Responses API. jl
+    sets model_provider and model_providers.jarvislabs (base URL, the key as the bearer token, wire
+    API "responses"). With a default model, it also sets model and, when the catalog lists it,
+    model_context_window. When any model lists reasoning efforts and Codex's own instructions can be
+    read, it writes those models to models.json beside config.toml, keeping the user's entries,
+    and sets model_catalog_json to it. The key is written into config.toml.
+
+    Args:
+        setup: The key, models and default model to write; the base URL is the Responses one.
+
+    Returns:
+        The files to edit: config.toml, then models.json when it is written.
+    """
     # Codex reads $CODEX_HOME/config.toml, else ~/.codex/config.toml, and only speaks the
     # Responses API. The bearer token is inline so the user doesn't have to export a variable.
     folder = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
@@ -1539,7 +2075,16 @@ _CODEX_EFFORT_DESCRIPTIONS = {
 
 
 def _codex_entry(model: ModelInfo, instructions: str) -> dict[str, object]:
-    """Return one catalog entry: the fields Codex requires, plus the model's own efforts."""
+    """Return one entry for Codex's model catalog file.
+
+    Args:
+        model: A model from the catalog.
+        instructions: The base instructions text to put in the entry.
+
+    Returns:
+        The fields Codex requires, marked with the Jarvislabs description, plus the model's reasoning
+        efforts and default effort when it lists any.
+    """
     entry: dict[str, object] = {
         "slug": model.id,
         "display_name": model.name or model.id,
@@ -1569,11 +2114,15 @@ def _codex_entry(model: ModelInfo, instructions: str) -> dict[str, object]:
 
 
 def _codex_instructions() -> str | None:
-    """Return the base instructions of Codex's own models, read from the installed binary.
+    """Return the base instructions of Codex's own models.
 
-    They change with the version the user runs, so reading them beats shipping a copy: the text
-    always matches. Any failure returns None, and the caller then writes no catalog. The command
-    runs under an empty CODEX_HOME, so it prints the stock catalog rather than the user's.
+    Runs "codex debug models" with an empty CODEX_HOME, so it prints Codex's stock catalog rather
+    than the user's. When it can't run or its output isn't a model list, returns None, and the
+    caller then writes no catalog.
+
+    Returns:
+        The base instructions of the gpt-5.6-sol model when listed, else of the first model that has
+        any; None when Codex isn't found, the command fails or its output isn't a model list.
     """
     program = _find("codex")
     if not program:
@@ -1607,6 +2156,20 @@ def _codex_instructions() -> str | None:
 
 
 def _zed(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the Zed config edit.
+
+    Zed reads settings.json in the Zed folder of %APPDATA% on Windows, ~/.config/zed on macOS, and the "zed"
+    folder of the user's config folder on Linux. jl sets language_models.openai_compatible.Jarvislabs
+    (base URL and every model with its limits and capabilities) and, with a default model,
+    agent.default_model. jl writes no key: Zed keeps keys in the OS keychain, so the user pastes it
+    in Zed's own settings page (see Harness.key_by_hand).
+
+    Args:
+        setup: The base URL, models and default model to write.
+
+    Returns:
+        The one file to edit.
+    """
     # Zed keeps its settings in %APPDATA%\Zed on Windows, the XDG config folder on Linux, and
     # ~/.config/zed on macOS. Its docs say keys don't belong in this file: Zed asks for the key.
     if sys.platform == "win32":
@@ -1646,12 +2209,19 @@ def _zed(setup: Setup) -> tuple[ConfigEdit, ...]:
 
 
 def _vscode_copilot(setup: Setup) -> tuple[ConfigEdit, ...]:
-    """Add a Jarvislabs Custom Endpoint group to the models file of Copilot in VS Code.
+    """Return the config edits that add Jarvislabs to Copilot in VS Code.
 
-    The file, chatLanguageModels.json in the default profile's folder, is a list of provider
-    groups; the user's other groups are kept. VS Code reads a group's apiKey only from its own
-    secret store, so the key goes in each model's Authorization header, which Custom Endpoint
-    sends in place of its own.
+    jl adds a "Jarvislabs" Custom Endpoint group to chatLanguageModels.json, in VS Code's user
+    folder for the OS. The file is a list of provider groups, and the user's other groups are
+    kept. VS Code reads a group's apiKey only from its own secret store, so the key goes in each
+    model's Authorization header, which Custom Endpoint sends in place of its own. With a default
+    model, jl also sets chat.defaultModel in the settings.json beside it.
+
+    Args:
+        setup: The base URL, key, models and default model to write.
+
+    Returns:
+        The files to edit: chatLanguageModels.json, then settings.json when there is a default model.
     """
     if sys.platform == "win32":
         folder = Path(os.environ["APPDATA"]) / "Code" / "User"
@@ -1694,6 +2264,20 @@ def _vscode_copilot(setup: Setup) -> tuple[ConfigEdit, ...]:
 
 
 def _goose(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the Goose config edits.
+
+    Goose reads custom providers from custom_providers/ in its config folder (the Block/goose/config
+    folder of %APPDATA% on Windows, else "goose" in the user's config folder). jl writes
+    jarvislabs.json there, with the base URL, each model's limits, request parameters and, with
+    setup.costs, prices, and the key as an Authorization header. With a default model, it also sets
+    active_provider and the jarvislabs entry's enabled, model and configured values in config.yaml.
+
+    Args:
+        setup: The base URL, key, models, costs flag and default model to write.
+
+    Returns:
+        The files to edit: the provider file, then config.yaml when there is a default model.
+    """
     folder = (
         Path(os.environ["APPDATA"]) / "Block" / "goose" / "config"
         if sys.platform == "win32"
@@ -1752,6 +2336,22 @@ def _goose(setup: Setup) -> tuple[ConfigEdit, ...]:
 
 
 def _aider(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the Aider config edits.
+
+    Aider has no provider entry, only a default model. jl sets openai-api-base, openai-api-key and,
+    with a default model, model ("openai/<model>") in ~/.aider.conf.yml. It writes each model's
+    limits to ~/.aider.model.metadata.json, with prices when setup.costs is set, and a marked block
+    of per-model settings (output cap and default effort) to ~/.aider.model.settings.yml. The key is
+    written into the .conf file. Without a default model (a refresh), the .conf file is edited only
+    while its base URL is still the Models API's.
+
+    Args:
+        setup: The base URL, key, models, costs flag and default model to write.
+
+    Returns:
+        The files to edit: .aider.conf.yml when it applies, then the metadata file, then the model
+        settings file when there are models.
+    """
     # Aider has no provider entry: one default model plus metadata, so other models keep their limits.
     metadata: dict[KeyPath, object] = {}
     for model in setup.models:
@@ -1799,6 +2399,20 @@ def _aider(setup: Setup) -> tuple[ConfigEdit, ...]:
 
 
 def _crush(setup: Setup) -> tuple[ConfigEdit, ...]:
+    """Return the Crush config edit.
+
+    Crush reads commands from a crushrc file in the "crush" folder of the user's config folder. jl
+    puts a marked block there: a "provider add" line with the base URL and key, a "model add" line
+    per model and, with a default model, "model large" and "model small" lines for it, with its
+    default effort. Without a default model (a refresh), the block keeps the model large and small
+    lines already in it. The key is written into the file.
+
+    Args:
+        setup: The base URL, key, models and default model to write.
+
+    Returns:
+        The one file to edit.
+    """
     lines = [
         f"provider add {PROVIDER_ID} --type completions --name Jarvislabs"
         f" --base-url {shlex.quote(setup.base_url)} --api-key {shlex.quote(setup.api_key)}"
@@ -2018,6 +2632,20 @@ def _coming_soon(
     preview: bool = False,
     one_model: bool = False,
 ) -> Harness:
+    """Return a harness that jl lists but doesn't connect yet.
+
+    Args:
+        harness_id: The name used on the command line.
+        name: The display name.
+        kind: "cli" or "vscode".
+        command: The command that starts the harness.
+        writer: The harness's writer, for one that jl can print the config of; None for none.
+        preview: Whether the harness connects with the preview flag on.
+        one_model: Whether the harness holds only the default model.
+
+    Returns:
+        The harness, whose docs_url is its manual setup page.
+    """
     docs_url = f"{HARNESS_DOCS_URL}/{harness_id}"
     return Harness(
         id=harness_id,

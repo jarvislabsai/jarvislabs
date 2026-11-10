@@ -55,6 +55,12 @@ def _ask_key() -> str:
     """Ask for the API key, drawing one * per character typed.
 
     A script with no terminal reads a line of stdin instead, so a piped key still works.
+
+    Returns:
+        The key, with surrounding whitespace removed. It may be empty.
+
+    Raises:
+        typer.Exit: With 130, when the user presses Ctrl-C at the prompt.
     """
     if not render.can_prompt():
         return render.console.input("[yellow]?[/yellow] API key: ", password=True).strip()
@@ -62,7 +68,21 @@ def _ask_key() -> str:
 
 
 def _login_flow(token: str | None) -> Client:
-    """Authenticate and save token. Returns authenticated Client. Dies on failure."""
+    """Log in and return an authenticated client, saving the API key to the config file.
+
+    When a saved key works and no token is passed, it asks whether to re-authenticate (the
+    question is skipped with --yes). Without a token it prompts for the key, and asks again
+    after a rejected key, up to 3 tries; a passed token gets one try. Prints the login lines.
+
+    Args:
+        token: An API key from --token, or None to use the saved key or prompt for one.
+
+    Returns:
+        A client logged in with the key.
+
+    Raises:
+        SystemExit: Through die(), when no key is given or the key is rejected on the last try.
+    """
     from jarvislabs.client import Client
     from jarvislabs.exceptions import JarvislabsError
 
@@ -167,15 +187,29 @@ def refresh_skills() -> list[Path]:
 
 
 def _agent_on_machine(key: str) -> bool:
-    """Return whether an additional agent is on this machine: Claude Code's folder, or its command, is."""
+    """Return whether an additional agent is on this machine.
+
+    Args:
+        key: The agent's key in ADDITIONAL_AGENTS. Only "claude-code" can be detected: it is
+            on the machine when ~/.claude exists or the claude command is on the PATH.
+
+    Returns:
+        True when the agent was found, False otherwise.
+    """
     return key == "claude-code" and ((Path.home() / ".claude").exists() or shutil.which("claude") is not None)
 
 
 def _select_additional_agents_interactive() -> list[str]:
-    """Return the additional agent-specific paths to install for.
+    """Return the keys of the additional agents to install the skill for.
 
-    With one agent there is no question: it is installed when it is on the machine. A picker with a
-    single row is worse than no picker. More agents get the multi-select, each detected one ticked.
+    With one agent there is no question: it is returned when it is on the machine. With more,
+    it shows a multi-select with each agent found on the machine ticked.
+
+    Returns:
+        The selected keys from ADDITIONAL_AGENTS.
+
+    Raises:
+        typer.Exit: With 130, when the user presses Ctrl-C.
     """
     if not ADDITIONAL_AGENTS:
         return []
@@ -222,10 +256,19 @@ def _install_skill_to_path(content: str, path: Path) -> Path:
 
 
 def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
-    """Run the skill install flow.
+    """Ask which agents to install the skill for, and write the skill files.
+
+    Prints the AGENT SKILLS block. Unless --yes or an agents flag is given, it asks whether to
+    install; with a script and no terminal the answer is no. The skill is always written to the
+    universal path, and to the path of each additional agent chosen: all of them with --yes,
+    the ones in the agents flag, or the ones picked in the multi-select.
+
+    Args:
+        agents_flag: The value of --agents ("all", or keys separated by commas), or None.
 
     Returns:
-        A pair per skill file installed: the agents it serves, and its path.
+        A pair per skill file written: the agents it serves, and its path. Empty when the user
+        declines to install.
     """
     render.rule("AGENT SKILLS")
     render.info("Skills teach your coding agents how to use jl.")
@@ -285,7 +328,7 @@ def _show_account_status(client: Client) -> None:
 
 
 def _show_next_steps() -> None:
-    """Print four commands to try and where the full walkthrough lives, before the next action."""
+    """Print the GET STARTED block: four commands to try, each with a short description."""
     render.rule("GET STARTED")
     rows = (
         ("jl connect", "add Jarvislabs models to your coding tools"),
@@ -301,7 +344,7 @@ def _show_next_steps() -> None:
 
 
 def _show_header() -> None:
-    """Print the wordmark when there is room and someone to see it, else the one-line header.
+    """Print the setup header: the wordmark, or a one-line heading when it can't be shown.
 
     The wordmark needs an interactive terminal at least 80 columns wide, and no --yes.
     """

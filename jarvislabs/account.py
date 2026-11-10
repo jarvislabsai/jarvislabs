@@ -60,6 +60,9 @@ class Account:
 
         Args:
             kind: Only keys of this kind, or None for every key.
+
+        Returns:
+            The active keys, newest first.
         """
         resp = self._t.request("GET", "users/api_keys", params={"kind": kind} if kind else None)
         return [ApiKey.model_validate(key) for key in resp]

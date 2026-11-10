@@ -98,6 +98,11 @@ def subscribe() -> None:
 
 
 def _open(url: str) -> None:
+    """Open a page in the browser and print its URL, or only print it without a desktop.
+
+    Args:
+        url: The page to open.
+    """
     # Without a desktop (over SSH, or Linux without X11 or Wayland), webbrowser falls back to a
     # text browser that takes over the terminal. BROWSER names one that works there, such as VS Code
     # Remote-SSH's and Codespaces', which opens the page in the user's own browser.
