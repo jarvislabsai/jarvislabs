@@ -876,6 +876,24 @@ def test_disconnecting_vscode_copilot_leaves_the_users_other_groups(subscribed, 
     assert read_json(models_file) == [OLLAMA_GROUP]
 
 
+def test_disconnecting_vscode_copilot_takes_out_its_group_after_the_user_edited_it(subscribed, tmp_path):
+    models_file = vscode_models_file(tmp_path)
+    models_file.parent.mkdir(parents=True)
+    models_file.write_text(json.dumps([OLLAMA_GROUP], indent="\t"))
+    subscribed.routes[("DELETE", "users/api_keys/key_1")] = {"success": True}
+    runner.invoke(app, ["connect", "vscode-copilot", "--yes"])
+    groups = read_json(models_file)
+    # The user drops a model from jl's group in VS Code's models editor.
+    groups[1]["models"].pop()
+    models_file.write_text(json.dumps(groups, indent="\t"))
+
+    result = runner.invoke(app, ["disconnect", "vscode-copilot", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    # The group would otherwise stay behind holding the revoked key.
+    assert read_json(models_file) == [OLLAMA_GROUP]
+
+
 def test_disconnecting_vscode_copilot_leaves_an_empty_list_in_a_file_it_found(subscribed, tmp_path):
     models_file = vscode_models_file(tmp_path)
     models_file.parent.mkdir(parents=True)

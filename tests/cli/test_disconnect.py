@@ -260,6 +260,20 @@ def test_disconnect_keeps_a_default_the_user_chose_after_connecting(
     assert read_json(opencode_config) == {"model": "openai/gpt-5"}
 
 
+def test_disconnect_names_a_value_it_kept_because_the_user_changed_it(
+    subscribed: MagicMock, opencode_config: Path
+) -> None:
+    opencode_config.write_text('{\n  "model": "anthropic/claude-sonnet-4"\n}\n')
+    runner.invoke(app, ["connect", "opencode", "--yes"])
+    written = read_json(opencode_config)
+    opencode_config.write_text(opencode_config.read_text().replace(written["model"], "openai/gpt-5"))
+
+    result = runner.invoke(app, ["disconnect", "opencode", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert "kept model, which you changed after jl set it" in " ".join(result.output.split())
+
+
 def test_jls_provider_goes_even_after_the_user_edited_it(subscribed: MagicMock, opencode_config: Path) -> None:
     opencode_config.write_text('{\n  "theme": "tokyonight"\n}\n')
     runner.invoke(app, ["connect", "opencode", "--yes"])
@@ -668,7 +682,7 @@ def test_disconnect_keeps_items_the_user_added_to_shared_lists(subscribed: Magic
     assert "put back" not in output
 
 
-def test_disconnect_keeps_a_jl_list_item_the_user_edited(subscribed: MagicMock, tmp_path: Path) -> None:
+def test_disconnect_takes_out_a_jl_list_item_the_user_edited(subscribed: MagicMock, tmp_path: Path) -> None:
     qwen, copilot = shared_lists(tmp_path)
     data = read_json(qwen)
     glm = next(entry for entry in data["modelProviders"]["jarvislabs"] if entry["id"] == GLM["id"])
@@ -681,9 +695,9 @@ def test_disconnect_keeps_a_jl_list_item_the_user_edited(subscribed: MagicMock, 
 
     disconnect_qwen_and_copilot()
 
-    # The user's own openai entry and their edit of jl's entry stay; the rest of jl's go.
-    assert read_json(qwen) == {"modelProviders": {"openai": [GPT], "jarvislabs": [glm]}}
-    assert read_json(copilot) == {"providers": [OLLAMA], "models": [LLAMA, deepseek]}
+    # An edited entry still names Jarvislabs, so it goes like the rest of jl's; the user's own stay.
+    assert read_json(qwen) == {"modelProviders": {"openai": [GPT]}}
+    assert read_json(copilot) == {"providers": [OLLAMA], "models": [LLAMA]}
 
 
 def test_disconnect_after_a_rotate_takes_out_the_new_entries(subscribed: MagicMock, tmp_path: Path) -> None:
@@ -738,6 +752,8 @@ def test_an_old_jl_qwen_record_disconnects_leaving_the_users_entries(subscribed:
     result = runner.invoke(app, ["disconnect", "qwen", "--yes"])
 
     assert result.exit_code == 0, result.output
+    # An older jl's record doesn't know what it set, so it can't say the user changed it.
+    assert "which you changed" not in result.output
     # jl's old entries leave the shared list and the env var naming it; the user's own entry and
     # the values that don't name Jarvislabs (the default model, the auth type) stay, as for Aider.
     assert read_json(settings) == {

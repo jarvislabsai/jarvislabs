@@ -389,7 +389,8 @@ def plan_disconnect(harness: Harness, replaced: Replaced, keep: Collection[Path]
     Each value jl wrote is removed, or replaced by the value it overwrote, but only while it
     is still jl's: the value jl last wrote, or one naming Jarvislabs. A value the user changed
     since stays, as does everything else in the files. From a list shared with the user's
-    entries, only the entries jl last wrote go, unchanged. An object that held only jl's entries
+    entries, the entries jl last wrote go, and so does any entry naming Jarvislabs, edited or not.
+    The preview names each value kept because the user changed it. An object that held only jl's entries
     goes, unless it existed before jl. A file jl created is removed when nothing else is left
     in it. Only the files recorded in ``replaced`` are read, so a harness whose config was
     printed has nothing to change. A record from an older jl (``untracked``) also reads the files
@@ -408,6 +409,7 @@ def plan_disconnect(harness: Harness, replaced: Replaced, keep: Collection[Path]
     """
     writes: list[FileWrite] = []
     restored: list[str] = []
+    kept: list[str] = []
     files = {**_untracked(harness, replaced), **replaced.written} if replaced.untracked else replaced.written
     for path, written in files.items():
         if not path.exists():
@@ -418,7 +420,7 @@ def plan_disconnect(harness: Harness, replaced: Replaced, keep: Collection[Path]
             empty = not new_text.strip()
         else:
             try:
-                new_text = _without_jl(text, path, written, replaced.values.get(path, {}), restored)
+                new_text = _without_jl(text, path, written, replaced.values.get(path, {}), restored, kept)
                 # What jl keeps for the harness doesn't count: alone, it's still only jl's.
                 fmt = cast("Literal['jsonc', 'toml', 'yaml']", written.fmt)
                 empty = not _parse(edit_config(new_text, fmt, {}, written.kept), fmt)
@@ -439,6 +441,8 @@ def plan_disconnect(harness: Harness, replaced: Replaced, keep: Collection[Path]
         ]
     if restored:
         parts.append("put back your " + ", ".join(dict.fromkeys(restored)))
+    if kept:
+        parts.append("kept " + ", ".join(dict.fromkeys(kept)) + ", which you changed after jl set it")
     detail = ", ".join(parts) if parts else "jl wrote no files, so only its record goes"
     return Plan(harness, tuple(writes), Replaced(), Preview("remove", detail=detail))
 
@@ -777,10 +781,13 @@ def _merged(previous: Replaced, now: Replaced) -> Replaced:
     )
 
 
-def _without_jl(text: str, path: Path, written: Written, values: Mapping[KeyPath, object], restored: list[str]) -> str:
+def _without_jl(
+    text: str, path: Path, written: Written, values: Mapping[KeyPath, object], restored: list[str], kept: list[str]
+) -> str:
     """Return a config file's text with jl's values taken out and the ones they overwrote put back.
 
-    Appends the key path of each value put back to ``restored``.
+    Appends the key path of each value put back to ``restored``, and of each value jl wrote that the
+    user changed since, which stays, to ``kept``.
     """
     fmt = cast("Literal['jsonc', 'toml', 'yaml']", written.fmt)
     data = _parse(text, fmt)
@@ -788,6 +795,12 @@ def _without_jl(text: str, path: Path, written: Written, values: Mapping[KeyPath
         key_path
         for key_path in written.hashes
         if (value := _lookup(data, key_path)) is not _MISSING and _is_jl_value(written, path, key_path, value)
+    ]
+    # An empty hash is an older jl's record, which never knew what it wrote there.
+    kept += [
+        ".".join(key_path)
+        for key_path, hashed in written.hashes.items()
+        if hashed and key_path not in ours and _lookup(data, key_path) is not _MISSING
     ]
     # A path inside another of jl's goes with it; setting it after its parent's restore would undo that.
     ours = [key_path for key_path in ours if not any(key_path[: len(p)] == p for p in ours if len(p) < len(key_path))]
@@ -798,7 +811,12 @@ def _without_jl(text: str, path: Path, written: Written, values: Mapping[KeyPath
         entries = _lookup(data, key_path)
         if not isinstance(entries, list):
             continue
-        left = [entry for entry in entries if _hash(entry) not in hashes]
+        # An entry naming Jarvislabs is jl's even after the user edited it, as a single value is.
+        left = [
+            entry
+            for entry in entries
+            if _hash(entry) not in hashes and PROVIDER_ID not in json.dumps(entry, default=str).lower()
+        ]
         if left:
             restore[key_path] = left
         else:
