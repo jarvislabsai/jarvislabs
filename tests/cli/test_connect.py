@@ -1102,7 +1102,7 @@ def test_connect_shows_the_test_reply_or_the_server_error(subscribed, opencode_c
     # The old second ✓ is gone: the test is a secondary line, not a competing success.
     assert "Test request:" not in result.output
     assert not re.search(r"✓ API test passed", result.output)
-    # One tiny request to the default model, sent with this machine's key, not the Jarvis key.
+    # One tiny request to the default model, sent with this machine's key, not the API key.
     [(_, _, body)] = [call for call in subscribed.calls if call[1] == "chat/completions"]
     assert body["model"] == "deepseek-v4.1-flash-1017"
     assert body["max_tokens"] <= 32

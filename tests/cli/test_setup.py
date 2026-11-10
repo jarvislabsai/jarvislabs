@@ -27,7 +27,7 @@ runner = CliRunner()
 
 @pytest.fixture()
 def typed(server: MagicMock, monkeypatch: pytest.MonkeyPatch) -> list[str]:
-    """A first-time setup in a terminal: fill the returned list with the Jarvis keys typed, in order.
+    """A first-time setup in a terminal: fill the returned list with the API keys typed, in order.
 
     Only "jarvis-key" is a valid key; the server refuses any other with "Invalid token".
     """
@@ -67,7 +67,7 @@ def test_the_key_is_asked_with_a_masked_questionary_prompt(typed: list[str], mon
 
     assert result.exit_code == 0, result.output
     # Through questionary's masked prompt and render.answer, which turns Ctrl-C into exit 130.
-    assert [message for message, _, _ in asked] == ["Jarvis key:"]
+    assert [message for message, _, _ in asked] == ["API key:"]
     assert asked[0][1]["style"] is render.PROMPT_STYLE
     assert answered == [asked[0][2]]
 
@@ -101,7 +101,7 @@ def test_the_key_prompt_shows_a_star_per_character(server: MagicMock, monkeypatc
     result = runner.invoke(app, ["setup"], input="n\n")
 
     assert result.exit_code == 0, result.output
-    assert "Jarvis key:" in screen.getvalue()
+    assert "API key:" in screen.getvalue()
     assert "**********" in screen.getvalue()
     assert "jarvis-key" not in screen.getvalue()
 

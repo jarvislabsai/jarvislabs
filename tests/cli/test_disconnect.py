@@ -493,7 +493,7 @@ def test_logout_json_prints_one_document_naming_each_tool(subscribed: MagicMock,
 
 
 def disconnect_logged_out(monkeypatch: pytest.MonkeyPatch) -> Result:
-    """Connect OpenCode, log out (with no Jarvis key in the environment), then disconnect OpenCode."""
+    """Connect OpenCode, log out (with no API key in the environment), then disconnect OpenCode."""
     runner.invoke(app, ["connect", "opencode", "--yes"])
     monkeypatch.delenv("JL_API_KEY")
     runner.invoke(app, ["logout", "--keep-tools"])

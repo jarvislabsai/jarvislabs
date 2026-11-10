@@ -52,13 +52,13 @@ WORDMARK = """\
 
 
 def _ask_key() -> str:
-    """Ask for the Jarvis key, drawing one * per character typed.
+    """Ask for the API key, drawing one * per character typed.
 
     A script with no terminal reads a line of stdin instead, so a piped key still works.
     """
     if not render.can_prompt():
-        return render.console.input("[yellow]?[/yellow] Jarvis key: ", password=True).strip()
-    return render.answer(questionary.password("Jarvis key:", style=render.PROMPT_STYLE)).strip()
+        return render.console.input("[yellow]?[/yellow] API key: ", password=True).strip()
+    return render.answer(questionary.password("API key:", style=render.PROMPT_STYLE)).strip()
 
 
 def _login_flow(token: str | None) -> Client:
@@ -80,19 +80,19 @@ def _login_flow(token: str | None) -> Client:
             if state.yes or not render.confirm("Re-authenticate with a different account?", optional=True):
                 return client
         except JarvislabsError:
-            render.warning("Saved Jarvis key is invalid.")
+            render.warning("Saved API key is invalid.")
 
     # Prompt for token; a typed key that fails is asked for again, up to 3 tries.
     typed = not token
     if typed:
         render.rule("SIGN IN")
-        render.info(Text.assemble("Get your Jarvis key at: ", render.link("https://jarvislabs.ai/settings/api-keys")))
+        render.info(Text.assemble("Get your API key at: ", render.link("https://jarvislabs.ai/settings/api-keys")))
         render.console.print()
     for attempt in range(1, 4):
         if typed:
             token = _ask_key()
         if not token:
-            render.die("No Jarvis key provided.")
+            render.die("No API key provided.")
         try:
             with render.spinner("Authenticating..."):
                 client = Client(api_key=token)
@@ -318,7 +318,7 @@ def _show_header() -> None:
 
 @app.command(rich_help_panel="Account")
 def setup(
-    token: Annotated[str | None, typer.Option("--token", "-t", help="Jarvis key (skips interactive prompt).")] = None,
+    token: Annotated[str | None, typer.Option("--token", "-t", help="API key (skips interactive prompt).")] = None,
     agents: Annotated[
         str | None,
         typer.Option(

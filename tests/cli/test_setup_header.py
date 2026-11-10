@@ -16,7 +16,7 @@ WORDMARK_TOP_ROW = "    ▄▄▄▄▄▖                       ▄▄▖      
 
 @pytest.fixture()
 def terminal(server, monkeypatch):
-    """A first-time setup in an interactive terminal 80 columns wide; the Jarvis key typed is "jarvis-key"."""
+    """A first-time setup in an interactive terminal 80 columns wide; the API key typed is "jarvis-key"."""
     monkeypatch.setattr(render, "can_prompt", lambda: True)
     monkeypatch.setenv("COLUMNS", "80")
     monkeypatch.setattr(setup.questionary, "password", lambda message, **kwargs: MagicMock(ask=lambda: "jarvis-key"))
@@ -60,8 +60,8 @@ def test_setup_asks_for_the_jarvis_key(terminal):
     result = runner.invoke(app, ["setup"], input="n\n")
 
     assert result.exit_code == 0, result.output
-    assert "Get your Jarvis key at: https://jarvislabs.ai/settings/api-keys" in result.output
-    assert "? Jarvis key: " in result.output
+    assert "Get your API key at: https://jarvislabs.ai/settings/api-keys" in result.output
+    assert "? API key: " in result.output
     assert "JarvisLabs" not in result.output
     assert "API token" not in result.output
 

@@ -19,7 +19,7 @@ class Subscription:
         """Wrap the transport shared with the other resources.
 
         Args:
-            transport: The authenticated transport, holding the Jarvis key.
+            transport: The authenticated transport, holding the API key.
         """
         self._t = transport
 

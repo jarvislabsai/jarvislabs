@@ -555,7 +555,7 @@ def _disconnect(
     """
     connection = load_connection()
     if connection and not connection.harnesses:
-        # Kept by a disconnect without a Jarvis key: no harness holds this key any more.
+        # Kept by a disconnect without an API key: no harness holds this key any more.
         _revoke_unused_key(get_client(), connection)
         if state.json_output:
             return {"harness": harness.id, "connected": False, "key_revoked": True}
@@ -570,7 +570,7 @@ def _disconnect(
     last = len(connection.harnesses) == 1
     client = None
     if last:
-        # Without a Jarvis key (after jl logout), the files are still cleaned; the revoke waits for a login.
+        # Without an API key (after jl logout), the files are still cleaned; the revoke waits for a login.
         with contextlib.suppress(JarvislabsError):
             client = Client()
     record = connection.harnesses[harness.id]
@@ -1034,7 +1034,7 @@ def _machine_key(client: Client, kind: Literal["payg", "subscription"], rotate: 
     takes its name.
 
     Args:
-        client: The client holding the Jarvis key.
+        client: The client holding the API key.
         kind: The kind the account can use now: "subscription" with a plan, else "payg".
         rotate: Replace the saved key even when its kind is right.
     """
