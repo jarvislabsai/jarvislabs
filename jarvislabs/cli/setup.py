@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import questionary
 import typer
-from rich import box
 from rich.markup import escape
-from rich.panel import Panel
 from rich.text import Text
 
 from jarvislabs.cli import options as cli_options, render, state
@@ -38,14 +38,51 @@ ADDITIONAL_AGENTS: dict[str, tuple[str, Path]] = {
     "claude-code": ("Claude Code", Path("~/.claude/skills/jarvislabs/SKILL.md")),
 }
 
-_MUTED = "#8a8a8a"
+WORDMARK = """\
+    ▄▄▄▄▄▖                       ▄▄▖        ▐██          ██▌
+    ▀▀▀▜█▌                       ▝▀▘        ▐██          ██▌
+       ▐█▌ ▄█████▙▖ ▗▟██ ██▌  ██ ██▌▗▟█████ ▐██ ▗█████▙▖ ██▙████▄ ▗█████▙
+██▖    ▐█▌▗██▘  ▜█▙ ██▛  ██▌ ▗██ ██▌▝██▙▄▄▖ ▐██ ██▘  ▜██ ██▛  ▝██▖▜██▄▄▄
+▜█▙▖  ▄██▘▝██▄ ▗▟██ ██▌  ██▙▄██▛ ██▌  ▝▀▀██▌▐██ ██▄  ▟██ ▜█▙▖ ▄██▘  ▀▀▜██
+ ▀▜████▛▘  ▀████▜██ ██▘  ████▀▘  ▜█▌ █████▛▘▐██ ▝▜███▀██  ▀████▛▘ ▐█████▀
+"""
 
 
 # ── Login ────────────────────────────────────────────────────────────────────
 
 
+def _ask_key() -> str:
+    """Ask for the API key, drawing one * per character typed.
+
+    A script with no terminal reads a line of stdin instead, so a piped key still works.
+
+    Returns:
+        The key, with surrounding whitespace removed. It may be empty.
+
+    Raises:
+        typer.Exit: With 130, when the user presses Ctrl-C at the prompt.
+    """
+    if not render.can_prompt():
+        return render.console.input("[yellow]?[/yellow] API key: ", password=True).strip()
+    return render.answer(questionary.password("API key:", style=render.PROMPT_STYLE)).strip()
+
+
 def _login_flow(token: str | None) -> Client:
-    """Authenticate and save token. Returns authenticated Client. Dies on failure."""
+    """Log in and return an authenticated client, saving the API key to the config file.
+
+    When a saved key works and no token is passed, it asks whether to re-authenticate (the
+    question is skipped with --yes). Without a token it prompts for the key, and asks again
+    after a rejected key, up to 3 tries; a passed token gets one try. Prints the login lines.
+
+    Args:
+        token: An API key from --token, or None to use the saved key or prompt for one.
+
+    Returns:
+        A client logged in with the key.
+
+    Raises:
+        SystemExit: Through die(), when no key is given or the key is rejected on the last try.
+    """
     from jarvislabs.client import Client
     from jarvislabs.exceptions import JarvislabsError
 
@@ -54,32 +91,43 @@ def _login_flow(token: str | None) -> Client:
 
     # Already authenticated — ask to re-authenticate
     if existing and not token:
+        # The header ends without a blank line, and a login line brings none of its own.
+        render.console.print()
         try:
             client = Client(api_key=existing)
             info = client.account.user_info()
             render.success(f"Logged in as {info.name}")
-            if state.yes or not render.confirm("Re-authenticate with a different account?"):
+            if state.yes or not render.confirm("Re-authenticate with a different account?", optional=True):
                 return client
         except JarvislabsError:
-            render.warning("Saved token is invalid.")
+            render.warning("Saved API key is invalid.")
 
-    # Prompt for token
-    if not token:
-        render.info("Get your API key at: https://jarvislabs.ai/settings/api-keys")
-        token = render.console.input("[yellow]?[/yellow] API token: ", password=True).strip()
-
-    if not token:
-        render.die("No token provided.")
-
-    try:
-        with render.spinner("Authenticating..."):
-            client = Client(api_key=token)
-            info = client.account.user_info()
-    except JarvislabsError as e:
-        render.die(f"Authentication failed: {e}")
+    # Prompt for token; a typed key that fails is asked for again, up to 3 tries.
+    typed = not token
+    if typed:
+        render.rule("SIGN IN")
+        render.info(Text.assemble("Get your API key at: ", render.link("https://jarvislabs.ai/settings/api-keys")))
+        render.console.print()
+    for attempt in range(1, 4):
+        if typed:
+            token = _ask_key()
+        if not token:
+            render.die("No API key provided.")
+        try:
+            with render.spinner("Authenticating..."):
+                client = Client(api_key=token)
+                info = client.account.user_info()
+            break
+        except JarvislabsError as e:
+            if not typed or attempt == 3:
+                render.die(f"Authentication failed: {e}")
+            render.warning(f"Authentication failed: {e}. Try again.")
 
     config.setdefault("auth", {})["token"] = token
     save_config(config)
+    if not typed:
+        # A --token login has no SIGN IN rule to open the block, so the blank line comes here.
+        render.console.print()
     render.success(f"Logged in as {info.name}")
     return client
 
@@ -138,46 +186,49 @@ def refresh_skills() -> list[Path]:
 # ── Agent selection ──────────────────────────────────────────────────────────
 
 
+def _agent_on_machine(key: str) -> bool:
+    """Return whether an additional agent is on this machine.
+
+    Args:
+        key: The agent's key in ADDITIONAL_AGENTS. Only "claude-code" can be detected: it is
+            on the machine when ~/.claude exists or the claude command is on the PATH.
+
+    Returns:
+        True when the agent was found, False otherwise.
+    """
+    return key == "claude-code" and ((Path.home() / ".claude").exists() or shutil.which("claude") is not None)
+
+
 def _select_additional_agents_interactive() -> list[str]:
-    """Interactive multi-select for additional agent-specific paths. Returns selected agent keys."""
+    """Return the keys of the additional agents to install the skill for.
+
+    With one agent there is no question: it is returned when it is on the machine. With more,
+    it shows a multi-select with each agent found on the machine ticked.
+
+    Returns:
+        The selected keys from ADDITIONAL_AGENTS.
+
+    Raises:
+        typer.Exit: With 130, when the user presses Ctrl-C.
+    """
     if not ADDITIONAL_AGENTS:
         return []
 
-    import questionary.prompts.common as _qc
-
-    _qc.INDICATOR_SELECTED = "✓"
-    _qc.INDICATOR_UNSELECTED = "○"
+    detected = [key for key in ADDITIONAL_AGENTS if _agent_on_machine(key)]
+    if len(ADDITIONAL_AGENTS) == 1:
+        return detected
 
     choices = [
-        questionary.Choice(
-            title=f"{label:12s}  →  {path.expanduser()}",
-            value=key,
-        )
-        for key, (label, path) in ADDITIONAL_AGENTS.items()
+        questionary.Choice(title=label, value=key, checked=key in detected)
+        for key, (label, _) in ADDITIONAL_AGENTS.items()
     ]
-
-    render.console.print()
-    render.console.print("[bold]Universal (.agents/skills)[/bold] [dim]— always included[/dim]")
-    for name in UNIVERSAL_AGENTS:
-        render.console.print(f"  [dim]•[/dim] {name}")
-    render.console.print()
-
-    selected = questionary.checkbox(
-        "Install to additional agent-specific paths?",
+    question = questionary.checkbox(
+        "Extra agent folders (optional):",
         choices=choices,
-        style=questionary.Style(
-            [
-                ("selected", "noreverse fg:#73daca"),
-                ("highlighted", "bold"),
-                ("pointer", "fg:#73daca bold"),
-            ]
-        ),
-    ).ask()
-
-    if selected is None:  # user pressed Ctrl+C
-        raise typer.Exit()
-
-    return selected
+        instruction=f"\n  Space toggles{render.MARKS['sep']}Enter continues",
+        style=render.PROMPT_STYLE,
+    )
+    return render.answer(question)
 
 
 def _parse_agents_flag(agents: str) -> list[str]:
@@ -205,17 +256,27 @@ def _install_skill_to_path(content: str, path: Path) -> Path:
 
 
 def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
-    """Run the skill install flow. Returns installed (label, path) pairs."""
-    render.console.print()
-    render.console.print("[bold cyan]Agent Skills[/bold cyan]")
-    render.console.print(
-        "  Skills teach your coding agents how to use [bold]jl[/bold] to create and manage\n"
-        "  GPU instances, run training scripts, and monitor experiments on your behalf."
-    )
+    """Ask which agents to install the skill for, and write the skill files.
+
+    Prints the AGENT SKILLS block. Unless --yes or an agents flag is given, it asks whether to
+    install; with a script and no terminal the answer is no. The skill is always written to the
+    universal path, and to the path of each additional agent chosen: all of them with --yes,
+    the ones in the agents flag, or the ones picked in the multi-select.
+
+    Args:
+        agents_flag: The value of --agents ("all", or keys separated by commas), or None.
+
+    Returns:
+        A pair per skill file written: the agents it serves, and its path. Empty when the user
+        declines to install.
+    """
+    render.rule("AGENT SKILLS")
+    render.info("Skills teach your coding agents how to use jl.")
     render.console.print()
 
-    if not agents_flag and not render.confirm("Install agent skills?", skip=state.yes):
-        render.info("Skipped. You can run jl setup again later.")
+    # Yes in a terminal, where the installer tells users to press Enter at every question; no for a script.
+    asked = "Install agent skills?"
+    if not agents_flag and not render.confirm(asked, skip=state.yes, default=render.can_prompt(), optional=True):
         return []
 
     # Determine additional agent-specific installs (validate before any writes)
@@ -233,17 +294,19 @@ def _skill_install_flow(agents_flag: str | None) -> list[tuple[str, Path]]:
     # Always install universal (.agents/skills)
     universal_resolved = _install_skill_to_path(content, UNIVERSAL_PATH)
     agents_covered = ", ".join(UNIVERSAL_AGENTS)
-    installed.append((f"Universal ({agents_covered})", universal_resolved))
+    installed.append((agents_covered, universal_resolved))
 
     for key in additional:
         label, path = ADDITIONAL_AGENTS[key]
         resolved = _install_skill_to_path(content, path)
         installed.append((label, resolved))
 
-    render.console.print()
-    render.console.print("[bold]Skills installed:[/bold]")
-    for label, path in installed:
-        render.success(f"{label}  →  {path}")
+    names = [*UNIVERSAL_AGENTS, *(label for label, _ in installed[1:])]
+    summary = f"for {', '.join(names[:-1])} and {names[-1]}" if len(names) > 1 else f"for {names[0]}"
+    render.success("Agent skills installed")
+    # Hung under its indent: ten agent names wrap, and a wrap at column 0 reads as a new block.
+    render._hang(Text("  "), Text(summary, "dim"), render.console)
+    render.console.print(Text("  " + render.MARKS["sep"].join(render.short_path(path) for _, path in installed), "dim"))
 
     return installed
 
@@ -264,136 +327,33 @@ def _show_account_status(client: Client) -> None:
     render.account_status(info, bal, metrics, sym)
 
 
-def _show_getting_started() -> None:
-    """Show getting started guide with Rich panels."""
-    con = render.stdout_console
-
-    con.print()
-
-    from rich.console import Group
-
-    # ── Workflow overview
-    workflow = Text()
-    workflow.append("\n")
-    workflow.append("  write code", style="bold cyan")
-    workflow.append("  →  ", style=_MUTED)
-    workflow.append("run on GPU", style="bold green")
-    workflow.append("  →  ", style=_MUTED)
-    workflow.append("monitor", style="bold yellow")
-    workflow.append("  →  ", style=_MUTED)
-    workflow.append("iterate", style="bold magenta")
-    workflow.append("\n")
-
-    # ── Using with coding agents
-    agent_text = Text()
-    agent_text.append("Your coding agents can now use jl to manage GPU instances,\n", style=_MUTED)
-    agent_text.append("run experiments, and monitor training. Just ask them:\n", style=_MUTED)
-    agent_text.append("\n")
-    agent_text.append('"Run my training script train.py on an A100 GPU.\n', style="italic")
-    agent_text.append(" Monitor the loss and let me know when it's done.\"\n", style="italic")
-    agent_text.append("\n")
-    agent_text.append("The agent will create instances, upload code, start runs,\n", style=_MUTED)
-    agent_text.append("monitor logs, and clean up — all using jl commands.", style=_MUTED)
-
-    # ── Instance lifecycle
-    instance_text = Text()
-    instance_text.append("Containers", style="bold green")
-    instance_text.append("  Pre-configured with PyTorch, Jupyter, and IDE. ", style=_MUTED)
-    instance_text.append("Default.\n", style=_MUTED)
-    instance_text.append("VMs       ", style="bold yellow")
-    instance_text.append("  Bare-metal SSH access. Use ", style=_MUTED)
-    instance_text.append("--vm", style="bold")
-    instance_text.append(".\n\n", style=_MUTED)
-    instance_text.append("Create    ", style=_MUTED)
-    instance_text.append("jl create --gpu A100\n", style="bold")
-    instance_text.append("Create VM ", style=_MUTED)
-    instance_text.append("jl create --gpu A100-80GB --vm\n", style="bold")
-    instance_text.append("List      ", style=_MUTED)
-    instance_text.append("jl list\n", style="bold")
-    instance_text.append("Pause     ", style=_MUTED)
-    instance_text.append("jl pause <id>", style="bold")
-    instance_text.append("              stops GPU billing, keeps storage\n", style=_MUTED)
-    instance_text.append("Resume    ", style=_MUTED)
-    instance_text.append("jl resume <id>", style="bold")
-    instance_text.append("             pick up where you left off\n", style=_MUTED)
-    instance_text.append("Destroy   ", style=_MUTED)
-    instance_text.append("jl destroy <id>", style="bold")
-    instance_text.append("            deletes instance + all data\n", style=_MUTED)
-    instance_text.append("\n")
-    instance_text.append("Tip: always destroy instances you no longer need to stop billing.", style=f"{_MUTED} italic")
-
-    # ── Run management
-    run_text = Text()
-    run_text.append("Run a file     ", style=_MUTED)
-    run_text.append("jl run train.py --gpu A100\n", style="bold")
-    run_text.append("Run a project  ", style=_MUTED)
-    run_text.append("jl run . --script train.py --on <id>\n", style="bold")
-    run_text.append("Check logs     ", style=_MUTED)
-    run_text.append("jl run logs <run_id> --tail 50\n", style="bold")
-    run_text.append("Stop a run     ", style=_MUTED)
-    run_text.append("jl run stop <run_id>\n", style="bold")
-    run_text.append("List runs      ", style=_MUTED)
-    run_text.append("jl run list --status running", style="bold")
-
-    # ── Quick reference
-    quick = Text()
-    quick.append("$ jl gpus", style="bold")
-    quick.append("                  available GPUs and pricing\n", style=_MUTED)
-    quick.append("$ jl status", style="bold")
-    quick.append("                account balance and resources\n", style=_MUTED)
-    quick.append("$ jl <command> --help", style="bold")
-    quick.append("   help for any command\n", style=_MUTED)
-    quick.append("  e.g. ", style=_MUTED)
-    quick.append("jl create --help", style="bold")
-    quick.append("  ", style=_MUTED)
-    quick.append("jl run --help", style="bold")
-    quick.append("  ", style=_MUTED)
-    quick.append("jl ssh-key --help", style="bold")
-
-    # ── Wrap everything in one outer panel
-    con.print(
-        Panel(
-            Group(
-                workflow,
-                Panel(
-                    agent_text,
-                    title="[bold]using with coding agents[/bold]",
-                    border_style="magenta",
-                    box=box.ROUNDED,
-                    padding=(0, 1),
-                    expand=False,
-                ),
-                Panel(
-                    instance_text,
-                    title="[bold]instance lifecycle[/bold]",
-                    border_style="green",
-                    box=box.ROUNDED,
-                    padding=(0, 1),
-                    expand=False,
-                ),
-                Panel(
-                    run_text,
-                    title="[bold]run management[/bold]",
-                    border_style="yellow",
-                    box=box.ROUNDED,
-                    padding=(0, 1),
-                    expand=False,
-                ),
-                Panel(
-                    quick,
-                    title="[bold]quick reference[/bold]",
-                    border_style=_MUTED,
-                    box=box.ROUNDED,
-                    padding=(0, 1),
-                    expand=False,
-                ),
-            ),
-            title="[bold]get started[/bold]",
-            border_style="cyan",
-            box=box.HEAVY,
-            padding=(0, 1),
-        )
+def _show_next_steps() -> None:
+    """Print the GET STARTED block: four commands to try, each with a short description."""
+    render.rule("GET STARTED")
+    rows = (
+        ("jl connect", "add Jarvislabs models to your coding tools"),
+        ("jl gpus", "GPUs and prices"),
+        ("jl run train.py --gpu A100", "run a script on a GPU"),
+        ("jl status", "balance and connected tools"),
     )
+    width = max(len(command) for command, _ in rows)
+    for command, detail in rows:
+        render.console.print(
+            Text.assemble("  ", (command.ljust(width), render.ACCENT_BOLD), "  ", (detail, "dim")), highlight=False
+        )
+
+
+def _show_header() -> None:
+    """Print the setup header: the wordmark, or a one-line heading when it can't be shown.
+
+    The wordmark needs an interactive terminal at least 80 columns wide, and no --yes.
+    """
+    if not state.yes and render.can_prompt() and render.console.width >= 80:
+        render.console.print()
+        # No blank line here: each block after the wordmark prints its own first.
+        render.console.print(WORDMARK, markup=False, highlight=False, end="")
+    else:
+        render.heading("Jarvislabs CLI setup")
 
 
 # ── Command ──────────────────────────────────────────────────────────────────
@@ -401,7 +361,7 @@ def _show_getting_started() -> None:
 
 @app.command(rich_help_panel="Account")
 def setup(
-    token: Annotated[str | None, typer.Option("--token", "-t", help="API token (skips interactive prompt).")] = None,
+    token: Annotated[str | None, typer.Option("--token", "-t", help="API key (skips interactive prompt).")] = None,
     agents: Annotated[
         str | None,
         typer.Option(
@@ -410,11 +370,10 @@ def setup(
     ] = None,
     yes: cli_options.YesOption = False,
 ) -> None:
-    """Set up the JarvisLabs CLI: authenticate and install agent skills."""
+    """Set up the Jarvislabs CLI: authenticate and install agent skills."""
     cli_options.apply_command_options(yes=yes)
 
-    render.console.print()
-    render.console.print("[bold cyan]⚡ JarvisLabs CLI Setup[/bold cyan]")
+    _show_header()
 
     # Step 1: Authentication
     client = _login_flow(token)
@@ -422,6 +381,9 @@ def setup(
     # Step 2: Skill installation
     _skill_install_flow(agents)
 
-    # Show account status + getting started guide
+    # Show account status, then the short next steps.
+    # The install scripts run jl connect next, so they would only sit between the two.
     _show_account_status(client)
-    _show_getting_started()
+    if not os.environ.get("JL_FROM_INSTALLER"):
+        _show_next_steps()
+        render.next_step("see all commands:", ["jl --help"])

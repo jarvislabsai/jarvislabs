@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import click
 import pytest
+import typer.rich_utils as rich_utils
 from typer.testing import CliRunner
 
 from jarvislabs.cli import render, run, state
@@ -24,6 +25,44 @@ def test_run_help_shows_direct_start_usage():
     assert "jl run train.py --gpu L4" in result.output
     assert "--http-ports TEXT" in result.output
     assert "--requirements PATH" in result.output
+    assert "--pause, --destroy and --keep: see jl run start --help" in result.output
+
+
+def test_run_help_leaves_one_blank_line_above_the_direct_start_block():
+    result = runner.invoke(app, ["run", "--help"])
+
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    start = lines.index("Start a run directly:")
+    assert lines[start - 1] == ""
+    assert lines[start - 2] != ""
+
+
+def test_run_help_styles_headings_bold_and_commands_bold_cyan(monkeypatch):
+    # CliRunner's output is not a terminal, so the console has to be told to colour it.
+    monkeypatch.setattr(rich_utils, "FORCE_TERMINAL", True)
+
+    result = runner.invoke(app, ["run", "--help"], color=True, env={"COLUMNS": "100"})
+
+    assert result.exit_code == 0
+    lines = result.output.splitlines()
+    assert "Start a run directly:" not in lines
+    assert "\x1b[1mStart a run directly:\x1b[0m" in lines
+    assert "  \x1b[1;36mjl run train.py --gpu L4\x1b[0m" in lines
+    # A comment stays body text, unlike a heading or a command.
+    assert "  For directory targets, pyproject.toml and requirements.txt are" in lines
+
+
+def test_run_help_keeps_plain_text_with_no_colour(monkeypatch):
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setattr(rich_utils, "FORCE_TERMINAL", True)
+
+    result = runner.invoke(app, ["run", "--help"], color=True, env={"COLUMNS": "100"})
+
+    assert result.exit_code == 0
+    assert ";36m" not in result.output
+    assert "Start a run directly:" in result.output
+    assert "jl run train.py --gpu L4" in result.output
 
 
 def test_run_start_requires_existing_instance_for_now(monkeypatch):

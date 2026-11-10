@@ -5,10 +5,12 @@ from typing import Annotated
 
 import typer
 
-from jarvislabs.cli import options as cli_options, render, state, update
+from jarvislabs.cli import options as cli_options, render, state
 from jarvislabs.cli.app import app, get_client
-from jarvislabs.config import load_config, save_config
+from jarvislabs.config import load_config, load_connection, save_config
 from jarvislabs.constants import EUROPE_GPU_TYPES, EUROPE_REGION, INDIA_NOIDA_REGION
+from jarvislabs.exceptions import JarvislabsError
+from jarvislabs.harnesses import HARNESSES, connectable, default_model, installed
 
 EUROPE_AVAILABILITY_NOTE = "EU1 H100/H200 launches are currently limited to 1 GPU."
 
@@ -21,9 +23,42 @@ def _maybe_eu_note(gpus) -> None:
 @app.command(rich_help_panel="Account")
 def logout(
     json_output: cli_options.JsonOption = False,
+    keep_tools: Annotated[bool, typer.Option("--keep-tools", help="Leave jl's setup in your coding tools.")] = False,
+    yes: cli_options.YesOption = False,
 ) -> None:
-    """Remove saved API token from config file."""
-    cli_options.apply_command_options(json_output=json_output)
+    """Log out, and remove jl from your coding tools.
+
+    By default this also removes jl's provider entry from every connected tool and revokes this machine's Models API key. --keep-tools leaves them connected; that keeps the key saved, so a later jl disconnect can still clean up.
+
+    [bold]Examples:[/bold]
+
+      # Log out, and remove jl from every connected tool
+      [bold cyan]jl logout[/bold cyan]
+
+      # Log out, and leave your tools connected
+      [bold cyan]jl logout --keep-tools[/bold cyan]
+    """
+    cli_options.apply_command_options(json_output=json_output, yes=yes)
+    connection = load_connection()
+    connected = [h for h in HARNESSES if connection and h.id in connection.harnesses]
+    disconnected: list[dict[str, object]] = []
+    if connected and not keep_tools:
+        names = [harness.name for harness in connected]
+        label = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        # "Also": a no keeps the tools, and the logout itself still happens.
+        if not render.confirm(
+            f"Also remove jl from {label} and revoke this machine's key?",
+            skip=state.yes,
+            default=True,
+        ):
+            keep_tools = True
+        else:
+            from jarvislabs.cli import connect
+
+            # The one question above covers every tool, so each is removed without its own.
+            render.console.print()
+            results = [connect._disconnect(harness, preview=False) for harness in connected]
+            disconnected = [result for result in results if result]
     config = load_config()
     logged_out = "auth" in config and "token" in config["auth"]
     if logged_out:
@@ -31,21 +66,32 @@ def logout(
         if not config["auth"]:
             del config["auth"]
         save_config(config)
+    had_machine_key = "connect" in config
 
     if state.json_output:
-        render.print_json({"success": True, "logged_out": logged_out})
+        render.print_json({"success": True, "logged_out": logged_out, "disconnected": disconnected})
         return
     if logged_out:
-        render.success("Logged out — token removed from config.")
+        render.success("Logged out")
     else:
-        render.info("No saved token found.")
+        render.info("You weren't logged in.")
+    if had_machine_key and connection:
+        # The tools still hold a live key: say so, since a logout can look like a full cleanup.
+        render.warning(
+            "Your coding tools stay connected",
+            f"This machine's key {connection.name} stays active in them. "
+            "`jl disconnect <tool>` removes one; the last one revokes the key.",
+        )
 
 
 @app.command(rich_help_panel="Account")
 def status(
     json_output: cli_options.JsonOption = False,
+    all_tools: Annotated[bool, typer.Option("--all", help="Also list tools that aren't installed.")] = False,
 ) -> None:
-    """Show account info, balance, and resource summary."""
+    """See your account and coding tools. Plan usage: jl usage."""
+    from jarvislabs.cli import update
+
     cli_options.apply_command_options(json_output=json_output)
     client = get_client()
     with render.spinner("Fetching account info..."):
@@ -54,7 +100,29 @@ def status(
         metrics = client.account.resource_metrics()
         currency = client.account.currency()
         sym = render.currency_symbol(currency)
+        usage, usage_error = None, None
+        try:
+            usage = client.subscription.usage()
+        except JarvislabsError as e:
+            usage_error = str(e)
         cli = update.cli_status()
+    connection = load_connection()
+    recorded = set(connection.harnesses) if connection else set()
+    # jl connect swaps a wallet key for a subscription key only when the user agrees.
+    switch_available = bool(usage and connection and connection.kind == "payg")
+    harnesses = [
+        {
+            "id": h.id,
+            "name": h.name,
+            "installed": installed(h),
+            "connected": connectable(h) and h.id in recorded,
+            # A coming-soon harness is recorded only when jl connect --print showed its config.
+            "printed": not connectable(h) and h.id in recorded,
+            "default_model": default_model(h) if connectable(h) and h.id in recorded else None,
+        }
+        for h in HARNESSES
+        if connectable(h) or h.id in recorded
+    ]
 
     if state.json_output:
         render.print_json(
@@ -63,14 +131,41 @@ def status(
                 "balance": bal.model_dump(),
                 "resources": metrics.model_dump(),
                 "currency": currency,
+                "usage": {"error": usage_error} if usage_error else usage,
                 "cli": cli,
+                "harnesses": harnesses,
+                "switch_available": switch_available,
             }
         )
         return
 
     render.account_status(info, bal, metrics, sym)
-    if hint := update.status_hint(cli):
-        render.warning(hint)
+    render.console.print()
+    # Default to what the user can act on: connected tools, and installed ones jl can connect. The
+    # rest is catalog, one flag away.
+    shown = [row for row in harnesses if all_tools or row["connected"] or row["printed"] or row["installed"]]
+    if shown:
+        render.harness_status(shown)
+    else:
+        render.info("No coding tools installed.")
+    hidden = len(harnesses) - len(shown)
+    if hidden:
+        # "more" only makes sense beside a list; with none shown, say what --all lists.
+        tools = "tool" if hidden == 1 else "tools"
+        more = f"more {tools}" if shown else f"{tools} jl can connect"
+        render.hint_line(f"{hidden} {more}: `jl status --all`")
+    if switch_available:
+        render.warning(
+            "These tools pay from your wallet",
+            "You have a subscription now. Run `jl connect` to switch them to your plan.",
+        )
+    warning, hint = update.status_hints(cli)
+    if warning:
+        render.warning(warning)
+    if hint:
+        render.hint_line(hint)
+    next_command = "connect another tool:" if recorded else "connect a tool:"
+    render.next_step(next_command, ["jl connect"])
 
 
 @app.command(rich_help_panel="Resources")
@@ -149,16 +244,20 @@ def templates(
     render.templates_table(tpls)
 
 
-ssh_key_app = typer.Typer(name="ssh-key", help="Manage SSH keys.")
+ssh_key_app = typer.Typer(context_settings=cli_options.HELP_CONTEXT, name="ssh-key", help="Manage SSH keys.")
 app.add_typer(ssh_key_app, rich_help_panel="Infrastructure")
 
-scripts_app = typer.Typer(name="scripts", help="Manage startup scripts.")
+scripts_app = typer.Typer(context_settings=cli_options.HELP_CONTEXT, name="scripts", help="Manage startup scripts.")
 app.add_typer(scripts_app, rich_help_panel="Infrastructure")
 
-filesystem_app = typer.Typer(name="filesystem", help="Manage persistent filesystems.")
+filesystem_app = typer.Typer(
+    context_settings=cli_options.HELP_CONTEXT, name="filesystem", help="Manage persistent filesystems."
+)
 app.add_typer(filesystem_app, rich_help_panel="Infrastructure")
 
-vpc_app = typer.Typer(name="vpc", help="Manage VPCs (private networks for VMs).")
+vpc_app = typer.Typer(
+    context_settings=cli_options.HELP_CONTEXT, name="vpc", help="Manage VPCs (private networks for VMs)."
+)
 app.add_typer(vpc_app, rich_help_panel="Infrastructure")
 
 
@@ -327,7 +426,7 @@ def filesystem_list(
 def filesystem_create(
     name: Annotated[str, typer.Option("--name", "-n", help="Filesystem name.")],
     storage: Annotated[int, typer.Option("--storage", "-s", help="Storage in GB (50-2048).")],
-    region: Annotated[str | None, typer.Option("--region", help="Region (IN1 or IN2). Defaults to IN2.")] = None,
+    region: Annotated[str | None, typer.Option("--region", help="Region (IN1, IN2, EU1). Defaults to IN2.")] = None,
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
@@ -453,7 +552,7 @@ def vpc_ips(
 def vpc_create(
     name: Annotated[str, typer.Argument(help="VPC name.")],
     cidr: Annotated[str, typer.Option("--cidr", help="IPv4 CIDR block (e.g. 10.50.0.0/24).")],
-    region: Annotated[str, typer.Option("--region", help="Region (IN1 or IN2).")],
+    region: Annotated[str, typer.Option("--region", help="Region (IN1, IN2, EU1).")],
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:

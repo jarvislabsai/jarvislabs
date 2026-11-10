@@ -11,6 +11,18 @@
 ## Formatting
 
 - Ruff is configured in `pyproject.toml`. Run `uv run ruff format . && uv run ruff check --fix .` after major code changes or before committing.
+- Human output follows `DESIGN.md`: help layers, setup/connect/status rules, colour, space and voice.
+
+## Preview harnesses
+
+Claude Code and Codex need `/v1/messages` and `/v1/responses`, which aren't public yet. They stay
+out of `jl connect` unless `JL_PREVIEW_HARNESSES=1` is set.
+
+- `JL_ANTHROPIC_URL` and `JL_RESPONSES_URL` point the two writers at a local server.
+- `uv run python -m tests.cli.mock_endpoints --port 8765 --log /tmp/requests.jsonl` serves both
+  protocols and records every request.
+- With the real clients installed, `JL_PREVIEW_E2E=1 uv run pytest tests/cli/test_preview_clients.py`
+  lets `jl connect` write each config and completes one turn through the mock.
 
 ## Tooling
 

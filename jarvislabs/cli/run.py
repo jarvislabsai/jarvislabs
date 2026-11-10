@@ -15,6 +15,8 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Annotated
 
 import typer
+import typer.rich_utils as rich_utils
+from rich.console import Console
 from typer.core import TyperGroup
 
 from jarvislabs.cli import options as cli_options, render, state
@@ -41,39 +43,56 @@ class RunCommandGroup(TyperGroup):
         return super().resolve_command(ctx, args)
 
     def get_help(self, ctx):  # type: ignore[override]
+        # Typer's rich help prints its panels itself and leaves click's formatter empty, so the
+        # hand-written blocks below are styled here and returned for click to print after them.
         help_text = super().get_help(ctx).rstrip()
-        start_help = (
-            "\n\n"
-            "Start a run directly:\n"
-            "  jl run TARGET --on <instance_id> [-- script args]\n"
-            "  jl run TARGET --gpu <gpu> [-- script args]\n\n"
-            "Common examples:\n"
-            "  jl run train.py --gpu L4\n"
-            "  jl run train.py --gpu L4 -- --epochs 5\n"
-            "  jl run . --script train.py --on <instance_id>\n"
-            "  jl run --on <instance_id> -- python -c \"print('hi')\"\n\n"
-            "Key start options:\n"
-            "  --on INTEGER           Run on an existing instance.\n"
-            "  --gpu TEXT             Create a fresh instance with this GPU.\n"
-            "  --vm                   Create a VM instead of a container.\n"
-            "  --http-ports TEXT      Expose comma-separated HTTP ports on a fresh instance.\n"
-            "  --script TEXT          Script path inside a directory target.\n"
-            "  --requirements PATH    Override auto-detection with a custom requirements file.\n"
-            "  --setup TEXT           Shell command to run before the main command.\n"
-            "  --follow / --no-follow Stream logs after starting the run.\n"
-            "\n"
-            "Environment:\n"
-            "  For directory targets, pyproject.toml and requirements.txt are\n"
-            "  auto-detected and installed. Use --requirements to override.\n"
-            "\n"
-            "Lifecycle note:\n"
-            "  Human workflow: use the default mode where the CLI stays attached to the\n"
-            "  run and streams logs if you want it to pause or destroy the instance after\n"
-            "  the run finishes.\n"
-            "  Agent workflow: --json is for detached runs, so use --keep and have the\n"
-            "  agent clean up the instance after the run.\n"
-        )
-        return help_text + start_help
+        block = _render_help_markup(_RUN_HELP_DETAIL)
+        return f"{help_text}\n\n{block}" if help_text else f"\n{block}"
+
+
+_RUN_HELP_DETAIL = """\
+[bold]Start a run directly:[/bold]
+  [bold cyan]jl run TARGET --on <instance_id> \\[-- script args][/bold cyan]
+  [bold cyan]jl run TARGET --gpu <gpu> \\[-- script args][/bold cyan]
+
+[bold]Common examples:[/bold]
+  [bold cyan]jl run train.py --gpu L4[/bold cyan]
+  [bold cyan]jl run train.py --gpu L4 -- --epochs 5[/bold cyan]
+  [bold cyan]jl run . --script train.py --on <instance_id>[/bold cyan]
+  [bold cyan]jl run --on <instance_id> -- python -c "print('hi')"[/bold cyan]
+
+[bold]Key start options:[/bold]
+  [bold cyan]--on INTEGER[/bold cyan]           Run on an existing instance.
+  [bold cyan]--gpu TEXT[/bold cyan]             Create a fresh instance with this GPU.
+  [bold cyan]--vm[/bold cyan]                   Create a VM instead of a container.
+  [bold cyan]--http-ports TEXT[/bold cyan]      Expose comma-separated HTTP ports on a fresh instance.
+  [bold cyan]--script TEXT[/bold cyan]          Script path inside a directory target.
+  [bold cyan]--requirements PATH[/bold cyan]    Override auto-detection with a custom requirements file.
+  [bold cyan]--setup TEXT[/bold cyan]           Shell command to run before the main command.
+  [bold cyan]--follow / --no-follow[/bold cyan] Stream logs after starting the run.
+
+[bold]Environment:[/bold]
+  For directory targets, pyproject.toml and requirements.txt are
+  auto-detected and installed. Use --requirements to override.
+
+[bold]Lifecycle:[/bold]
+  A fresh instance is paused when the run finishes, unless you pass --destroy
+  or --keep. With --json, pass --keep and pause or destroy it yourself.
+  --pause, --destroy and --keep: see [bold cyan]jl run start --help[/bold cyan]"""
+
+
+def _render_help_markup(markup: str) -> str:
+    """Render help markup with the same colour and width settings Typer gives the help panels."""
+    console = Console(
+        color_system=rich_utils.COLOR_SYSTEM,
+        force_terminal=rich_utils.FORCE_TERMINAL,
+        width=rich_utils.MAX_WIDTH,
+        highlight=False,
+    )
+    with console.capture() as capture:
+        # Laid out by hand, so the block keeps its columns rather than wrapping them.
+        console.print(markup, soft_wrap=True)
+    return capture.get().rstrip("\n")
 
 
 run_app = typer.Typer(
@@ -81,7 +100,7 @@ run_app = typer.Typer(
     cls=RunCommandGroup,
     help="Start and inspect managed runs.",
     rich_markup_mode="rich",
-    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+    context_settings={**cli_options.HELP_CONTEXT, "allow_extra_args": True, "ignore_unknown_options": True},
 )
 app.add_typer(run_app, rich_help_panel="Workloads")
 
@@ -960,7 +979,9 @@ def run_start(
     requirements: Annotated[
         str | None,
         typer.Option(
-            "--requirements", help="Override auto-detection: upload and install this requirements file instead."
+            "--requirements",
+            metavar="PATH",
+            help="Override auto-detection: upload and install this requirements file instead.",
         ),
     ] = None,
     pause: Annotated[bool, typer.Option("--pause", help="Pause a fresh instance after the run completes.")] = False,
@@ -974,7 +995,13 @@ def run_start(
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Start a managed run."""
+    """Start a managed run.
+
+    Give a target, then choose an existing instance or a fresh GPU:
+      jl run start train.py --on <instance_id>
+      jl run start train.py --gpu L4 -- --epochs 5
+      jl run start . --script train.py --gpu L4 --pause
+    """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     target, extra_args = _parse_run_inputs(list(ctx.args))
     requirements_path = _resolve_local_input(requirements, label="Requirements file")
@@ -1098,7 +1125,7 @@ def run_list(
     limit: Annotated[int | None, typer.Option("--limit", "-l", help="Show only the N most recent runs.")] = None,
     status_filter: Annotated[
         str | None,
-        typer.Option("--status", "-s", help="Filter by state (running, succeeded, failed). Implies --refresh."),
+        typer.Option("--status", "-s", help="Filter by a state from jl run status (implies --refresh)."),
     ] = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:

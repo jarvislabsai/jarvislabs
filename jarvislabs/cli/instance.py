@@ -173,7 +173,21 @@ def instance_create(
     yes: cli_options.YesOption = False,
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Create a new GPU instance (container or VM)."""
+    """Create a GPU instance, VM, or CPU VM.
+
+    A container comes with PyTorch, Jupyter and an IDE. Add --vm for a bare-metal VM with SSH only.
+
+    [bold]Examples:[/bold]
+
+      # A container with PyTorch and Jupyter
+      [bold cyan]jl create --gpu A100[/bold cyan]
+
+      # A bare-metal VM with SSH only
+      [bold cyan]jl create --gpu H100 --vm[/bold cyan]
+
+      # A CPU-only VM, with 8 vCPUs and 32 GB of RAM
+      [bold cyan]jl create --cpu --vcpus 8 --ram 32 --vm[/bold cyan]
+    """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
 
     if cpu:
@@ -486,7 +500,12 @@ def instance_exec(
     machine_id: Annotated[int, typer.Argument(help="Instance ID.")],
     json_output: cli_options.JsonOption = False,
 ) -> None:
-    """Execute a command on a running instance."""
+    """Execute a command on a running instance.
+
+    Type the command after --, so its own flags aren't read by jl:
+      jl exec <id> -- nvidia-smi
+      jl exec <id> -- bash -lc "ls -la"
+    """
     cli_options.apply_command_options(json_output=json_output)
     if not ctx.args:
         render.die(f"No command specified. Use -- to separate: jl exec {machine_id} -- <command>")
@@ -532,7 +551,8 @@ def instance_upload(
         Path, typer.Argument(exists=True, readable=True, resolve_path=True, help="Local file or directory to upload.")
     ],
     dest: Annotated[
-        str | None, typer.Argument(help="Remote destination path. Defaults to remote home directory.")
+        str | None,
+        typer.Argument(help="Remote destination path. Defaults to the remote home folder plus the file name."),
     ] = None,
     json_output: cli_options.JsonOption = False,
 ) -> None:

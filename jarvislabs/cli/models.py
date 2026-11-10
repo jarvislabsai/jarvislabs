@@ -29,7 +29,11 @@ ImageOption = Annotated[
 # With a prompt given, piped input is added only if it starts arriving within this time (see _read_stdin).
 STDIN_WAIT_S = 1.0
 
-models_app = typer.Typer(name="models", help="Pay-per-token model APIs: call a model directly, no deployment needed.")
+models_app = typer.Typer(
+    context_settings=cli_options.HELP_CONTEXT,
+    name="models",
+    help="Pay-per-token model APIs: call a model directly, no deployment needed.",
+)
 app.add_typer(models_app, rich_help_panel="Token Factory")
 
 
@@ -57,6 +61,7 @@ def models_get(model_id: ModelIdArgument = None, json_output: cli_options.JsonOp
         return
     render.model_detail(model, MODELS_API_URL)
     render.model_snippets(model.id, MODELS_API_URL)
+    render.next_step("try it", [f'jl models chat {model.id} "Hello"'])
 
 
 @models_app.command("chat")

@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import codecs
 import json
+import os
+import re
 import sys
 from contextlib import nullcontext
-from typing import Any, NoReturn
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
 import questionary
+import questionary.prompts.common
 import typer
 from pydantic import BaseModel
 from rich import box
@@ -23,27 +30,102 @@ from rich.text import Text
 from rich.theme import Theme
 
 from jarvislabs.cli import options as cli_options, state
-from jarvislabs.constants import EUROPE_REGION, MODELS_DEFAULT_MAX_TOKENS, REGION_CODE_TO_REGION, REGION_DISPLAY_CODES
+from jarvislabs.constants import (
+    EUROPE_REGION,
+    MODELS_DEFAULT_MAX_TOKENS,
+    REGION_CODE_TO_REGION,
+    REGION_DISPLAY_CODES,
+    SUBSCRIBE_URL,
+)
 from jarvislabs.instances import is_cpu_vm
 from jarvislabs.regions import region_code
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from jarvislabs.models import SubscriptionUsage
 
 TABLE_BOX = box.ROUNDED
 HEADER_STYLE = "bold"
 TITLE_STYLE = "bold"
-BORDER_STYLE = "dim"
+# Borders and rules are grey, not dim: Rich dims a panel title with its border style, which made
+# every cyan title faint. bright_black is quiet without touching the title.
+CHROME_STYLE = "bright_black"
 
+# Four hues, each with one job: green done or added, yellow needs attention or changes a setting of the
+# user's, red failed or removed, cyan (accent) where the user acts and every command to type.
 theme = Theme(
     {
-        "info": "dim",
+        "info": "default",
         "success": "green",
         "warning": "yellow",
         "error": "bold red",
         "title": "bold",
+        "accent": "cyan",
+        "hint": "default",
     }
 )
 
 console = Console(stderr=True, theme=theme)
 stdout_console = Console(theme=theme)
+
+UNICODE_MARKS = {
+    "ok": "✓",
+    "bad": "✗",
+    "ticked": "●",
+    "unticked": "○",
+    "sep": " · ",
+    "bar_full": "█",
+}
+ASCII_MARKS = {
+    "ok": "+",
+    "bad": "x",
+    "ticked": "[*]",
+    "unticked": "[ ]",
+    "sep": " | ",
+    "bar_full": "#",
+}
+# The theme's accent, bold, for the "?" that opens a prompt.
+ACCENT_BOLD = theme.styles["accent"] + Style(bold=True)
+
+
+def link(url: str, text: str | None = None) -> Text:
+    """Return a URL as a clickable, underlined accent link.
+
+    The underline shows where the terminal doesn't support OSC 8 links (clickable terminal
+    links); where it does, the text is also clickable.
+
+    Args:
+        url: The address the link points to.
+        text: The words to show instead of the URL. Defaults to the URL itself.
+
+    Returns:
+        The styled text.
+    """
+    return Text(text or url, style=theme.styles["accent"] + Style(underline=True, link=url))
+
+
+def choose_marks() -> dict[str, str]:
+    """Return the set of marks (tick, cross, separator, bar block) this console can draw.
+
+    The ASCII set is returned on a legacy Windows console or when stdout or stderr is not
+    UTF-8. On Windows, only Windows Terminal (WT_SESSION) and VS Code (TERM_PROGRAM) count as
+    drawing Unicode: PowerShell's own console window has no font fallback.
+
+    Returns:
+        UNICODE_MARKS or ASCII_MARKS.
+    """
+    legacy = sys.platform == "win32" and not (os.environ.get("WT_SESSION") or os.environ.get("TERM_PROGRAM"))
+    encodings = [getattr(stream, "encoding", None) or "utf-8" for stream in (sys.stdout, sys.stderr)]
+    utf8 = all(codecs.lookup(encoding).name == "utf-8" for encoding in encodings)
+    return ASCII_MARKS if legacy or not utf8 else UNICODE_MARKS
+
+
+MARKS = choose_marks()
+# questionary's checkbox reads these when it draws each row. A check reads as "chosen"; the filled
+# dot is for availability tables.
+questionary.prompts.common.INDICATOR_SELECTED = MARKS["ok"]
+questionary.prompts.common.INDICATOR_UNSELECTED = MARKS["unticked"]
 
 
 # ── JSON output ──────────────────────────────────────────────────────────────
@@ -69,32 +151,154 @@ def print_json(data: list[BaseModel] | BaseModel | dict) -> None:
 
 
 def account_status(info, bal, metrics, sym: str) -> None:
+    """Print a panel with the account's name, ID, balance, grants and instance counts.
+
+    The balance is yellow when it is zero or less, and the paused count when it is above zero.
+
+    Args:
+        info: The user's info, with name and user_id.
+        bal: The account's balance, with balance and grants.
+        metrics: The account's resource metrics, with running_instances and paused_instances.
+        sym: The currency symbol put before each amount.
+    """
     from rich.panel import Panel
     from rich.text import Text
 
     content = Text()
     content.append(f"{info.name}", style="bold")
-    content.append(f"  {info.user_id}\n", style="cyan")
+    content.append(f"  {info.user_id}\n", style="dim")
     content.append("\n")
     content.append("Balance  ", style="dim")
-    content.append(f"{sym}{bal.balance:.2f}", style="bold green")
+    # Values are content, in bold; colour only where the state needs attention (an empty wallet,
+    # paused machines still billing storage). Green is for done marks, yellow for warnings.
+    content.append(f"{sym}{bal.balance:.2f}", "bold yellow" if bal.balance <= 0 else "bold")
     content.append("    Grants  ", style="dim")
-    content.append(f"{sym}{bal.grants:.2f}", style="bold yellow")
+    content.append(f"{sym}{bal.grants:.2f}", "bold")
     content.append("\n")
     content.append("Running  ", style="dim")
-    content.append(f"{metrics.running_instances}", style="bold green")
+    content.append(f"{metrics.running_instances}", "bold")
     content.append("         Paused  ", style="dim")
-    content.append(f"{metrics.paused_instances}", style="bold yellow")
+    content.append(f"{metrics.paused_instances}", "bold yellow" if metrics.paused_instances else "bold")
 
     panel = Panel(
         content,
-        title="[bold cyan]⚡ Account[/bold cyan]",
-        border_style="cyan",
+        title="[bold cyan]Account[/bold cyan]",
+        border_style=CHROME_STYLE,
         box=box.ROUNDED,
         padding=(1, 2),
         expand=False,
     )
     stdout_console.print(panel)
+
+
+NO_SUBSCRIPTION = Text.assemble("No subscription. Subscribe at ", link(SUBSCRIBE_URL))
+
+
+USAGE_BAR_WIDTH = 32
+
+
+def usage_bar(percent: float) -> Text:
+    """Return a 32-character bar of blocks filled to a percentage, with no frame.
+
+    The rest of the bar is blank space. The bar turns yellow from 80 percent and red from 100.
+    The caller prints the percentage after it.
+
+    Args:
+        percent: The share used, 0 to 100. Values outside that range are clamped when drawing.
+
+    Returns:
+        The bar as styled text.
+    """
+    filled = max(0, min(USAGE_BAR_WIDTH, round(percent / 100 * USAGE_BAR_WIDTH)))
+    style = "error" if percent >= 100 else "warning" if percent >= 80 else "default"
+    bar = Text(MARKS["bar_full"] * filled, style)
+    bar.append(" " * (USAGE_BAR_WIDTH - filled))
+    return bar
+
+
+def subscription_usage(usage: SubscriptionUsage | None) -> None:
+    """Print a panel with the plan, its renewal and each window's share used.
+
+    The panel also shows the 5-hour, weekly and monthly windows with when each resets, the
+    requests running now against the limit, and whether the balance is used.
+
+    Args:
+        usage: The account's usage, or None to print "No subscription" with the subscribe link.
+    """
+    if usage is None:
+        stdout_console.print(NO_SUBSCRIPTION, highlight=False)
+        return
+    period = usage.period
+    if usage.renewal_pending:
+        renewal = "renewal payment pending"
+    else:
+        renewal = f"{'ends' if period.cancel_at_period_end else 'renews'} {_utc(period.renews_at)}"
+    windows = usage.windows
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="dim")
+    table.add_column()
+    table.add_row("Plan", f"[bold]{escape(usage.plan.name)}[/bold], {renewal}")
+    for label, window in (("5-hour", windows.five_hour), ("Weekly", windows.weekly), ("Monthly", windows.monthly)):
+        table.add_row(label, Text.assemble(usage_bar(window.percent_used), f"  {window.percent_used:5.1f}% used"))
+        if window.resets_at:
+            table.add_row("", Text(f"resets {_utc(window.resets_at)}", "dim"))
+    table.add_row("Running now", f"{usage.slots.in_use} of {usage.slots.limit} requests")
+    table.add_row("Use balance", "on" if usage.use_balance else "off")
+    stdout_console.print(
+        Panel(table, title="[bold cyan]Usage[/bold cyan]", border_style=CHROME_STYLE, padding=(1, 2), expand=False)
+    )
+
+
+def harness_status(rows: list[dict[str, Any]]) -> None:
+    """Print a panel listing each coding tool and its state.
+
+    A state is connected (with its default model), config printed, installed, or not installed.
+    Connected tools come first, with a mark; a connected tool that has since been uninstalled
+    gets a warning and the command that disconnects it. An installed tool gets the command that
+    connects it, and one not installed is dim, with the same command.
+
+    Args:
+        rows: One dict per harness, with the keys id, name, installed, connected, printed and default_model.
+    """
+    table = Table.grid(padding=(0, 2))
+    # One row per tool, never wrapped: a broken "config printed" reads as two states.
+    table.add_column(no_wrap=True)
+    table.add_column(no_wrap=True)
+    table.add_column(no_wrap=True)
+    for row in sorted(rows, key=lambda r: (not r["connected"], not r["printed"], not r["installed"])):
+        name = row["name"]
+        if row["connected"] and not row["installed"]:
+            # Uninstalled since it was connected: its config is left, so say how to clean it up.
+            table.add_row(
+                Text.assemble(("! ", "warning"), (name, "bold")),
+                Text("not installed", "warning"),
+                Text(f"jl disconnect {row['id']}", "accent"),
+            )
+        elif row["connected"]:
+            default = Text.assemble(("default ", "dim"), row["default_model"]) if row["default_model"] else ""
+            table.add_row(Text.assemble((MARKS["ok"] + " ", "success"), (name, "bold")), "connected", default)
+        elif row["printed"]:
+            table.add_row(Text("  " + name), "config printed", "")
+        elif row["installed"]:
+            table.add_row(Text("  " + name), "installed", Text(f"jl connect {row['id']}", "accent"))
+        else:
+            table.add_row(
+                Text("  " + name, "dim"), Text("not installed", "dim"), Text(f"jl connect {row['id']}", "accent")
+            )
+    stdout_console.print(
+        Panel(
+            table, title="[bold cyan]Coding tools[/bold cyan]", border_style=CHROME_STYLE, padding=(1, 2), expand=False
+        )
+    )
+
+
+def _utc(moment: datetime) -> str:
+    """Return a moment as "YYYY-MM-DD HH:MM UTC".
+
+    Args:
+        moment: A timezone-aware time, which is converted to UTC.
+    """
+    return f"{moment.astimezone(timezone.utc):%Y-%m-%d %H:%M} UTC"
 
 
 # ── Tables ───────────────────────────────────────────────────────────────────
@@ -107,7 +311,7 @@ def _table(title: str | None = None, **kwargs) -> Table:
         box=TABLE_BOX,
         title_style=TITLE_STYLE,
         header_style=HEADER_STYLE,
-        border_style=BORDER_STYLE,
+        border_style=CHROME_STYLE,
         **kwargs,
     )
 
@@ -117,7 +321,7 @@ def _print_detail_table(rows: list[tuple[str, str]], *, spaced: bool = False) ->
 
     ``spaced`` adds a blank line after each row, for views with multi-line values.
     """
-    table = Table(show_header=False, box=None, padding=(0, 2, int(spaced), 2), border_style=BORDER_STYLE)
+    table = Table(show_header=False, box=None, padding=(0, 2, int(spaced), 2), border_style=CHROME_STYLE)
     table.add_column("Field", style="dim")
     # Avoid cutting off long values like notebook URLs with auth tokens.
     table.add_column("Value", overflow="fold")
@@ -587,6 +791,13 @@ def _prices(pricing) -> dict[str, str]:
 
 
 def models_table(models: list) -> None:
+    """Print a table of models with context length and prices per million tokens.
+
+    Ends with a "Next:" line pointing to `jl models get`.
+
+    Args:
+        models: The models to list.
+    """
     table = _table("Models · price per 1M tokens", show_lines=True)
     # Name above the ID in one column: a separate Name column gets squeezed out on narrow terminals.
     table.add_column("Model · ID", no_wrap=True)
@@ -599,7 +810,7 @@ def models_table(models: list) -> None:
             *_prices(model.pricing).values(),
         )
     stdout_console.print(table)
-    info("Tip: run 'jl models get <ID>' for details and ready-to-use code")
+    next_step("for details and ready-to-use code", ["jl models get <ID>"])
 
 
 def select_model(models: list):
@@ -669,7 +880,7 @@ def model_snippets(model_id: str, base_url: str) -> None:
     python = _openai_snippet(base_url, model_id, MODELS_DEFAULT_MAX_TOKENS)
     for title, code, lexer in (("curl", curl, "bash"), ("Python", python, "python")):
         stdout_console.print()
-        stdout_console.print(Rule(f"[bold]{title}[/bold]", align="left", style="dim"))
+        stdout_console.print(Rule(Text(title, "bold"), style=CHROME_STYLE, align="left"))
         stdout_console.print()
         stdout_console.print(Syntax(code, lexer, theme="ansi_dark", background_color="default", word_wrap=True))
     stdout_console.print()
@@ -898,50 +1109,364 @@ def jsonable_cpu_meta(cpu_meta: dict) -> dict:
 # ── Messages ─────────────────────────────────────────────────────────────────
 
 
-def success(msg: str) -> None:
+def success(msg: str | Text, hint: str | None = None) -> None:
+    """Print a line that something is done, with an optional hint under it.
+
+    Prints nothing in --json mode.
+
+    Args:
+        msg: The line. A plain string is shown in bold; a Text is shown as given.
+        hint: A line under it. Each `command` in backticks is shown in the accent, and each
+            line of a numbered list hangs under its text.
+    """
+    _status(MARKS["ok"], "success", msg, hint)
+
+
+def error(msg: str | Text, hint: str | None = None) -> None:
+    """Print a line that something failed, with an optional hint under it.
+
+    Prints nothing in --json mode. To print an error and exit, use die().
+
+    Args:
+        msg: The line. A plain string is shown in red; a Text is shown as given.
+        hint: A line under it saying what to do. Each `command` in backticks is shown in the
+            accent, and each line of a numbered list hangs under its text.
+    """
+    _status(MARKS["bad"], "error", msg, hint)
+
+
+def info(msg: str | Text) -> None:
+    """Print a plain line of information.
+
+    Prints nothing in --json mode.
+
+    Args:
+        msg: The line. A plain string is shown in the default colour; a Text is shown as given.
+    """
     if state.json_output:
         return
-    console.print(f"[green]✓[/green] {escape(msg)}", highlight=False)
+    console.print(msg if isinstance(msg, Text) else Text(msg, style="info"), highlight=False)
 
 
-def error(msg: str) -> None:
+def warning(msg: str | Text, hint: str | Text | None = None) -> None:
+    """Print a line that needs the user's attention, with an optional hint under it.
+
+    Prints nothing in --json mode.
+
+    Args:
+        msg: The line. A plain string is shown in yellow; a Text is shown as given.
+        hint: A line under it saying what to do. Text is shown as given; a string gets each
+            `command` in backticks in the accent, and each line of a numbered list hangs
+            under its text.
+    """
+    _status("!", "warning", msg, hint)
+
+
+def hint_line(msg: str) -> None:
+    """Print a hint, indented two spaces, with each `command` in backticks in the accent.
+
+    Prints nothing in --json mode. A long hint wraps under its first character.
+
+    Args:
+        msg: The hint. URLs in it are shown as links.
+    """
     if state.json_output:
         return
-    console.print(f"[red]✗[/red] {escape(msg)}", style="red", highlight=False)
+    _hang(Text("  "), _hint(msg), console)
 
 
-def info(msg: str) -> None:
+def rule(title: str = "") -> None:
+    """Print a blank line and a dim divider line with a bold title that opens a phase.
+
+    Prints nothing in --json mode.
+
+    Args:
+        title: The title at the left of the divider. With none, the divider has no title.
+    """
     if state.json_output:
         return
-    console.print(f"[dim]{escape(msg)}[/dim]", highlight=False)
+    console.print()
+    console.print(Rule(Text(title, "bold") if title else "", style=CHROME_STYLE, align="left"))
 
 
-def warning(msg: str) -> None:
+def heading(title: str, note: str = "") -> None:
+    """Print a blank line, then a bold heading that opens a phase.
+
+    Prints nothing in --json mode.
+
+    Args:
+        title: The heading.
+        note: Text after the heading. It wraps under itself, not at the left edge.
+    """
     if state.json_output:
         return
-    console.print(f"[yellow]![/yellow] {escape(msg)}", highlight=False)
+    console.print()
+    _headline(title, note, console)
+
+
+def _headline(title: str, note: str, out: Console) -> None:
+    """Print a bold title, with the note after it on the same line when there is one.
+
+    Args:
+        title: The heading.
+        note: Text after the heading; empty for none.
+        out: The console to print to.
+    """
+    # A note wraps under the title, not at the left edge.
+    if note:
+        _hang(Text.assemble((title, "bold"), "  "), Text(note, "hint"), out)
+    else:
+        out.print(Text(title, "bold"))
+
+
+def next_step(text: str, commands: Sequence[str]) -> None:
+    """Print the closing "Next:" line with the commands to type.
+
+    Prints a blank line, then "Next:" followed by the commands in the accent, then what to do in
+    dim text under them. Prints nothing in --json mode.
+
+    Args:
+        text: What to do, e.g. "start a tool in this folder:".
+        commands: The commands, any one of which is the next step, shown joined by a dim "or".
+    """
+    if state.json_output:
+        return
+    # "or", not the separator: "opencode · cline -i" read as one command to type.
+    joined = Text()
+    for i, command in enumerate(commands):
+        if i:
+            joined.append("  or  ", "dim")
+        joined.append(command, ACCENT_BOLD)
+    console.print()
+    _hang(Text("Next: ", "bold"), joined, console)
+    _hang(Text("      "), Text(text.rstrip(":"), "dim"), console)
+
+
+def short_path(path: Path) -> str:
+    """Return a path with the home folder shown as ~, with POSIX separators.
+
+    Args:
+        path: The path to show.
+
+    Returns:
+        "~/" and the path below the home folder, or the whole path when it isn't under it.
+    """
+    try:
+        return "~/" + path.relative_to(Path.home()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def paths_label(paths: Sequence[Path]) -> str:
+    """Return paths as one comma-separated label for a row.
+
+    The first path is shown with short_path(). Each later path is shown by its file name alone
+    when it is in the same folder as the path before it.
+
+    Args:
+        paths: The paths, in the order to show them.
+
+    Returns:
+        The label.
+    """
+    parts = [
+        path.name if i and path.parent == paths[i - 1].parent else short_path(path) for i, path in enumerate(paths)
+    ]
+    return ", ".join(parts)
+
+
+Change = Literal["add", "update", "change", "remove", "ok", "todo"]
+# The mark and style of each kind of row; "ok" (done) takes its mark from MARKS.
+_CHANGES: dict[str, tuple[str, str]] = {
+    "add": ("+", "green"),
+    "update": ("~", "yellow"),
+    "change": ("~", "yellow"),
+    "remove": ("-", "red"),
+    # Written, but the user still has a step to take: not the ✓ of a finished row.
+    "todo": ("!", "yellow"),
+}
+_LEGEND = {"add": "+ add", "update": "~ update", "change": "~ change what is already there", "remove": "- remove"}
+
+
+@dataclass(frozen=True)
+class Row:
+    """One tool's row in a list of changes: a mark, the tool, and what happens.
+
+    Attributes:
+        change: "add", "update" (of jl's own entries), "change" (of the user's settings), "remove",
+            "ok" for a change done, or "todo" for a step the user still has to finish.
+        name: The tool.
+        detail: What the row says after the tool, such as the files it changes.
+        warning: A yellow line under the detail: what the change replaces of the user's.
+        note: A secondary line under the detail.
+    """
+
+    change: Change
+    name: str
+    detail: str = ""
+    warning: str = ""
+    note: str = ""
+
+
+def change_rows(rows: Sequence[Row], title: str = "", note: str = "") -> None:
+    """Print rows of changes to stdout, aligned, after an optional heading and legend.
+
+    The legend lists the marks the rows use.
+
+    Args:
+        rows: The rows.
+        title: A bold heading; with none, neither heading nor legend is printed.
+        note: A note after the heading, such as the facts every row shares.
+    """
+    if title:
+        _headline(title, note, stdout_console)
+        kinds = {row.change for row in rows}
+        stdout_console.print(Text("  ".join(text for c, text in _LEGEND.items() if c in kinds), "dim"))
+        stdout_console.print()
+    width = max(len(row.name) for row in rows)
+    for row in rows:
+        change_row(row, width, stdout_console)
+
+
+def change_row(row: Row, width: int, out: Console) -> None:
+    """Print one row of changes: a mark, the tool name padded to a width, and the detail.
+
+    The row's warning and note, when set, print under the detail, indented to line up with it.
+
+    Args:
+        row: The row.
+        width: The width of the tool column, the longest tool name of the list.
+        out: The console to print to.
+    """
+    mark, style = (MARKS["ok"], "green") if row.change == "ok" else _CHANGES[row.change]
+    prefix = Text.assemble((mark, style), " ", (row.name.ljust(width), "bold"), "  ")
+    _hang(prefix, Text(row.detail, "" if row.change in ("ok", "todo") else "hint"), out)
+    indent = Text(" " * prefix.cell_len)
+    for line, line_style in ((row.warning, "warning"), (row.note, "hint")):
+        if line:
+            _hang(indent, _linked(Text(line, line_style)), out)
+
+
+def _status(mark: str, style: str, msg: str | Text, hint: str | Text | None) -> None:
+    """Print a mark and a message, then an optional hint under it.
+
+    Prints nothing in --json mode.
+
+    Args:
+        mark: The symbol that opens the line.
+        style: The theme style of the mark and, for a plain-string message, of the message.
+            A "success" message is shown in bold, not in the style.
+        msg: The message. A Text is shown as given.
+        hint: Lines under the message. A Text is shown as given; a string is split into
+            lines, each with its `command` parts in the accent.
+    """
+    if state.json_output:
+        return
+    # Success is frequent and can be long: green belongs on the mark, not the paragraph. Warnings and
+    # errors are rare and short, so they tint their message; that is where attention should go.
+    body_style = "bold" if style == "success" else style
+    _hang(Text(mark + " ", style), msg if isinstance(msg, Text) else Text(msg, body_style), console)
+    if hint:
+        if isinstance(hint, Text):
+            _hang(Text("  "), hint, console)
+            return
+        # Each line on its own, so a numbered step that wraps hangs under its text, not its number.
+        for line in hint.split("\n"):
+            number = re.match(r"\s*\d+\. ", line)
+            prefix = "  " + (number.group(0) if number else "")
+            _hang(Text(prefix), _hint(line[len(prefix) - 2 :]), console)
+
+
+def _hint(text: str | Text) -> Text:
+    """Return hint text, with each `command` in backticks shown in the accent.
+
+    Args:
+        text: A string, or a Text, which is returned unchanged. The backticks are removed.
+
+    Returns:
+        The styled text, with URLs in it shown as links.
+    """
+    if isinstance(text, Text):
+        return text
+    # Backticks mark a command to type: shown in the accent, without them.
+    hint = Text(style="hint")
+    for i, part in enumerate(text.split("`")):
+        hint.append(part, "accent" if i % 2 else None)
+    return _linked(hint)
+
+
+def _linked(text: Text) -> Text:
+    """Return text with each URL in it styled as a link, like every other URL jl prints.
+
+    Args:
+        text: The text. It is changed in place.
+
+    Returns:
+        The same text.
+    """
+    for match in re.finditer(r"https?://\S+", text.plain):
+        text.stylize(theme.styles["accent"] + Style(underline=True, link=match.group(0)), *match.span())
+    return text
+
+
+def _hang(prefix: Text, body: Text, out: Console) -> None:
+    """Print a prefix and a body, wrapping the body under its own first character.
+
+    Args:
+        prefix: What opens the first line.
+        body: The text to wrap to the console's width.
+        out: The console to print to.
+    """
+    # Wrapped lines of body hang under its first character, never under the prefix.
+    indent = prefix.cell_len
+    for i, line in enumerate(body.wrap(out, max(out.width - indent, 20))):
+        text = Text.assemble(prefix if i == 0 else " " * indent, line)
+        text.rstrip()
+        out.print(text, soft_wrap=True)
 
 
 # ── Confirmation ─────────────────────────────────────────────────────────────
 
 
-def confirm(msg: str, *, skip: bool = False) -> bool:
-    """Ask for confirmation. Returns True if confirmed or skip=True (--yes flag).
+def confirm(msg: str, *, skip: bool = False, default: bool = False, optional: bool = False) -> bool:
+    """Ask a yes or no question on the terminal.
 
-    In --json mode confirmation cannot be prompted, so a missing --yes is a
-    hard error — never a silent decline a script would read as success.
+    An empty answer gives ``default``. Ctrl-C exits with 130. In --json mode, or when there is
+    no answer to read (no terminal, and nothing left on stdin), a missing --yes is a hard
+    error rather than a silent decline that a script would read as success. An ``optional``
+    question gives ``default`` instead of the error when there is no answer to read.
+
+    Args:
+        msg: The question.
+        skip: True when --yes was given: nothing is asked, and the answer is yes.
+        default: The answer for an empty reply, shown as the capital letter in "Y/n".
+        optional: True when ``default`` is safe to use with no answer to read.
+
+    Returns:
+        True for yes, False for no.
+
+    Raises:
+        typer.Exit: With 130, on Ctrl-C.
+        SystemExit: Nothing can be asked and --yes wasn't given.
     """
     if skip:
         return True
     if state.json_output:
         die("--json requires --yes")
     try:
+        choices = "Y/n" if default else "y/N"
         # A Text prompt skips Rich's auto-highlighting, which would color the numbers in msg.
-        response = console.input(Text.from_markup(f"[yellow]?[/yellow] {escape(msg)} [dim]\\[y/N][/dim] "))
-        return response.strip().lower() in ("y", "yes")
-    except (KeyboardInterrupt, EOFError):
+        response = console.input(Text.assemble(("? ", ACCENT_BOLD), (msg, "bold"), (f" ({choices}) ", "dim")))
+        answer = response.strip().lower()
+        return answer in ("y", "yes") if answer else default
+    except KeyboardInterrupt:
         console.print()
-        return False
+        raise typer.Exit(130) from None
+    except EOFError:
+        console.print()
+        if optional:
+            return default
+        die(f'"{msg}" needs an answer: run this in a terminal, or pass --yes.')
 
 
 # ── Spinner ──────────────────────────────────────────────────────────────────
@@ -997,10 +1522,20 @@ def _status_style(status: str) -> str:
     }.get(status, "white")
 
 
-def die(msg: str, code: int = 1) -> NoReturn:
-    """Print error and exit. Emits JSON to stdout when --json is active."""
+def die(msg: str | Text, code: int = 1) -> NoReturn:
+    """Print an error and exit.
+
+    With --json, prints {"error": message} as JSON to stdout instead.
+
+    Args:
+        msg: The error. A Text is reduced to its plain string in JSON.
+        code: The exit status.
+
+    Raises:
+        SystemExit: Always, with ``code``.
+    """
     if state.json_output:
-        print_json({"error": msg})
+        print_json({"error": msg.plain if isinstance(msg, Text) else msg})
     else:
         error(msg)
     sys.exit(code)
@@ -1089,7 +1624,7 @@ def managed_settings_help() -> None:
     grid.add_column()
     for name, meaning in MANAGED_SETTINGS_HELP:
         grid.add_row(name, meaning)
-    console.print(Panel(grid, title="What these settings mean", title_align="left", border_style=BORDER_STYLE))
+    console.print(Panel(grid, title="What these settings mean", title_align="left", border_style=CHROME_STYLE))
 
 
 def _model_label(dep) -> str:
@@ -1108,10 +1643,17 @@ def warn_region_errors(region_errors: list) -> None:
 
 # ── Interactive prompts ──────────────────────────────────────────────────────
 
+# The basic ANSI colours, so the terminal's theme sets the shade: cyan where the user acts, grey for help.
 PROMPT_STYLE = questionary.Style(
     [
-        ("pointer", "fg:#73daca bold"),
-        ("highlighted", "fg:#73daca bold"),  # the row under the cursor
+        ("qmark", "fg:ansicyan bold"),
+        ("question", "bold"),
+        ("pointer", "fg:ansicyan bold"),
+        ("highlighted", "bold"),  # the row under the cursor
+        ("selected", "noreverse fg:ansicyan"),  # the check and its row
+        ("answer", "fg:ansicyan bold"),
+        ("instruction", "fg:ansibrightblack"),
+        ("disabled", "fg:ansibrightblack"),
         ("separator", "fg:ansibrightblack bold"),
     ]
 )
@@ -1121,10 +1663,43 @@ def can_prompt() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def select_row(message: str, headings: tuple[str, ...], rows: list, values: list) -> Any:
-    """Arrow-key picker shown as an aligned table; returns the chosen row's value. Ctrl+C exits.
+def answer(question: questionary.Question) -> Any:
+    """Ask a questionary question and return its answer; Ctrl-C exits with 130.
 
-    Rows are plain text: questionary highlights the row under the cursor only for plain-text titles.
+    Args:
+        question: The question, not yet asked.
+
+    Returns:
+        The answer, which questionary gives as None only for Ctrl-C.
+
+    Raises:
+        typer.Exit: With 130, on Ctrl-C.
+    """
+    result = question.ask()
+    if result is None:
+        raise typer.Exit(130)
+    return result
+
+
+def select_row(message: str, headings: tuple[str, ...], rows: list, values: list) -> Any:
+    """Ask the user to pick one row of an aligned table with the arrow keys.
+
+    Once a row is picked, the table is replaced by the question and the row's cells, one per
+    line. A row whose cells after the first are all empty is shown on the question's line.
+    Rows are plain text: questionary highlights the row under the cursor only for plain-text
+    titles. Dies when there are no rows.
+
+    Args:
+        message: The question.
+        headings: The column headings.
+        rows: One tuple of cell strings per choice, as many cells as headings.
+        values: The value to return for each row, in the same order as rows.
+
+    Returns:
+        The value of the chosen row.
+
+    Raises:
+        typer.Exit: With 130, on Ctrl-C.
     """
     if not rows:
         die("There is nothing to choose from.")
@@ -1138,13 +1713,16 @@ def select_row(message: str, headings: tuple[str, ...], rows: list, values: list
         questionary.Choice(title="".join(pad(row)), value=value) for row, value in zip(rows, values, strict=True)
     ]
     question = questionary.select(message, choices=choices, style=PROMPT_STYLE)
-    question.application.erase_when_done = True  # replaced below by the chosen row, one field per line
-    choice = question.ask()
-    if choice is None:
-        raise typer.Exit()
+    question.application.erase_when_done = True  # replaced below by the chosen row
+    choice = answer(question)
+    row = rows[values.index(choice)]
+    if not any(row[1:]):
+        # A row that names a choice, not a record, such as a way out.
+        console.print(f"[bold]?[/bold] {escape(message)} {escape(row[0])}", highlight=False)
+        return choice
     label_width = max(len(heading) for heading in headings)
     console.print(f"[bold]?[/bold] {message}")
-    for heading, cell in zip(headings, rows[values.index(choice)], strict=True):
+    for heading, cell in zip(headings, row, strict=True):
         console.print(f"  [dim]{heading:<{label_width}}[/dim]   {escape(cell)}", highlight=False)
     return choice
 

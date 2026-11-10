@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import io
+import re
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from rich.console import Console
 
 from jarvislabs.cli import setup, state
 
@@ -29,7 +32,7 @@ SKILL_CONTENT = "---\nname: jarvislabs\n---\n# Test skill content\n"
 def test_login_flow_skips_when_existing_token_valid(monkeypatch):
     monkeypatch.setattr(setup, "load_config", lambda: {"auth": {"token": "existing"}})
     # User declines re-auth
-    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: False)
+    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False, **kwargs: False)
 
     client = _fake_client()
     import jarvislabs.client
@@ -59,7 +62,7 @@ def test_login_flow_saves_new_token(monkeypatch):
 
 def test_login_flow_returns_client(monkeypatch):
     monkeypatch.setattr(setup, "load_config", lambda: {"auth": {"token": "valid"}})
-    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: False)
+    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False, **kwargs: False)
 
     client = _fake_client()
     import jarvislabs.client
@@ -76,7 +79,7 @@ def test_login_flow_reauths_when_user_confirms(monkeypatch):
     monkeypatch.setattr(setup, "save_config", lambda config: saved.update(config))
     monkeypatch.setattr(setup.render, "spinner", lambda msg: MagicMock(__enter__=MagicMock(), __exit__=MagicMock()))
     # User accepts re-auth
-    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: True)
+    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False, **kwargs: True)
     monkeypatch.setattr(setup.render.console, "input", lambda prompt, password=False: "new-token")
 
     client = _fake_client()
@@ -210,20 +213,75 @@ def test_install_skill_to_path_overwrites_existing(tmp_path):
 # ── _select_additional_agents_interactive ────────────────────────────────────
 
 
-def test_select_additional_agents_interactive_returns_selection(monkeypatch):
-    monkeypatch.setattr(
-        setup.questionary, "checkbox", lambda message, choices, **kw: MagicMock(ask=lambda: ["claude-code"])
-    )
-    result = setup._select_additional_agents_interactive()
-    assert result == ["claude-code"]
+def _add_second_agent(monkeypatch):
+    """Give the picker a second row, so the interactive path is exercised."""
+    monkeypatch.setitem(setup.ADDITIONAL_AGENTS, "other-agent", ("Other Agent", None))
+
+
+def test_a_single_extra_agent_is_installed_without_a_question(monkeypatch, tmp_path):
+    (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(setup.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", lambda name: None)
+    monkeypatch.setattr(setup.questionary, "checkbox", lambda *args, **kwargs: pytest.fail("asked a one-row picker"))
+
+    assert setup._select_additional_agents_interactive() == ["claude-code"]
+
+
+def test_a_single_extra_agent_not_on_the_machine_is_skipped(monkeypatch, tmp_path):
+    monkeypatch.setattr(setup.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", lambda name: None)
+    monkeypatch.setattr(setup.questionary, "checkbox", lambda *args, **kwargs: pytest.fail("asked a one-row picker"))
+
+    assert setup._select_additional_agents_interactive() == []
 
 
 def test_select_additional_agents_interactive_exits_on_ctrl_c(monkeypatch):
     import typer
 
+    _add_second_agent(monkeypatch)
     monkeypatch.setattr(setup.questionary, "checkbox", lambda message, choices, **kw: MagicMock(ask=lambda: None))
     with pytest.raises(typer.Exit):
         setup._select_additional_agents_interactive()
+
+
+def test_the_skills_picker_ticks_installed_agents(monkeypatch, tmp_path):
+    """A pre-ticked Claude Code row, because ~/.claude is on the machine."""
+    (tmp_path / ".claude").mkdir()
+    monkeypatch.setattr(setup.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", lambda name: None)
+    _add_second_agent(monkeypatch)
+    seen = {}
+
+    def checkbox(message, choices, **kwargs):
+        seen["choices"] = choices
+        return MagicMock(ask=lambda: [])
+
+    monkeypatch.setattr(setup.questionary, "checkbox", checkbox)
+
+    setup._select_additional_agents_interactive()
+
+    (claude,) = [choice for choice in seen["choices"] if choice.value == "claude-code"]
+    assert claude.checked is True
+
+
+def test_the_skills_picker_says_space_ticks_and_enter_continues(monkeypatch, tmp_path):
+    """The picker's hint says Space toggles and Enter continues."""
+    monkeypatch.setattr(setup.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(setup.shutil, "which", lambda name: None)
+    _add_second_agent(monkeypatch)
+    seen = {}
+
+    def checkbox(message, choices, **kwargs):
+        seen.update(kwargs)
+        return MagicMock(ask=lambda: [])
+
+    monkeypatch.setattr(setup.questionary, "checkbox", checkbox)
+
+    setup._select_additional_agents_interactive()
+
+    from jarvislabs.cli import render
+
+    assert f"Space toggles{render.MARKS['sep']}Enter continues" in seen["instruction"]
 
 
 # ── _skill_install_flow ──────────────────────────────────────────────────────
@@ -231,7 +289,7 @@ def test_select_additional_agents_interactive_exits_on_ctrl_c(monkeypatch):
 
 def test_skill_install_flow_skips_when_declined(monkeypatch):
     monkeypatch.setattr(state, "yes", False)
-    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: False)
+    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False, **kwargs: False)
 
     result = setup._skill_install_flow(agents_flag=None)
     assert result == []
@@ -243,7 +301,7 @@ def test_skill_install_flow_always_installs_universal(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "yes", True)
 
     confirm_calls = iter([True])
-    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: next(confirm_calls))
+    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False, **kwargs: next(confirm_calls))
 
     result = setup._skill_install_flow(agents_flag=None)
     # Universal is always installed
@@ -277,7 +335,7 @@ def test_skill_install_flow_with_yes_installs_universal_and_all_additional(tmp_p
     monkeypatch.setattr(state, "yes", True)
 
     confirm_calls = iter([True])
-    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False: next(confirm_calls))
+    monkeypatch.setattr(setup.render, "confirm", lambda msg, skip=False, **kwargs: next(confirm_calls))
 
     result = setup._skill_install_flow(agents_flag=None)
     # Universal + claude-code
@@ -295,6 +353,45 @@ def test_skill_install_flow_invalid_flag_writes_nothing(tmp_path, monkeypatch):
         setup._skill_install_flow(agents_flag="invalid-agent")
 
     assert not universal.exists()
+
+
+def test_skill_install_puts_the_agent_names_on_a_dim_line(tmp_path, monkeypatch):
+    buffer = io.StringIO()
+    console = Console(file=buffer, width=120, force_terminal=True, color_system="standard", theme=setup.render.theme)
+    monkeypatch.setattr(setup.render, "console", console)
+    monkeypatch.setattr(setup, "UNIVERSAL_PATH", tmp_path / "SKILL.md")
+    monkeypatch.setattr(setup, "ADDITIONAL_AGENTS", {})
+    monkeypatch.setattr(state, "yes", True)
+
+    setup._skill_install_flow(agents_flag="universal")
+
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", buffer.getvalue())
+    assert "✓ Agent skills installed" in plain
+    assert "  for Codex, Cursor, OpenCode, Amp, Cline, Gemini CLI, GitHub Copilot, Kimi Code CLI and Warp" in plain
+    assert "  \x1b[2mfor Codex" in buffer.getvalue()
+
+
+# ── _show_next_steps ─────────────────────────────────────────────────────────
+
+
+def test_next_steps_start_with_connect(monkeypatch, capsys):
+    monkeypatch.setattr(state, "json_output", False)
+
+    setup._show_next_steps()
+
+    err = capsys.readouterr().err
+    assert "jl connect" in err
+    assert "add Jarvislabs models to your coding tools" in err
+
+
+def test_next_steps_do_not_say_status_shows_a_plan(monkeypatch, capsys):
+    monkeypatch.setattr(state, "json_output", False)
+
+    setup._show_next_steps()
+
+    err = capsys.readouterr().err
+    assert "balance and connected tools" in err
+    assert "plan, balance and connected tools" not in err
 
 
 # ── Paths ────────────────────────────────────────────────────────────────────

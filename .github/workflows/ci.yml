@@ -1,6 +1,6 @@
 name: CI
 
-# Runs on merges to main and on every pull request. Linux only for now.
+# Runs on merges to main and on every pull request.
 on:
   push:
     branches: [main]
@@ -18,11 +18,12 @@ concurrency:
 jobs:
   # Lint + unit tests against the dev environment (uses uv.lock for reproducibility).
   test:
-    name: test (py${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, py${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.13"]
     steps:
       - uses: actions/checkout@v4
@@ -33,6 +34,7 @@ jobs:
       - name: Sync dependencies (locked)
         run: uv sync --locked
       - name: Lint and format check (ruff)
+        if: matrix.os == 'ubuntu-latest'
         run: |
           uv run ruff format --check .
           uv run ruff check .
@@ -64,3 +66,65 @@ jobs:
         run: /tmp/jl-env/bin/jl --help
       - name: SDK imports — import jarvislabs
         run: /tmp/jl-env/bin/python -c "import jarvislabs"
+
+  # The wheel the install jobs below install, built once: it is pure Python.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Build wheel
+        run: uv build --wheel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*.whl
+
+  # install/install.sh with a bare PATH (no uv, only the system Python), as `curl | sh`
+  # runs it, against this run's wheel; then `jl --version` from a new login shell with
+  # a bare PATH, so only the shell profiles the install edited can put jl on it.
+  install_sh_installs_jl:
+    name: install_sh_installs_jl (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel
+          path: dist
+      - name: Run install.sh
+        run: |
+          env -i HOME="$HOME" SHELL=/bin/bash PATH=/usr/bin:/bin \
+            JL_INSTALL_SPEC="$(ls "$PWD"/dist/*.whl)" JL_SKIP_SETUP=1 sh < install/install.sh
+      - name: jl --version in a new shell
+        run: env -i HOME="$HOME" PATH=/usr/bin:/bin bash -l -c 'jl --version'
+
+  # install/install.ps1 in Windows PowerShell, as `irm | iex` runs it, against this run's
+  # wheel; then `jl --version` with the PATH a new terminal would get.
+  install_ps1_installs_jl:
+    name: install_ps1_installs_jl
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: wheel
+          path: dist
+      - name: Run install.ps1
+        shell: powershell
+        run: |
+          $env:JL_INSTALL_SPEC = (Get-ChildItem dist\*.whl).FullName
+          $env:JL_SKIP_SETUP = '1'
+          Get-Content -Raw install\install.ps1 | Invoke-Expression
+      - name: jl --version in a new shell
+        shell: powershell
+        run: |
+          $env:Path = [Environment]::GetEnvironmentVariable('Path', 'User') + ';' + [Environment]::GetEnvironmentVariable('Path', 'Machine')
+          jl --version

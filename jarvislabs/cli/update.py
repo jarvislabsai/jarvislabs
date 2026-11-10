@@ -21,7 +21,7 @@ from typing import Annotated
 import typer
 from platformdirs import user_cache_dir
 
-from jarvislabs.cli import render, setup, state
+from jarvislabs.cli import connect, render, setup, state
 from jarvislabs.cli.app import app
 
 _PKG = "jarvislabs"
@@ -133,16 +133,24 @@ def cli_status() -> dict:
     }
 
 
-def status_hint(cli: dict) -> str | None:
-    """The line `jl status` prints when jl or the agent skill needs attention."""
-    hints = []
+def status_hints(cli: dict) -> tuple[str | None, str | None]:
+    """Return the warning and the hint `jl status` prints about jl and the agent skill.
+
+    A new jl version, or an out-of-date skill, gives a warning. A missing skill gives a hint.
+
+    Args:
+        cli: The dict from cli_status(), read for update_available, latest and skill_current.
+
+    Returns:
+        A pair of the warning and the hint; each is None when there is nothing to say.
+    """
+    warning = None
     if cli["update_available"]:
-        hints.append(f"jl {cli['latest']} is available. Run jl update.")
+        warning = f"jl {cli['latest']} is available. Run jl update."
     elif cli["skill_current"] is False:
-        hints.append("The jl agent skill is out of date. Run jl update.")
-    if cli["skill_current"] is None:
-        hints.append("No jl agent skill is installed. Run jl setup to add one.")
-    return " ".join(hints) or None
+        warning = "The jl agent skill is out of date. Run jl update."
+    hint = "No jl agent skill is installed. Run `jl setup` to add one." if cli["skill_current"] is None else None
+    return warning, hint
 
 
 def _update_message(current: str, latest: str) -> str:
@@ -225,9 +233,10 @@ def _command_text(cmd: list[str]) -> str:
 def update(
     skills_only: Annotated[bool, typer.Option("--skills-only", hidden=True)] = False,
 ) -> None:
-    """Update jl to the latest version and refresh the installed agent skills."""
+    """Update jl to the latest version, and refresh the agent skills and the coding tools' models."""
     if skills_only:
         setup.refresh_skills()
+        connect.refresh_connected()
         return
 
     if _is_editable():
@@ -242,6 +251,7 @@ def update(
     if not is_newer(latest, current):
         render.success(f"jl {current} is up to date.")
         setup.refresh_skills()
+        connect.refresh_connected()
         return
 
     cmd = install_command()

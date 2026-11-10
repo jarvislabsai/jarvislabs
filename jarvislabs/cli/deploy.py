@@ -20,8 +20,7 @@ if TYPE_CHECKING:
     from jarvislabs.models import ManagedModel, ManagedModelListResult
 
 BETA_HELP_NOTICE = (
-    "[bold bright_yellow]Serverless is in beta. We're actively improving it and would love early feedback. "
-    "Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]"
+    "Serverless is in beta: limits and behavior may change. Send issues or suggestions to support@jarvislabs.ai."
 )
 
 # Shown under the help of the commands that take deployment settings. The server checks the limits.
@@ -31,27 +30,29 @@ SETTINGS_DOCS_NOTE = (
 )
 
 deploy_app = typer.Typer(
+    context_settings=cli_options.HELP_CONTEXT,
     name="deploy",
     epilog=SETTINGS_DOCS_NOTE,
     help=(
-        "Create and manage serverless model deployments [bold bright_yellow](beta)[/bold bright_yellow].\n\n"
-        "[dim]Quick examples:[/dim]\n"
-        "  [bold]jl deploy managed-models list[/bold]           [rgb(100,100,100)]models you can deploy[/rgb(100,100,100)]\n"
-        "  [bold]jl deploy managed-models create[/bold]         [rgb(100,100,100)]pick a model and deploy it[/rgb(100,100,100)]\n"
-        "  [bold]jl deploy list[/bold]                          [rgb(100,100,100)]your deployments[/rgb(100,100,100)]\n"
-        "  [bold]jl deploy get <id>[/bold]                      [rgb(100,100,100)]status, base URL and cost[/rgb(100,100,100)]\n"
-        '  [bold]jl deploy chat <id> "Hello"[/bold]             [rgb(100,100,100)]send a test message[/rgb(100,100,100)]\n'
-        "  [bold]jl deploy logs <id>[/bold]                     [rgb(100,100,100)]live logs[/rgb(100,100,100)]\n"
-        "  [bold]jl deploy update <id> --min-workers 0[/bold]   [rgb(100,100,100)]no GPU cost while idle[/rgb(100,100,100)]\n"
-        "  [bold]jl deploy delete <id>[/bold]                   [rgb(100,100,100)]delete it and stop all billing[/rgb(100,100,100)]\n"
+        "Create and manage serverless model deployments (beta).\n\n"
+        "[bold]Quick examples[/bold]\n"
+        "  [bold cyan]jl deploy managed-models list[/bold cyan]           models you can deploy\n"
+        "  [bold cyan]jl deploy managed-models create[/bold cyan]         pick a model and deploy it\n"
+        "  [bold cyan]jl deploy list[/bold cyan]                          your deployments\n"
+        "  [bold cyan]jl deploy get <id>[/bold cyan]                      status, base URL and cost\n"
+        '  [bold cyan]jl deploy chat <id> "Hello"[/bold cyan]             send a test message\n'
+        "  [bold cyan]jl deploy logs <id>[/bold cyan]                     live logs\n"
+        "  [bold cyan]jl deploy update <id> --min-workers 0[/bold cyan]   scale to zero when idle\n"
+        "  [bold cyan]jl deploy delete <id>[/bold cyan]                   delete it and stop all billing\n"
         "\n" + BETA_HELP_NOTICE
     ),
 )
-app.add_typer(deploy_app, rich_help_panel="[bold bright_yellow]Serverless (Beta)[/bold bright_yellow]")
+app.add_typer(deploy_app, rich_help_panel="Serverless (Beta)")
 
 managed_app = typer.Typer(
+    context_settings=cli_options.HELP_CONTEXT,
     name="managed-models",
-    help="List and deploy JarvisLabs-managed models [bold bright_yellow](beta)[/bold bright_yellow].",
+    help="List and deploy Jarvislabs-managed models (beta).",
 )
 deploy_app.add_typer(managed_app)
 
@@ -180,7 +181,12 @@ def deploy_create(
 ) -> None:
     """Create a serverless deployment and poll until running (unless --detach).
 
-    [bold bright_yellow]Serverless is in beta. We're actively improving it and would love early feedback. Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]
+    [bold]Example:[/bold]
+
+      # Serve a Hugging Face model with vLLM, scaling to zero when idle
+      [bold cyan]jl deploy create --name qwen --region IN2 --framework vllm --gpu L4 --gpus-per-worker 1 --min-workers 0 --max-workers 2 --idle-timeout 300 --wait-time 120 --storage 100 --model Qwen/Qwen2.5-7B-Instruct[/bold cyan]
+
+    Serverless is in beta: limits and behavior may change.
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     args = _parse_kv(arg, flag="--arg")
@@ -352,11 +358,11 @@ def deploy_update(
 
     [bold]Examples:[/bold]
 
-      [dim]# Scale to zero: no GPU cost while idle[/dim]
-      [cyan]jl deploy update <id> --min-workers 0[/cyan]
+      # Scale to zero when idle; storage still bills
+      [bold cyan]jl deploy update <id> --min-workers 0[/bold cyan]
 
-      [dim]# Keep one worker warm and allow up to three[/dim]
-      [cyan]jl deploy update <id> --min-workers 1 --max-workers 3[/cyan]
+      # Keep one worker warm and allow up to three
+      [bold cyan]jl deploy update <id> --min-workers 1 --max-workers 3[/bold cyan]
     """
     cli_options.apply_command_options(json_output=json_output)
     if all(value is None for value in (name, idle_timeout, wait_time, min_workers, max_workers, concurrent)):
@@ -427,17 +433,17 @@ def deploy_chat(
 
     [bold]Examples:[/bold]
 
-      [dim]# One reply[/dim]
-      [cyan]jl deploy chat <id> "Say hello"[/cyan]
+      # One reply
+      [bold cyan]jl deploy chat <id> "Say hello"[/bold cyan]
 
-      [dim]# Interactive chat[/dim]
-      [cyan]jl deploy chat <id>[/cyan]
+      # Interactive chat
+      [bold cyan]jl deploy chat <id>[/bold cyan]
 
-      [dim]# Full OpenAI-style response as JSON[/dim]
-      [cyan]jl deploy chat <id> "Hi" --json[/cyan]
+      # Full OpenAI-style response as JSON
+      [bold cyan]jl deploy chat <id> "Hi" --json[/bold cyan]
 
-      [dim]# With an image[/dim]
-      [cyan]jl deploy chat <id> "What is in this picture?" --image photo.jpg[/cyan]
+      # With an image
+      [bold cyan]jl deploy chat <id> "What is in this picture?" --image photo.jpg[/bold cyan]
 
     In interactive chat: Ctrl-C stops a reply · Ctrl-D or /exit quits.
     """
@@ -527,7 +533,15 @@ def managed_models_create(
 
     The model's recipe sets the GPU, framework, and engine settings; you choose scaling.
 
-    [bold bright_yellow]Serverless is in beta. We're actively improving it and would love early feedback. Limits and behavior may change; if you hit issues or have suggestions, email support@jarvislabs.ai.[/bold bright_yellow]
+    [bold]Examples:[/bold]
+
+      # Deploy a model from jl deploy managed-models list
+      [bold cyan]jl deploy managed-models create llama-3-1-8b[/bold cyan]
+
+      # Pick the model and its settings interactively
+      [bold cyan]jl deploy managed-models create[/bold cyan]
+
+    Serverless is in beta: limits and behavior may change.
     """
     cli_options.apply_command_options(json_output=json_output, yes=yes)
     client = get_client()
