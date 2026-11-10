@@ -11,9 +11,8 @@ from __future__ import annotations
 import os
 import sys
 import webbrowser
-from typing import Annotated
+from typing import Annotated, Literal
 
-import click
 import typer
 from rich.text import Text
 
@@ -57,7 +56,7 @@ def usage_show(ctx: typer.Context, json_output: cli_options.JsonOption = False) 
 
 @subscription_app.command("use-balance")
 def use_balance(
-    setting: Annotated[str, typer.Argument(click_type=click.Choice(["on", "off"]), metavar="on|off")],
+    setting: Annotated[Literal["on", "off"], typer.Argument(metavar="on|off")],
     json_output: cli_options.JsonOption = False,
 ) -> None:
     """Pay from the wallet once the plan's limits are reached (on), or refuse those requests (off)."""
